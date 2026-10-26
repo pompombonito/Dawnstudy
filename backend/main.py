@@ -166,7 +166,20 @@ def generate(
         payload = json.loads(content)
     except requests.Timeout as exc:
         raise HTTPException(status_code=504, detail="The AI took too long to respond. Try a shorter file or a faster model.") from exc
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else 502
+        try:
+            upstream_message = str(exc.response.json().get("error", {}).get("message", "")) if exc.response is not None else ""
+        except (ValueError, AttributeError):
+            upstream_message = ""
+        upstream_message = upstream_message[:400]
+        print(f"Gemini API returned HTTP {status}: {upstream_message or 'no error message provided'}")
+        detail = f"Gemini API returned HTTP {status}."
+        if upstream_message:
+            detail += f" {upstream_message}"
+        raise HTTPException(status_code=502, detail=detail) from exc
     except requests.RequestException as exc:
+        print(f"Gemini request failed ({type(exc).__name__}): {exc}")
         raise HTTPException(status_code=502, detail="Couldn't reach the Gemini API. Check the API service's network connection and model configuration.") from exc
     except (json.JSONDecodeError, AttributeError) as exc:
         raise HTTPException(status_code=502, detail="The AI returned a response we couldn't format. Please try again.") from exc
