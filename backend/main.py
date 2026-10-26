@@ -73,14 +73,17 @@ def search_web(query: str) -> tuple[str, list[dict[str, str]]]:
 
 
 @app.post("/api/generate")
-async def generate(
+def generate(
     file: UploadFile = File(...),
     format: str = Form(...),
     use_web: bool = Form(False),
 ):
     if format not in FORMATS:
         raise HTTPException(status_code=422, detail="Choose one of the available study formats.")
-    raw = await file.read(MAX_BYTES + 1)
+    # This endpoint performs blocking PDF/DOCX parsing and HTTP calls to
+    # Gemini/Tavily. Keep the work in FastAPI's worker thread so health checks
+    # can still be served while generation is in progress.
+    raw = file.file.read(MAX_BYTES + 1)
     if not raw:
         raise HTTPException(status_code=422, detail="This file is empty.")
     if len(raw) > MAX_BYTES:
