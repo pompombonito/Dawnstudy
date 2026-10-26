@@ -338,7 +338,7 @@ def grade_review(body: CardReview, user: dict[str, str] = Depends(authenticated_
         progress = {"user_id": user["user_id"], "set_id": body.study_set_id, "card_id": body.card_id, "due_at": due_at.isoformat(), "interval_days": f"{interval:.5f}", "ease_factor": f"{ease:.2f}", "repetitions": str(repetitions), "lapses": str(lapses), "last_reviewed_at": now.isoformat(), "last_rating": rating}
         log = {"user_id": user["user_id"], "set_id": body.study_set_id, "card_id": body.card_id, "reviewed_at": now.isoformat(), "rating": rating, "was_correct": "false" if rating == "again" else "true"}
         save_card_review(user["user_id"], body.study_set_id, body.card_id, progress, log)
-        return {"due_at": due_at.isoformat(), "interval_days": interval, "rating": rating}
+        return {"due_at": due_at.isoformat(), "interval_days": interval, "next_review_in": _interval_label(delay), "rating": rating}
     except HTTPException:
         raise
     except StorageError as exc:

@@ -279,6 +279,20 @@ export default function Home() {
     finally { setReviewBusy(false); }
   }
 
+  async function gradeCurrentCard(rating: "again" | "hard" | "good" | "easy") {
+    if (!result || !currentCard?.card_id || !authToken || reviewBusy) return;
+    setReviewBusy(true); setError("");
+    try {
+      const response = await fetch(`${API_BASE}/api/reviews`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` }, body: JSON.stringify({ study_set_id: result.id, card_id: currentCard.card_id, rating }) });
+      if (!response.ok) throw new Error(await responseError(response));
+      const data = await response.json();
+      setNotice(`Card added to your review schedule · next review ${data.next_review_in}.`);
+      setCurrent((index) => (index + 1) % result.items.length); setRevealed(false);
+      void loadProgress(authToken);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not save this card's review schedule."); }
+    finally { setReviewBusy(false); }
+  }
+
   const currentCard = result?.items[current] || result?.items[0];
   const modelName = (modelId?: string) => models.find((item) => item.id === modelId)?.name || modelId;
 
@@ -330,6 +344,7 @@ export default function Home() {
             <div className="study-card"><div className="study-card-top"><span className="flashcard-label">{result.type === "flashcards" ? "FLASHCARD" : types.find((type) => type.id === result.type)?.title.toUpperCase()}</span><span className="card-number">{String(current + 1).padStart(2,"0")} <i>/</i> {String(result.items.length).padStart(2,"0")}</span></div>
               <button className={`study-face ${revealed ? "is-revealed" : ""}`} onClick={() => setRevealed(!revealed)}><span className="face-label">{revealed ? "THE ANSWER" : "YOUR QUESTION"}</span><span className="face-question">{revealed ? currentCard.answer : currentCard.question}</span>{!revealed && currentCard.options && <span className="answer-options">{currentCard.options.map((option, index) => <span key={`${index}-${option}`}><i>{String.fromCharCode(65 + index)}</i>{option}</span>)}</span>}{!revealed && <span className="tap-hint">Tap to reveal <span>↗</span></span>}</button>
               {revealed && currentCard.explanation && <p className="explanation">{currentCard.explanation}</p>}
+              {revealed && account && authToken && currentCard.card_id && <><div className="rating-prompt">How well did you recall it? Your answer schedules this card for another review.</div><div className="rating-row"><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("again")}><b>Again</b><small>Hard to recall</small></button><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("hard")}><b>Hard</b><small>With effort</small></button><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("good")}><b>Good</b><small>Recalled it</small></button><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("easy")}><b>Easy</b><small>Very easy</small></button></div></>}
               <div className="study-controls"><button className="control-button" onClick={() => { setCurrent((current - 1 + result.items.length) % result.items.length); setRevealed(false); }}><ChevronLeft size={16}/> Previous</button><span className="dots">{result.items.slice(0, Math.min(result.items.length, 7)).map((_, index) => <i key={index} className={index === current ? "dot-active" : ""}/>)}</span><button className="control-button next" onClick={() => { setCurrent((current + 1) % result.items.length); setRevealed(false); }}>Next <ChevronRight size={16}/></button></div>
               {result.sources?.length ? <div className="source-links"><Globe2 size={14}/><span>Sources:</span>{result.sources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer">{source.title}</a>)}</div> : null}
             </div></section>}
