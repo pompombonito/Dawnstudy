@@ -12,7 +12,14 @@ from pydantic import BaseModel
 from pypdf import PdfReader
 
 app = FastAPI(title="Dawnstudy API", version="1.0.0")
-origins = [o.strip() for o in os.getenv("FRONTEND_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
+origins = [
+    origin.strip().rstrip("/")
+    for origin in os.getenv("FRONTEND_ORIGINS", "http://localhost:3000").split(",")
+    if origin.strip()
+]
+# Keep the production frontend allowed even if the Render environment variable
+# is missing or accidentally includes a trailing slash.
+origins = list(dict.fromkeys([*origins, "https://dawnstudy.vercel.app"]))
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
