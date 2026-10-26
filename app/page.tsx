@@ -3,16 +3,18 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import {
   BookOpen, Check, CheckSquare, ChevronLeft, ChevronRight, CircleHelp, Clock3,
-  CloudUpload, FileText, Globe2, Layers3, LogIn, LogOut, Menu, MoreHorizontal,
-  Plus, Sparkles, UserRound, X,
+  CloudUpload, Cpu, FileText, Globe2, Layers3, LogIn, LogOut, Menu, Moon, MoreHorizontal,
+  Plus, Sparkles, Sun, UserRound, X,
 } from "lucide-react";
 
 type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification";
 type Card = { question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string };
-type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; created_at: string };
+type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; created_at: string; model?: string };
 type Account = { id: string; username: string; email: string; display_name: string };
 type AuthMode = "register" | "login";
 type LoginResult = { token: string; user: Account };
+type ModelOption = { id: string; provider: string; name: string };
+type Theme = "dark" | "light";
 
 type GoogleIdResponse = { credential: string };
 type GoogleIdentity = {
@@ -25,6 +27,7 @@ const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
 const LOCAL_SETS_KEY = "dawnstudy_guest_sets_v1";
 const TOKEN_KEY = "dawnstudy_session_v1";
+const THEME_KEY = "dawnstudy_theme_v1";
 const types: { id: Kind; title: string; detail: string; icon: typeof Layers3 }[] = [
   { id: "flashcards", title: "Flashcards", detail: "Quick question & answer pairs", icon: Layers3 },
   { id: "multiple_choice", title: "Multiple choice", detail: "Choose the best answer", icon: CircleHelp },
@@ -67,6 +70,9 @@ export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
   const [web, setWeb] = useState(false);
+  const [modelChoice, setModelChoice] = useState("auto");
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [theme, setTheme] = useState<Theme>("dark");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -97,7 +103,16 @@ export default function Home() {
   }
 
   useEffect(() => {
+    const savedTheme = localStorage.getItem(THEME_KEY);
+    const initialTheme: Theme = savedTheme === "light" ? "light" : "dark";
+    document.documentElement.dataset.theme = initialTheme;
+    setTheme(initialTheme);
     setSets(getLocalSets());
+    if (API_BASE) {
+      fetch(`${API_BASE}/api/models`).then((response) => response.ok ? response.json() : null)
+        .then((data) => { if (Array.isArray(data?.models)) setModels(data.models); })
+        .catch(() => { /* Model list is optional; the API will explain if no model is configured. */ });
+    }
     const token = localStorage.getItem(TOKEN_KEY);
     if (!token || !API_BASE) return;
     setAuthToken(token);
@@ -158,17 +173,31 @@ export default function Home() {
     setFile(nextFile); setError(""); setNotice(""); setResult(null);
   }
 
+  function setColorTheme(nextTheme: Theme) {
+    setTheme(nextTheme);
+    document.documentElement.dataset.theme = nextTheme;
+    localStorage.setItem(THEME_KEY, nextTheme);
+  }
+
   async function generate() {
     if (!file) { setError("Choose a study material first."); return; }
     setBusy(true); setError(""); setNotice("");
     const form = new FormData();
     form.append("file", file); form.append("format", selected); form.append("use_web", String(web));
+    form.append("model", modelChoice);
     try {
       if (!API_BASE) throw new Error("The API address is not configured for this site.");
       const response = await fetch(`${API_BASE}/api/generate`, { method: "POST", body: form });
       if (!response.ok) throw new Error(await responseError(response));
       const data = await response.json();
       let studySet: StudySet = { ...data, id: crypto.randomUUID(), created_at: new Date().toISOString() };
+      let generationNotice = "";
+      if (data.fallback) {
+        const original = models.find((item) => item.id === data.fallback.from)?.name || data.fallback.from;
+        const fallbackModel = models.find((item) => item.id === data.fallback.to)?.name || data.fallback.to;
+        const issue = data.fallback.reason === "limit" ? "may have reached its limit" : data.fallback.reason === "busy" ? "was busy" : "was unavailable";
+        generationNotice = `${original} ${issue}; Dawnstudy switched to ${fallbackModel}.`;
+      }
       setResult(studySet); setCurrent(0); setRevealed(false);
       if (authToken) {
         try {
@@ -180,11 +209,12 @@ export default function Home() {
           if (!saved.ok) throw new Error(await responseError(saved));
           const savedSet: StudySet = await saved.json();
           studySet = { ...studySet, id: savedSet.id, created_at: savedSet.created_at };
-        } catch { setNotice("Your study set is ready, but it could not sync to Google Sheets. It is saved in this browser."); }
+        } catch { generationNotice = [generationNotice, "Your study set could not sync to Google Sheets, so it is saved in this browser."].filter(Boolean).join(" "); }
       }
       rememberLocalSet(studySet);
       setResult(studySet);
       setSets((old) => [studySet, ...old.filter((item) => item.id !== studySet.id)].slice(0, 100));
+      setNotice(generationNotice);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Something went wrong. Please try again.");
     } finally { setBusy(false); }
@@ -214,6 +244,7 @@ export default function Home() {
   }
 
   const currentCard = result?.items[current] || result?.items[0];
+  const modelName = (modelId?: string) => models.find((item) => item.id === modelId)?.name || modelId;
 
   return (
     <main className="shell">
@@ -223,6 +254,7 @@ export default function Home() {
         <button className="nav-item active" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}><span className="nav-icon"><BookOpen size={18}/></span> Study desk</button>
         <button className="nav-item" onClick={() => document.querySelector(".recent-section")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><Layers3 size={18}/></span> My study sets <span className="nav-count">{sets.length}</span></button>
         <button className="nav-item" onClick={() => document.querySelector(".recent-section")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><Clock3 size={18}/></span> Study history</button>
+        <button className="nav-item" onClick={() => document.querySelector(".about-section")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><UserRound size={18}/></span> About Jairo</button>
         <div className="side-separator" />
         <div className="set-heading"><span className="side-kicker">RECENT SETS</span><button className="plain-icon" title="Add a study set" onClick={() => input.current?.click()}><Plus size={17}/></button></div>
         <div className="mini-sets">
@@ -241,7 +273,7 @@ export default function Home() {
       </aside>
 
       <section className="main-area" id="home">
-        <header className="topbar"><div className="crumb"><span>Your space</span><ChevronRight size={14}/><b>Study desk</b></div><div className="top-actions"><span className="today-pill"><span className="status-dot"/> YOUR STUDY DESK</span>{!account && <button className="top-signin" onClick={() => { setAuthOpen(true); setAuthMode("register"); }}><UserRound size={14}/> Sign in</button>}<button className="profile-mobile" onClick={() => account ? signOut() : setAuthOpen(true)} title={account ? "Sign out" : "Sign in"}>{account ? <LogOut size={18}/> : <Menu size={20}/>}</button></div></header>
+        <header className="topbar"><div className="crumb"><span>Your space</span><ChevronRight size={14}/><b>Study desk</b></div><div className="top-actions"><button className="theme-toggle" onClick={() => setColorTheme(theme === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>{theme === "dark" ? <Sun size={16}/> : <Moon size={16}/>}<span>{theme === "dark" ? "Light mode" : "Dark mode"}</span></button><span className="today-pill"><span className="status-dot"/> YOUR STUDY DESK</span>{!account && <button className="top-signin" onClick={() => { setAuthOpen(true); setAuthMode("register"); }}><UserRound size={14}/> Sign in</button>}<button className="profile-mobile" onClick={() => account ? signOut() : setAuthOpen(true)} title={account ? "Sign out" : "Sign in"}>{account ? <LogOut size={18}/> : <Menu size={20}/>}</button></div></header>
         <div className="content">
           <section className="welcome"><div className="welcome-copy"><div className="eyebrow"><span/> A FRESH PAGE, A FRESH START</div><h1>Make today<br/>a little <em>brighter.</em></h1><p>Drop in your notes. We’ll help the important things stick.</p></div><div className="sunrise-art" aria-hidden="true"><div className="sun"/><div className="cloud cloud-one"/><div className="cloud cloud-two"/><div className="horizon h-back"/><div className="horizon h-front"/></div><span className="welcome-note">one page at a time <span>✳</span></span></section>
           <div className="section-intro"><div><div className="section-title-row"><h2>Start a study set</h2><span className="step-tag"><span>01</span> OF 02</span></div><p>Choose how you’d like to practice.</p></div><span className="quiet-note">Good things take practice <span>↗</span></span></div>
@@ -250,11 +282,12 @@ export default function Home() {
             <input ref={input} type="file" accept=".pdf,.docx,.txt,.md" hidden onChange={(event) => selectFile(event.target.files?.[0])}/>
             <span className="upload-icon">{file ? <FileText size={22}/> : <CloudUpload size={23}/>}</span><span className="upload-copy">{file ? <><strong>{file.name}</strong><small>{(file.size / 1024 / 1024).toFixed(2)} MB · ready to study</small></> : <><strong>Drop your study material here</strong><small>or <span className="browse-link">browse your files</span></small></>}</span>{file ? <button className="remove-file" title="Remove file" onClick={(event) => { event.stopPropagation(); setFile(null); }}><X size={18}/></button> : <span className="format-hint">PDF, DOCX, TXT, MD <i>·</i> Max 15 MB</span>}
           </section>
+          <div className="model-row"><label htmlFor="model-choice"><Cpu size={16}/> AI model</label><select id="model-choice" value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}><option value="auto">Auto choose · switch when busy or limited</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select><span className="model-help">{modelChoice === "auto" ? "Automatic mode rotates across configured models and falls back when needed." : "Manual mode uses only this model; choose Auto to enable fallback."}</span></div>
           <div className="options-row"><button className={`web-toggle ${web ? "on" : ""}`} onClick={() => setWeb(!web)}><span className="toggle-track"><span/></span><Globe2 size={16}/><span>Enrich with the web</span><span className="optional-tag">OPTIONAL</span></button><button className="web-info" title="Searches the web for relevant context and includes source links with your results."><CircleHelp size={15}/></button></div>
-          <div className="generate-row"><span className="privacy-note"><span className="privacy-dot"/> Sent to Google AI; signed-in sets sync to Sheets.</span><button className="generate-button" onClick={generate} disabled={busy}>{busy ? <><span className="spinner"/> Making my study set…</> : <><Sparkles size={16}/> Make my study set <ChevronRight size={16}/></>}</button></div>
+          <div className="generate-row"><span className="privacy-note"><span className="privacy-dot"/> Sent to your selected AI provider; signed-in sets sync to Sheets.</span><button className="generate-button" onClick={generate} disabled={busy}>{busy ? <><span className="spinner"/> Making my study set…</> : <><Sparkles size={16}/> Make my study set <ChevronRight size={16}/></>}</button></div>
           {error && <div className="error-box"><CircleHelp size={16}/><span>{error}</span></div>}
           {notice && <div className="notice-box"><Check size={15}/><span>{notice}</span></div>}
-          {result && currentCard && <section className="result-panel"><div className="result-head"><div><div className="result-kicker"><span/> YOUR STUDY SET</div><h2>{result.title}</h2><p>{result.items.length} {types.find((type) => type.id === result.type)?.title.toLowerCase()} · ready when you are</p></div><button className="plain-icon" title="Close study set" onClick={() => setResult(null)}><X size={18}/></button></div>
+          {result && currentCard && <section className="result-panel"><div className="result-head"><div><div className="result-kicker"><span/> YOUR STUDY SET</div><h2>{result.title}</h2><p>{result.items.length} {types.find((type) => type.id === result.type)?.title.toLowerCase()} · ready when you are{result.model ? ` · ${modelName(result.model)}` : ""}</p></div><button className="plain-icon" title="Close study set" onClick={() => setResult(null)}><X size={18}/></button></div>
             <div className="study-card"><div className="study-card-top"><span className="flashcard-label">{result.type === "flashcards" ? "FLASHCARD" : types.find((type) => type.id === result.type)?.title.toUpperCase()}</span><span className="card-number">{String(current + 1).padStart(2,"0")} <i>/</i> {String(result.items.length).padStart(2,"0")}</span></div>
               <button className={`study-face ${revealed ? "is-revealed" : ""}`} onClick={() => setRevealed(!revealed)}><span className="face-label">{revealed ? "THE ANSWER" : "YOUR QUESTION"}</span><span className="face-question">{revealed ? currentCard.answer : currentCard.question}</span>{!revealed && currentCard.options && <span className="answer-options">{currentCard.options.map((option, index) => <span key={`${index}-${option}`}><i>{String.fromCharCode(65 + index)}</i>{option}</span>)}</span>}{!revealed && <span className="tap-hint">Tap to reveal <span>↗</span></span>}</button>
               {revealed && currentCard.explanation && <p className="explanation">{currentCard.explanation}</p>}
@@ -265,6 +298,7 @@ export default function Home() {
             {sets.length ? <div className="recent-grid">{sets.slice(0, showAll ? sets.length : 3).map((studySet, index) => <button className="recent-card" key={studySet.id} onClick={() => openSavedSet(studySet)}><span className={`recent-art art-${["aqua", "coral", "gold"][index % 3]}`}><BookOpen size={18}/><span className="art-orbit"/></span><span className="recent-info"><span className="subject-label">{types.find((type) => type.id === studySet.type)?.title.toUpperCase()}</span><strong>{studySet.title}</strong><small>{studySet.items.length} cards <i>·</i> {ageLabel(studySet.created_at)}</small></span><ChevronRight size={16} className="recent-arrow"/></button>)}</div> : <div className="empty-sets"><Layers3 size={20}/><span>Your study sets will appear here after you make one.</span></div>}
             <div className="bottom-note"><span>✳</span> Little by little, a little becomes a lot. <i>— A study reminder</i></div>
           </section>
+          <section className="about-section" id="about"><div className="about-header"><img className="about-photo" src="/jairo-devon-daquioag.png" alt="Portrait of Jairo Devon A. Daquioag"/><div className="about-identity"><span className="eyebrow"><span/> THE PERSON BEHIND DAWNSTUDY</span><h2>Hey, I’m Jairo! <span role="img" aria-label="waving hand">👋</span></h2><p>Computer Engineering Student &amp; Developer</p><strong>Centro Escolar University Manila</strong><div className="about-tags"><span>Network Engineering</span><span>Applied AI</span></div></div></div><div className="about-body"><h3>Building Dawnstudy</h3><p>I’m Jairo Devon A. Daquioag, a Computer Engineering student at Centro Escolar University Manila who enjoys building things that solve problems, no matter how small.</p><p>I created Dawnstudy with my fellow students in mind. I wanted to make studying more accessible by turning PDFs into flashcards, multiple-choice questions, identification questions, and select-all-that-apply exercises—all powered by free-tier AI models.</p><p>I’m a tech generalist at heart, with a particular interest in Network Engineering and Applied AI. I enjoy exploring technology, experimenting with different AI models, and finding practical ways to use them to make everyday tasks easier.</p><p>For me, technology isn’t just about building something impressive. It’s about building something useful, especially when it can help others without costing them anything.</p></div><div className="about-links"><h3>Let’s connect</h3><a href="https://www.linkedin.com/in/jairo-devon-daquioag-466124295/" target="_blank" rel="noreferrer"><span className="social-mark">in</span><span><strong>LinkedIn</strong><small>Jairo Devon Daquioag</small></span><span className="external-mark">↗</span></a><a href="https://www.instagram.com/jairodaquioag/" target="_blank" rel="noreferrer"><span className="social-mark">◎</span><span><strong>Instagram</strong><small>@jairodaquioag</small></span><span className="external-mark">↗</span></a><a href="mailto:daquioagjairodevon@gmail.com"><span className="social-mark">✉</span><span><strong>Email</strong><small>daquioagjairodevon@gmail.com</small></span><span className="external-mark">↗</span></a></div></section>
         </div>
       </section>
 

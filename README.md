@@ -1,12 +1,12 @@
 # Dawnstudy
 
-A student study desk that turns uploaded notes into flashcards, multiple-choice questions, select-all-that-apply questions, or identification prompts. The interface is a Next.js app for Vercel; the Python API runs on Render and calls Gemini 3.8 Flash through the Gemini API. Optional web enrichment uses Tavily Search and returns source links alongside the study set.
+A student study desk that turns uploaded notes into flashcards, multiple-choice questions, select-all-that-apply questions, or identification prompts. The interface is a Next.js app for Vercel; the Python API runs on Render and can use several Groq and Gemini models plus Mistral with automatic model fallback or manual selection. Optional web enrichment uses Tavily Search and returns source links alongside the study set.
 
 ## Run locally
 
 1. Install Node.js 20 or newer. In the project root, run `npm install` and `npm run dev`.
 2. In `backend`, create a Python 3.11+ virtual environment, install `requirements.txt`, and start the API with `uvicorn main:app --reload --port 8000`.
-3. Get a Gemini API key, set `GEMINI_API_KEY` for the API, and set `GEMINI_MODEL` to `gemini-3.8-flash` (the default). Copy `.env.example` values into the frontend `.env.local` and backend environment as appropriate.
+3. Add at least one server-side AI provider key (`GROQ_API_KEY`, `GEMINI_API_KEY`, or `MISTRAL_API_KEY`). In automatic mode, Dawnstudy rotates across configured models and falls back when a model returns a rate-limit or service error. Students may select a configured model manually instead. Copy `.env.example` values into the frontend `.env.local` and backend environment as appropriate.
 4. To enable the web-enrichment switch, set `TAVILY_API_KEY` on the API. Without a key, web-enriched requests explain that the API is not configured.
 
 The supported materials are text-based PDF, DOCX, TXT, and Markdown files up to 15 MB. Scanned PDFs need OCR before upload. The API truncates extracted content to a bounded context window before sending it to the model.
@@ -15,17 +15,17 @@ The supported materials are text-based PDF, DOCX, TXT, and Markdown files up to 
 
 ### API on Render
 
-Create a Render web service from this repository using `render.yaml` (or configure the service with root directory `backend`, build command `pip install -r requirements.txt`, and start command `uvicorn main:app --host 0.0.0.0 --port $PORT`). Set `GEMINI_API_KEY` and `FRONTEND_ORIGINS` to the exact Vercel site origin. Add `TAVILY_API_KEY` to enable web search.
+Create a Render web service from this repository using `render.yaml` (or configure the service with root directory `backend`, build command `pip install -r requirements.txt`, and start command `uvicorn main:app --host 0.0.0.0 --port $PORT`). Set one or more AI provider keys and set `FRONTEND_ORIGINS` to the exact Vercel site origin. Add `TAVILY_API_KEY` to enable web search.
 
-**Model hosting:** Vercel hosts the frontend, Render hosts the API, and Gemini runs on Google's managed API. Render's compute plans provide CPU and RAM, while Vercel function memory is limited; neither service needs to load model weights for this architecture. The API key stays on Render and is never sent to the browser. Use a Gemini API tier that fits your privacy and search-grounding needs; review Google's current API data and pricing terms before production use.
+**Model hosting:** Vercel hosts the frontend, Render hosts the API, and configured model providers run their hosted APIs. Render's compute plans provide CPU and RAM; neither service needs to load model weights for this architecture. Provider API keys stay on Render and are never sent to the browser. Configure `AI_MODEL_ORDER` to set model order. Auto mode rotates its starting model per request and falls back when a model returns a rate-limit, network, or service error. Manual mode uses only the chosen model. Quota availability is detected from request responses; Dawnstudy cannot read a shared live quota meter, and generation can stop if all configured model quotas are exhausted.
 
 ### $0 prototype setup
 
-The repository is configured for Render's Free web service plan. Vercel Hobby is free for personal, non-commercial projects. The Gemini API free tier currently includes free input/output tokens for supported models, and Tavily's free plan includes 1,000 search credits per month without a credit card. To keep this at $0, use those free tiers only and do not attach billing or upgrade plans. If a provider's quota runs out, generation or web search will stop until its quota resets. Confirm each provider's current plan and limits before deploying.
+The repository is configured for Render's Free web service plan. Vercel Hobby is free for personal, non-commercial projects. Groq, Gemini, Mistral, and Tavily each have provider-specific plans and limits that can change; check the provider dashboards before relying on them. To keep this at $0, use only free access and do not attach billing or upgrade plans. If all configured AI provider quotas are exhausted, generation will stop until a quota resets. Web enrichment still requires a separate `TAVILY_API_KEY` and its quota is independent.
 
 Free services have limits: Render spins down after 15 minutes without traffic, and the next request can take about a minute to wake it. Render's free filesystem is temporary, which is okay here because uploaded study files are processed in memory and Dawnstudy does not save them. Vercel Hobby is restricted to personal, non-commercial use.
 
-**Uploaded material and privacy:** Uploaded files are processed in memory and are not stored. Generated study sets are stored in the user's browser for guests, or in the configured Google Sheet for signed-in users. Passwords are stored as salted PBKDF2 hashes. Gemini's free tier may use submitted content to improve Google products; do not upload confidential notes or personal information on that tier.
+**Uploaded material and privacy:** Uploaded files are processed in memory and are not stored. Generated study sets are stored in the user's browser for guests, or in the configured Google Sheet for signed-in users. Passwords are stored as salted PBKDF2 hashes. Review the selected AI provider's data-use terms before production; do not upload confidential notes or personal information to a provider unless its terms are appropriate for that material.
 
 ### Google sign-in and Sheets storage
 
@@ -52,7 +52,7 @@ Import the repository into Vercel and deploy the Next.js project from the reposi
 
 ## API
 
-- `GET /api/health` reports API availability and configured model name.
-- `POST /api/generate` accepts multipart fields `file`, `format` (`flashcards`, `multiple_choice`, `checkbox`, `identification`), and `use_web` (`true`/`false`).
+- `GET /api/health` reports API availability and the configured model fallback order; `GET /api/models` lists choices for manual selection.
+- `POST /api/generate` accepts multipart fields `file`, `format` (`flashcards`, `multiple_choice`, `checkbox`, `identification`), `use_web` (`true`/`false`), and optional `model` (`auto` or a configured model ID).
 
 Uploaded file contents are held in memory for extraction and generation. `POST /api/auth/register` and `POST /api/auth/login` create username/password accounts, `POST /api/auth/google` verifies Google sign-in, `GET /api/auth/me` returns the signed-in profile, and `GET/POST /api/study-sets` read or save the signed-in user's study sets. Account and set endpoints require the bearer token returned by sign-in.
