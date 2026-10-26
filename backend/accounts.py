@@ -21,15 +21,31 @@ from google.oauth2 import id_token, service_account
 SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 USERS_TAB = "Users"
 SETS_TAB = "StudySets"
+USAGE_TAB = "AIUsage"
+PROGRESS_TAB = "CardProgress"
+REVIEWS_TAB = "ReviewLogs"
 USER_COLUMNS = ["user_id", "username", "email", "password_hash", "google_sub", "display_name", "created_at"]
 SET_COLUMNS = ["set_id", "user_id", "title", "type", "items_json", "sources_json", "created_at"]
+USAGE_COLUMNS = ["scope_key", "usage_date", "generation_count"]
+PROGRESS_COLUMNS = ["user_id", "set_id", "card_id", "due_at", "interval_days", "ease_factor", "repetitions", "lapses", "last_reviewed_at", "last_rating"]
+REVIEW_COLUMNS = ["user_id", "set_id", "card_id", "reviewed_at", "rating", "was_correct"]
 _schema_ready = False
 _schema_lock = threading.Lock()
 _user_write_lock = threading.Lock()
+_usage_write_lock = threading.Lock()
+_set_write_lock = threading.Lock()
+_review_write_lock = threading.Lock()
 
 
 class StorageError(RuntimeError):
     pass
+
+
+class UsageLimitExceeded(RuntimeError):
+    def __init__(self, used: int, limit: int):
+        super().__init__("The daily study-set generation limit has been reached.")
+        self.used = used
+        self.limit = limit
 
 
 def _spreadsheet_id() -> str:
@@ -89,10 +105,10 @@ def ensure_schema() -> None:
             return
         metadata = _api("GET", "")
         titles = {sheet.get("properties", {}).get("title") for sheet in metadata.get("sheets", [])}
-        missing = [title for title in (USERS_TAB, SETS_TAB) if title not in titles]
+        missing = [title for title in (USERS_TAB, SETS_TAB, USAGE_TAB, PROGRESS_TAB, REVIEWS_TAB) if title not in titles]
         if missing:
             _api("POST", ":batchUpdate", body={"requests": [{"addSheet": {"properties": {"title": title}}} for title in missing]})
-        for tab, columns in ((USERS_TAB, USER_COLUMNS), (SETS_TAB, SET_COLUMNS)):
+        for tab, columns in ((USERS_TAB, USER_COLUMNS), (SETS_TAB, SET_COLUMNS), (USAGE_TAB, USAGE_COLUMNS), (PROGRESS_TAB, PROGRESS_COLUMNS), (REVIEWS_TAB, REVIEW_COLUMNS)):
             header_range = quote(f"{tab}!A1", safe="!'")
             values = _api("GET", f"/values/{header_range}").get("values", [])
             if not values:
@@ -179,18 +195,126 @@ def save_study_set(study_set: dict[str, Any]) -> None:
     sources_json = json.dumps(study_set.get("sources", []), ensure_ascii=False, separators=(",", ":"))
     if len(items_json) + len(sources_json) > 40_000:
         raise StorageError("This study set is too large to save in a Google Sheets cell.")
-    _append(
-        SETS_TAB,
-        [
-            str(study_set["id"]),
-            str(study_set["user_id"]),
-            str(study_set["title"])[:150],
-            str(study_set["type"]),
-            items_json,
-            sources_json,
-            str(study_set["created_at"]),
-        ],
-    )
+    with _set_write_lock:
+        _append(
+            SETS_TAB,
+            [
+                str(study_set["id"]),
+                str(study_set["user_id"]),
+                str(study_set["title"])[:150],
+                str(study_set["type"]),
+                items_json,
+                sources_json,
+                str(study_set["created_at"]),
+            ],
+        )
+
+
+def delete_study_set(user_id: str, set_id: str) -> bool:
+    """Delete one saved set only when it belongs to the requesting account."""
+    with _set_write_lock:
+        row_number = next(
+            (
+                row_number
+                for row_number, row in _rows(SETS_TAB, SET_COLUMNS)
+                if row["user_id"] == user_id and row["set_id"] == set_id
+            ),
+            None,
+        )
+        if row_number is None:
+            return False
+
+        metadata = _api("GET", "")
+        sheet_id = next(
+            (
+                sheet.get("properties", {}).get("sheetId")
+                for sheet in metadata.get("sheets", [])
+                if sheet.get("properties", {}).get("title") == SETS_TAB
+            ),
+            None,
+        )
+        if sheet_id is None:
+            raise StorageError("The StudySets tab could not be found in the spreadsheet.")
+        _api(
+            "POST",
+            ":batchUpdate",
+            body={
+                "requests": [
+                    {
+                        "deleteDimension": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "dimension": "ROWS",
+                                "startIndex": row_number - 1,
+                                "endIndex": row_number,
+                            }
+                        }
+                    }
+                ]
+            },
+        )
+        _delete_rows_for_set(PROGRESS_TAB, PROGRESS_COLUMNS, user_id, set_id)
+        _delete_rows_for_set(REVIEWS_TAB, REVIEW_COLUMNS, user_id, set_id)
+        return True
+
+
+def _delete_rows_for_set(tab: str, columns: list[str], user_id: str, set_id: str) -> None:
+    metadata = _api("GET", "")
+    sheet_id = next((sheet.get("properties", {}).get("sheetId") for sheet in metadata.get("sheets", []) if sheet.get("properties", {}).get("title") == tab), None)
+    if sheet_id is None:
+        return
+    matching = [row_number for row_number, row in _rows(tab, columns) if row["user_id"] == user_id and row["set_id"] == set_id]
+    if matching:
+        _api("POST", ":batchUpdate", body={"requests": [{"deleteDimension": {"range": {"sheetId": sheet_id, "dimension": "ROWS", "startIndex": row_number - 1, "endIndex": row_number}}} for row_number in reversed(matching)]})
+
+
+def review_data(user_id: str) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    progress = [row for _, row in _rows(PROGRESS_TAB, PROGRESS_COLUMNS) if row["user_id"] == user_id]
+    reviews = [row for _, row in _rows(REVIEWS_TAB, REVIEW_COLUMNS) if row["user_id"] == user_id]
+    return progress, reviews
+
+
+def save_card_review(user_id: str, set_id: str, card_id: str, progress: dict[str, str], review: dict[str, str]) -> None:
+    with _review_write_lock:
+        existing = next(((number, row) for number, row in _rows(PROGRESS_TAB, PROGRESS_COLUMNS) if row["user_id"] == user_id and row["set_id"] == set_id and row["card_id"] == card_id), None)
+        if existing:
+            row_number, _ = existing
+            range_name = quote(f"{PROGRESS_TAB}!A{row_number}:J{row_number}", safe="!:")
+            _api("PUT", f"/values/{range_name}", params={"valueInputOption": "RAW"}, body={"values": [[progress.get(column, "") for column in PROGRESS_COLUMNS]]})
+        else:
+            _append(PROGRESS_TAB, [progress.get(column, "") for column in PROGRESS_COLUMNS])
+        _append(REVIEWS_TAB, [review.get(column, "") for column in REVIEW_COLUMNS])
+
+
+def reserve_daily_generation(scope_key: str, usage_date: str, limit: int) -> int:
+    """Atomically reserve one daily generation within this API process."""
+    with _usage_write_lock:
+        match = next(
+            (
+                (row_number, row)
+                for row_number, row in _rows(USAGE_TAB, USAGE_COLUMNS)
+                if row["scope_key"] == scope_key and row["usage_date"] == usage_date
+            ),
+            None,
+        )
+        if match:
+            row_number, row = match
+            try:
+                used = int(row["generation_count"] or "0")
+            except ValueError:
+                used = 0
+            if used >= limit:
+                raise UsageLimitExceeded(used, limit)
+            _api(
+                "PUT",
+                f"/values/{quote(f'{USAGE_TAB}!C{row_number}', safe='!:')}",
+                params={"valueInputOption": "RAW"},
+                body={"values": [[str(used + 1)]]},
+            )
+            return used + 1
+
+        _append(USAGE_TAB, [scope_key, usage_date, "1"])
+        return 1
 
 
 def list_study_sets(user_id: str) -> list[dict[str, Any]]:
@@ -203,8 +327,13 @@ def list_study_sets(user_id: str) -> list[dict[str, Any]]:
             sources = json.loads(row["sources_json"] or "[]")
         except ValueError:
             continue
+        set_id = row["set_id"]
+        items = [
+            {**item, "card_id": item.get("card_id") or hashlib.sha256(f"{set_id}:{index}:{item.get('question', '')}".encode()).hexdigest()[:24]}
+            for index, item in enumerate(items)
+        ]
         result.append({
-            "id": row["set_id"],
+            "id": set_id,
             "title": row["title"],
             "type": row["type"],
             "items": items,
