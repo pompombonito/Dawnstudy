@@ -25,7 +25,26 @@ The repository is configured for Render's Free web service plan. Vercel Hobby is
 
 Free services have limits: Render spins down after 15 minutes without traffic, and the next request can take about a minute to wake it. Render's free filesystem is temporary, which is okay here because uploaded study files are processed in memory and Dawnstudy does not save them. Vercel Hobby is restricted to personal, non-commercial use.
 
-**Uploaded material and privacy:** Gemini's free tier may use submitted content to improve Google products; its paid tier says submitted content is not used for product improvement. Because this app sends extracted study text to Gemini, do not upload confidential materials or personal information on the free tier. The app itself does not persist uploads or generated study sets.
+**Uploaded material and privacy:** Uploaded files are processed in memory and are not stored. Generated study sets are stored in the user's browser for guests, or in the configured Google Sheet for signed-in users. Passwords are stored as salted PBKDF2 hashes. Gemini's free tier may use submitted content to improve Google products; do not upload confidential notes or personal information on that tier.
+
+### Google sign-in and Sheets storage
+
+Account features require a Google Cloud project. If account credentials are not configured, guests can still generate and keep study sets in the current browser.
+
+1. In Google Cloud Console, create/select a project and enable the **Google Sheets API**.
+2. Create a Google spreadsheet. The API creates the `Users` and `StudySets` tabs and their header rows automatically on first account use.
+3. Create a service account, make a JSON key, and share the spreadsheet with the service account's `client_email` as an Editor. Keep the JSON key private.
+4. Configure the Google Auth Platform consent screen and create an OAuth **Web application** client. Add `https://dawnstudy.vercel.app` to Authorized JavaScript origins (add `http://localhost:3000` for local development). No redirect URI is needed for Google Identity Services.
+5. Add these Render environment variables, then redeploy the API:
+   - `GOOGLE_CLIENT_ID`: OAuth web client ID.
+   - `GOOGLE_SERVICE_ACCOUNT_JSON`: complete service-account JSON key contents.
+   - `GOOGLE_SHEETS_SPREADSHEET_ID`: the ID between `/d/` and `/edit` in the spreadsheet URL.
+   - `SESSION_SECRET`: a private random string of at least 32 characters.
+6. Add `NEXT_PUBLIC_GOOGLE_CLIENT_ID` to Vercel with the same OAuth client ID, then redeploy the frontend.
+
+Google Sheets is intended for a small, low-traffic prototype here. It stores account profile fields, password hashes, and generated study-set JSON. Keep the spreadsheet private and share it only with the service account and trusted administrators. Username/password recovery and email verification are not currently included.
+
+The Sheets API's standard usage is available at no additional cost, within its quotas. Do not attach a billing account for this $0 prototype; keep use low and below quotas. See [Google Sheets API usage limits and pricing](https://developers.google.com/workspace/sheets/api/limits).
 
 ### Frontend on Vercel
 
@@ -36,4 +55,4 @@ Import the repository into Vercel and deploy the Next.js project from the reposi
 - `GET /api/health` reports API availability and configured model name.
 - `POST /api/generate` accepts multipart fields `file`, `format` (`flashcards`, `multiple_choice`, `checkbox`, `identification`), and `use_web` (`true`/`false`).
 
-Uploaded file contents are held in memory for extraction and generation; this starter does not persist materials or generated sets. Add authentication, per-user storage, request quotas, and monitoring before opening the API to a large public audience.
+Uploaded file contents are held in memory for extraction and generation. `POST /api/auth/register` and `POST /api/auth/login` create username/password accounts, `POST /api/auth/google` verifies Google sign-in, `GET /api/auth/me` returns the signed-in profile, and `GET/POST /api/study-sets` read or save the signed-in user's study sets. Account and set endpoints require the bearer token returned by sign-in.

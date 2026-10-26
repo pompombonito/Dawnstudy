@@ -2,14 +2,36 @@ import json
 import os
 import re
 from io import BytesIO
-from typing import Literal
+from datetime import datetime, timezone
+from typing import Any, Literal
+from uuid import uuid4
 
 import requests
 from docx import Document
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, Field
 from pypdf import PdfReader
+
+from accounts import (
+    StorageError,
+    create_session,
+    create_user,
+    find_user_by_email,
+    find_user_by_google_sub,
+    find_user_by_id,
+    find_user_by_username,
+    generated_google_username,
+    hash_password,
+    list_study_sets,
+    list_users,
+    save_study_set,
+    update_user,
+    verify_google_credential,
+    verify_password,
+    verify_session,
+)
 
 app = FastAPI(title="Dawnstudy API", version="1.0.0")
 origins = [
@@ -24,13 +46,14 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 MAX_BYTES = 15 * 1024 * 1024
 MAX_TEXT = 36_000
 FORMATS = {"flashcards", "multiple_choice", "checkbox", "identification"}
+bearer = HTTPBearer(auto_error=False)
 
 
 class Health(BaseModel):
@@ -39,9 +62,157 @@ class Health(BaseModel):
     web_search: bool
 
 
+class UsernamePassword(BaseModel):
+    username: str = Field(min_length=3, max_length=24)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class GoogleSignIn(BaseModel):
+    credential: str = Field(min_length=20, max_length=10000)
+
+
+class SavedStudySet(BaseModel):
+    title: str = Field(min_length=1, max_length=150)
+    type: Literal["flashcards", "multiple_choice", "checkbox", "identification"]
+    items: list[dict[str, Any]] = Field(min_length=1, max_length=20)
+    sources: list[dict[str, str]] = Field(default_factory=list, max_length=20)
+
+
+def public_user(user: dict[str, str]) -> dict[str, str]:
+    return {
+        "id": user["user_id"],
+        "username": user["username"],
+        "email": user["email"],
+        "display_name": user["display_name"],
+    }
+
+
+def auth_response(user: dict[str, str]) -> dict[str, Any]:
+    return {"token": create_session(user["user_id"]), "user": public_user(user)}
+
+
+def authenticated_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> dict[str, str]:
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Sign in to use your account.")
+    user_id = verify_session(credentials.credentials)
+    try:
+        user = find_user_by_id(user_id) if user_id else None
+    except StorageError as exc:
+        raise storage_http_error(exc) from exc
+    if not user:
+        raise HTTPException(status_code=401, detail="Your session expired. Please sign in again.")
+    return user
+
+
+def storage_http_error(exc: StorageError) -> HTTPException:
+    if "USERNAME_TAKEN" in str(exc):
+        return HTTPException(status_code=409, detail="That username is already in use. Choose another.")
+    if "EMAIL_TAKEN" in str(exc):
+        return HTTPException(status_code=409, detail="An account already uses this email. Sign in with Google instead.")
+    return HTTPException(status_code=503, detail=str(exc))
+
+
 @app.get("/api/health", response_model=Health)
 def health():
     return Health(model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"), web_search=bool(os.getenv("TAVILY_API_KEY")))
+
+
+@app.post("/api/auth/register")
+def register_account(body: UsernamePassword):
+    username = body.username.strip()
+    if not re.fullmatch(r"[A-Za-z0-9._-]{3,24}", username):
+        raise HTTPException(status_code=422, detail="Use 3–24 letters, numbers, dots, underscores, or hyphens for your username.")
+    user = {
+        "user_id": str(uuid4()),
+        "username": username,
+        "email": "",
+        "password_hash": hash_password(body.password),
+        "google_sub": "",
+        "display_name": username,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        response = auth_response(user)
+        create_user(user)
+        return response
+    except StorageError as exc:
+        raise storage_http_error(exc) from exc
+
+
+@app.post("/api/auth/login")
+def login_account(body: UsernamePassword):
+    try:
+        match = find_user_by_username(body.username.strip())
+    except StorageError as exc:
+        raise storage_http_error(exc) from exc
+    if not match or not verify_password(body.password, match[1]["password_hash"]):
+        raise HTTPException(status_code=401, detail="Username or password is incorrect.")
+    try:
+        return auth_response(match[1])
+    except StorageError as exc:
+        raise storage_http_error(exc) from exc
+
+
+@app.post("/api/auth/google")
+def google_sign_in(body: GoogleSignIn):
+    try:
+        profile = verify_google_credential(body.credential)
+        match = find_user_by_google_sub(profile["google_sub"])
+        if match:
+            user = match[1]
+        else:
+            email_match = find_user_by_email(profile["email"])
+            if email_match:
+                row_number, user = email_match
+                user["google_sub"] = profile["google_sub"]
+                user["display_name"] = profile["display_name"]
+                update_user(row_number, user)
+            else:
+                existing_usernames = {existing["username"].casefold() for _, existing in list_users()}
+                user = {
+                    "user_id": str(uuid4()),
+                    "username": generated_google_username(profile["email"], existing_usernames),
+                    "email": profile["email"],
+                    "password_hash": "",
+                    "google_sub": profile["google_sub"],
+                    "display_name": profile["display_name"],
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+                create_user(user)
+        return auth_response(user)
+    except StorageError as exc:
+        raise storage_http_error(exc) from exc
+
+
+@app.get("/api/auth/me")
+def get_account(user: dict[str, str] = Depends(authenticated_user)):
+    return public_user(user)
+
+
+@app.get("/api/study-sets")
+def get_study_sets(user: dict[str, str] = Depends(authenticated_user)):
+    try:
+        return list_study_sets(user["user_id"])
+    except StorageError as exc:
+        raise storage_http_error(exc) from exc
+
+
+@app.post("/api/study-sets")
+def add_study_set(body: SavedStudySet, user: dict[str, str] = Depends(authenticated_user)):
+    study_set = {
+        "id": str(uuid4()),
+        "user_id": user["user_id"],
+        "title": body.title.strip(),
+        "type": body.type,
+        "items": [item.model_dump(exclude_none=True) if isinstance(item, BaseModel) else item for item in body.items],
+        "sources": body.sources,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        save_study_set(study_set)
+        return study_set
+    except StorageError as exc:
+        raise storage_http_error(exc) from exc
 
 
 def extract_text(filename: str, raw: bytes) -> str:
