@@ -324,7 +324,7 @@
 .voice-review-heading h2{margin:7px 0 4px;color:var(--ink);font:750 20px Manrope,sans-serif;letter-spacing:-.5px}
 .voice-review-heading p{margin:0;color:var(--muted);font-size:10px;line-height:1.5}
 .voice-mark{width:42px;height:42px;display:grid;place-items:center;border-radius:12px;background:var(--paper);color:var(--teal)}
-.voice-setup{display:grid;grid-template-columns:minmax(180px,1fr) minmax(180px,.8fr) auto;align-items:end;gap:10px;margin-top:16px}
+.voice-setup{display:grid;grid-template-columns:minmax(180px,1.2fr) minmax(160px,.9fr) minmax(180px,1fr) auto;align-items:end;gap:10px;margin-top:16px}
 .voice-setup label{display:grid;gap:6px;color:var(--ink-soft);font-size:10px;font-weight:700}
 .voice-setup input,.voice-setup select,.voice-compose input{height:38px;min-width:0;padding:0 11px;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink);font:500 11px 'DM Sans',sans-serif}
 .voice-setup input::placeholder,.voice-compose input::placeholder{color:var(--muted)}
@@ -366,4 +366,5 @@
 :root[data-theme="dark"] .voice-send,:root[data-theme="dark"] .voice-start{border-color:#237a7e;background:#237a7e;color:#fff}
 :root[data-theme="dark"] .voice-mic.listening{border-color:#a75849;background:#402724;color:#ffd5ca}
 :root[data-theme="dark"] .voice-error{border-color:#704b43;background:#30211f;color:#f0aa9b}
+@media(max-width:960px){.voice-setup{grid-template-columns:repeat(2,minmax(0,1fr))}.voice-privacy{grid-column:1/-1}.voice-start{width:100%}}
 @media(max-width:700px){.voice-review{padding:14px}.voice-setup{grid-template-columns:1fr}.voice-privacy{grid-column:1}.voice-start{width:100%}.voice-message{max-width:94%}.voice-transcript{max-height:48vh;padding:9px}}

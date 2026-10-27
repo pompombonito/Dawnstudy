@@ -18,27 +18,15 @@ type LoginResult = { token: string; user: Account };
 type ModelOption = { id: string; provider: string; name: string };
 type Theme = "dark" | "light";
 type PracticeAnswer = string | string[] | null;
+type VoiceMode = "multiple_choice" | "identification" | "open_ended" | "enumeration";
 
 type GoogleIdResponse = { credential: string };
 type VoiceTurn = { role: "user" | "assistant"; content: string };
-type BrowserSpeechResult = ArrayLike<{ transcript: string; isFinal?: boolean }>;
-type BrowserSpeechRecognizer = {
-  lang: string;
-  continuous: boolean;
-  interimResults: boolean;
-  maxAlternatives: number;
-  onresult: ((event: { results: ArrayLike<BrowserSpeechResult>; resultIndex?: number }) => void) | null;
-  onerror: ((event: { error: string }) => void) | null;
-  onend: (() => void) | null;
-  start: () => void;
-  stop: () => void;
-};
-type BrowserSpeechRecognizerConstructor = new () => BrowserSpeechRecognizer;
 type GoogleIdentity = {
   initialize: (config: { client_id: string; callback: (response: GoogleIdResponse) => void }) => void;
   renderButton: (element: HTMLElement, options: Record<string, string | number | boolean>) => void;
 };
-declare global { interface Window { google?: { accounts: { id: GoogleIdentity } }; SpeechRecognition?: BrowserSpeechRecognizerConstructor; webkitSpeechRecognition?: BrowserSpeechRecognizerConstructor } }
+declare global { interface Window { google?: { accounts: { id: GoogleIdentity } } } }
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
@@ -150,10 +138,12 @@ export default function Home() {
   const [practiceAnswers, setPracticeAnswers] = useState<PracticeAnswer[]>([]);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [voiceTopic, setVoiceTopic] = useState("");
+  const [voiceMode, setVoiceMode] = useState<VoiceMode>("open_ended");
   const [voiceModelChoice, setVoiceModelChoice] = useState("auto");
   const [voiceMessages, setVoiceMessages] = useState<VoiceTurn[]>([]);
   const [voiceActive, setVoiceActive] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState(false);
+  const [voiceTranscribing, setVoiceTranscribing] = useState(false);
   const [voiceListening, setVoiceListening] = useState(false);
   const [voiceDraft, setVoiceDraft] = useState("");
   const [voiceError, setVoiceError] = useState("");
@@ -179,8 +169,10 @@ export default function Home() {
   const [authError, setAuthError] = useState("");
   const input = useRef<HTMLInputElement>(null);
   const googleButton = useRef<HTMLDivElement>(null);
-  const speechRecognizer = useRef<BrowserSpeechRecognizer | null>(null);
-  const voiceWantsMic = useRef(false);
+  const mediaRecorder = useRef<MediaRecorder | null>(null);
+  const microphoneStream = useRef<MediaStream | null>(null);
+  const recordingChunks = useRef<BlobPart[]>([]);
+  const recordingTimeout = useRef<number | null>(null);
   const voiceMessagesElement = useRef<HTMLDivElement>(null);
   const voiceSessionId = useRef(0);
 
@@ -415,7 +407,7 @@ export default function Home() {
       const response = await fetch(API_BASE + "/api/voice/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + authToken },
-        body: JSON.stringify({ topic: voiceTopic, message: cleanMessage, history, model: voiceModelChoice }),
+        body: JSON.stringify({ topic: voiceTopic, message: cleanMessage, history, model: voiceModelChoice, mode: voiceMode }),
       });
       if (!response.ok) throw new Error(await responseError(response));
       const data: { answer: string; model: string; fallback?: { from: string; to: string } | null } = await response.json();
@@ -447,79 +439,94 @@ export default function Home() {
 
   function endVoiceReview() {
     voiceSessionId.current += 1;
-    voiceWantsMic.current = false;
-    speechRecognizer.current?.stop(); speechRecognizer.current = null;
+    if (recordingTimeout.current !== null) window.clearTimeout(recordingTimeout.current);
+    recordingTimeout.current = null;
+    if (mediaRecorder.current?.state !== "inactive") mediaRecorder.current?.stop();
+    mediaRecorder.current = null;
+    microphoneStream.current?.getTracks().forEach((track) => track.stop()); microphoneStream.current = null;
     if ("speechSynthesis" in window) window.speechSynthesis.cancel();
-    setVoiceActive(false); setVoiceListening(false); setVoiceBusy(false);
+    setVoiceActive(false); setVoiceListening(false); setVoiceBusy(false); setVoiceTranscribing(false);
   }
 
-  function toggleVoiceInput() {
+  async function transcribeVoiceRecording(blob: Blob) {
+    if (!blob.size || !authToken) {
+      setVoiceError("I didn’t hear any audio. Try recording your reply again.");
+      return;
+    }
+    const sessionId = voiceSessionId.current;
+    setVoiceBusy(true); setVoiceTranscribing(true); setVoiceError("");
+    try {
+      if (!API_BASE) throw new Error("The API address is not configured for this site.");
+      const form = new FormData();
+      const mimeType = blob.type || "audio/webm";
+      const extension = mimeType.includes("mp4") ? "mp4" : mimeType.includes("ogg") ? "ogg" : "webm";
+      form.append("file", blob, `voice-reply.${extension}`);
+      const response = await fetch(API_BASE + "/api/voice/transcribe", {
+        method: "POST", headers: { Authorization: "Bearer " + authToken }, body: form,
+      });
+      if (!response.ok) throw new Error(await responseError(response));
+      const data: { transcript: string; provider: string } = await response.json();
+      if (sessionId !== voiceSessionId.current) return;
+      if (!data.transcript?.trim()) throw new Error("I couldn’t make out those words. Try again, or type your reply.");
+      setVoiceTranscribing(false);
+      await sendVoiceTurn(data.transcript);
+    } catch (caught) {
+      if (sessionId === voiceSessionId.current) setVoiceError(caught instanceof Error ? caught.message : "Could not transcribe that recording. Try typing your reply.");
+    } finally { if (sessionId === voiceSessionId.current) { setVoiceBusy(false); setVoiceTranscribing(false); } }
+  }
+
+  async function toggleVoiceInput() {
     if (voiceListening) {
-      voiceWantsMic.current = false;
-      speechRecognizer.current?.stop();
-      speechRecognizer.current = null;
+      if (recordingTimeout.current !== null) window.clearTimeout(recordingTimeout.current);
+      recordingTimeout.current = null;
+      if (mediaRecorder.current?.state === "recording") mediaRecorder.current.stop();
       setVoiceListening(false);
       return;
     }
-    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!Recognition) {
-      setVoiceError("Voice input is not available in this browser. You can still type your replies below.");
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setVoiceError("Audio recording is not available in this browser. Try a recent Chrome, Edge, Firefox, or Safari, or type your reply.");
       return;
     }
-    const recognizer = new Recognition();
-    recognizer.lang = navigator.language || "en-US";
-    recognizer.continuous = true;
-    recognizer.interimResults = false;
-    recognizer.maxAlternatives = 1;
-    recognizer.onresult = (event) => {
-      const finalResults = Array.from(event.results).slice(event.resultIndex ?? event.results.length - 1).filter((result) => result?.[0]?.isFinal !== false);
-      const transcript = finalResults.map((result) => result[0]?.transcript?.trim()).filter(Boolean).join(" ");
-      if (transcript) {
-        voiceWantsMic.current = false;
-        recognizer.stop();
-        speechRecognizer.current = null;
-        setVoiceListening(false);
-        setVoiceDraft("");
-        void sendVoiceTurn(transcript);
-      }
-    };
-    recognizer.onerror = (event) => {
-      if (event.error === "no-speech") {
-        setVoiceError("I haven’t heard anything yet. Keep speaking, or type your reply.");
-        return;
-      }
-      voiceWantsMic.current = false;
-      const messages: Record<string, string> = {
-        "not-allowed": "Microphone access is blocked. Allow it for this site in your browser’s address bar, then try again.",
-        "service-not-allowed": "This browser’s speech recognition service is unavailable. Try Chrome or Edge, or type your reply.",
-        "audio-capture": "No microphone was detected. Connect or enable a microphone, then try again.",
-        network: "The browser’s speech recognition service could not connect. Check your connection and try again.",
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      microphoneStream.current = stream;
+      const recordingSessionId = voiceSessionId.current;
+      const preferredMime = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm"].find((mime) => MediaRecorder.isTypeSupported(mime));
+      const recorder = new MediaRecorder(stream, preferredMime ? { mimeType: preferredMime } : undefined);
+      recordingChunks.current = [];
+      recorder.ondataavailable = (event) => { if (event.data.size) recordingChunks.current.push(event.data); };
+      recorder.onerror = () => {
+        setVoiceListening(false); setVoiceError("The microphone recording failed. Check microphone permissions and try again.");
+        stream.getTracks().forEach((track) => track.stop()); microphoneStream.current = null; mediaRecorder.current = null;
       };
-      setVoiceError(messages[event.error] || "The microphone stopped unexpectedly. Try again or type your reply.");
-      setVoiceListening(false); speechRecognizer.current = null;
-    };
-    recognizer.onend = () => {
-      if (voiceWantsMic.current && speechRecognizer.current === recognizer) {
-        window.setTimeout(() => {
-          if (!voiceWantsMic.current || speechRecognizer.current !== recognizer) return;
-          try { recognizer.start(); }
-          catch {
-            voiceWantsMic.current = false;
-            speechRecognizer.current = null;
-            setVoiceListening(false);
-            setVoiceError("The browser stopped listening. Tap the microphone to try again, or type your reply.");
-          }
-        }, 250);
-        return;
-      }
-      if (speechRecognizer.current === recognizer) speechRecognizer.current = null;
+      recorder.onstop = () => {
+        if (recordingTimeout.current !== null) window.clearTimeout(recordingTimeout.current);
+        recordingTimeout.current = null;
+        const blob = new Blob(recordingChunks.current, { type: recorder.mimeType || "audio/webm" });
+        recordingChunks.current = [];
+        stream.getTracks().forEach((track) => track.stop());
+        if (microphoneStream.current === stream) microphoneStream.current = null;
+        if (mediaRecorder.current === recorder) mediaRecorder.current = null;
+        if (recordingSessionId === voiceSessionId.current && blob.size) void transcribeVoiceRecording(blob);
+      };
+      mediaRecorder.current = recorder;
+      recorder.start(250);
+      setVoiceError(""); setVoiceListening(true);
+      recordingTimeout.current = window.setTimeout(() => {
+        recordingTimeout.current = null;
+        if (recorder.state === "recording") {
+          setVoiceListening(false); recorder.stop();
+        }
+      }, 30_000);
+    } catch (caught) {
+      microphoneStream.current?.getTracks().forEach((track) => track.stop()); microphoneStream.current = null;
       setVoiceListening(false);
-    };
-    speechRecognizer.current = recognizer;
-    voiceWantsMic.current = true;
-    setVoiceError(""); setVoiceListening(true);
-    try { recognizer.start(); }
-    catch { voiceWantsMic.current = false; setVoiceListening(false); speechRecognizer.current = null; setVoiceError("The microphone could not start. Allow microphone access in your browser settings and try again."); }
+      const name = caught instanceof DOMException ? caught.name : "";
+      setVoiceError(name === "NotAllowedError" || name === "PermissionDeniedError"
+        ? "Microphone access is blocked. Allow microphone access for this site in your browser, then try again."
+        : name === "NotFoundError" ? "No microphone was detected. Connect or enable one, then try again."
+        : "The microphone could not start. Check browser permissions and try again.");
+    }
   }
 
   async function shareCurrentSet() {
@@ -729,22 +736,23 @@ export default function Home() {
             <div className="bottom-note"><span>✳</span> Little by little, a little becomes a lot. <i>— A study reminder</i></div>
           </section>
           <section className="voice-review" id="voice-review">
-            <div className="voice-review-heading"><div><div className="result-kicker"><span/> VOICE REVIEW</div><h2>Talk it through.</h2><p>Choose a topic and have a spoken, back-and-forth review with an AI study partner.</p></div><span className="voice-mark"><Mic size={20}/></span></div>
+            <div className="voice-review-heading"><div><div className="result-kicker"><span/> VOICE REVIEW</div><h2>Talk it through.</h2><p>Choose a topic and a question style for a spoken, back-and-forth review.</p></div><span className="voice-mark"><Mic size={20}/></span></div>
             {!voiceActive ? <div className="voice-setup">
               <label>What topic do you want to review?<input value={voiceTopic} onChange={(event) => setVoiceTopic(event.target.value)} maxLength={200} placeholder="e.g. Cell division, pharmacology, or network layers"/></label>
+              <label>Practice format<select value={voiceMode} onChange={(event) => setVoiceMode(event.target.value as VoiceMode)}><option value="multiple_choice">Multiple Choice Questions</option><option value="identification">Identification</option><option value="open_ended">Open-ended Questions</option><option value="enumeration">Enumeration</option></select></label>
               <label>Conversation model<select value={voiceModelChoice} onChange={(event) => setVoiceModelChoice(event.target.value)}><option value="auto">Auto · switch if a model is busy or limited</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select></label>
               <button className="voice-start" type="button" onClick={beginVoiceReview} disabled={voiceBusy}><Mic size={16}/> Start voice review</button>
-              <p className="voice-privacy">Your browser handles microphone recognition and reads replies aloud. Dawnstudy sends recognized text to the selected provider. Continue while that provider has available quota.</p>
+              <p className="voice-privacy">Dawnstudy records up to 30 seconds per reply and transcribes it through a configured AI provider. Audio is sent to that provider; provider quotas or rates may apply. Replies are read aloud by your browser.</p>
             </div> : <div className="voice-session">
-              <div className="voice-session-bar"><div><strong>Reviewing: {voiceTopic}</strong><small>{voiceModelUsed ? "Answered by " + modelName(voiceModelUsed) : "Connecting to your selected model…"}</small></div><button type="button" className="voice-end" onClick={endVoiceReview}>End review</button></div>
+              <div className="voice-session-bar"><div><strong>Reviewing: {voiceTopic}</strong><small>{voiceMode.replaceAll("_", " ")} · {voiceModelUsed ? "Answered by " + modelName(voiceModelUsed) : "Connecting to your selected model…"}</small></div><button type="button" className="voice-end" onClick={endVoiceReview}>End review</button></div>
               {voiceFallbackNote && <p className="voice-fallback">{voiceFallbackNote}</p>}
               <div className="voice-transcript" ref={voiceMessagesElement} role="log" aria-live="polite">
                 {voiceMessages.map((turn, index) => <article className={turn.role === "assistant" ? "voice-message assistant" : "voice-message user"} key={index}><span>{turn.role === "assistant" ? "STUDY PARTNER" : "YOU"}</span><p>{turn.content}</p>{turn.role === "assistant" && <button type="button" className="voice-replay" onClick={() => speakVoiceReply(turn.content)} aria-label="Read this reply aloud"><Volume2 size={14}/> Listen</button>}</article>)}
                 {voiceBusy && <p className="voice-thinking"><span className="spinner"/> Thinking of your next question…</p>}
               </div>
               <form className="voice-compose" onSubmit={(event) => { event.preventDefault(); if (!voiceBusy && voiceDraft.trim()) { void sendVoiceTurn(voiceDraft); setVoiceDraft(""); } }}>
-                <button type="button" className={voiceListening ? "voice-mic listening" : "voice-mic"} onClick={toggleVoiceInput} disabled={voiceBusy} aria-label={voiceListening ? "Stop listening" : "Speak your answer"} title={voiceListening ? "Stop listening" : "Speak your answer"}>{voiceListening ? <MicOff size={18}/> : <Mic size={18}/>}</button>
-                <input value={voiceDraft} onChange={(event) => setVoiceDraft(event.target.value)} maxLength={1200} placeholder={voiceListening ? "Listening… speak now" : "Speak or type your answer"} aria-label="Your reply"/>
+                <button type="button" className={voiceListening ? "voice-mic listening" : "voice-mic"} onClick={() => void toggleVoiceInput()} disabled={voiceBusy && !voiceListening} aria-label={voiceListening ? "Stop recording and send" : "Record your answer"} title={voiceListening ? "Stop recording and send" : "Record your answer"}>{voiceListening ? <MicOff size={18}/> : <Mic size={18}/>}</button>
+                <input value={voiceDraft} onChange={(event) => setVoiceDraft(event.target.value)} maxLength={1200} placeholder={voiceListening ? "Recording… tap mic when done (30 sec max)" : voiceTranscribing ? "Transcribing your recording…" : "Record or type your answer"} aria-label="Your reply"/>
                 <button type="submit" className="voice-send" disabled={voiceBusy || !voiceDraft.trim()} aria-label="Send reply"><Send size={17}/></button>
               </form>
             </div>}
