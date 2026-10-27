@@ -5,7 +5,6 @@ import re
 import threading
 import hashlib
 import base64
-from itertools import count
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
@@ -75,13 +74,10 @@ UNLIMITED_GENERATION_EMAILS = {
     "corpuz2580868@mnl.ceu.edu.ph",
     "macaldo2214944@ceu.edu.ph",
 }
-MAX_MODELS_PER_VOICE_TURN = 3
 ALLOWED_EMAIL_DOMAINS = ("@ceu.edu.ph", "@mnl.ceu.edu.ph", "@mkt.ceu.edu.ph", "@mls.ceu.edu.ph")
 OWNER_EMAIL = "daquioagjairo30@gmail.com"
 FORMATS = {"flashcards", "multiple_choice", "checkbox", "identification"}
 bearer = HTTPBearer(auto_error=False)
-_provider_sequence = count()
-_provider_sequence_lock = threading.Lock()
 _memory_usage_lock = threading.Lock()
 _memory_usage: dict[tuple[str, str], int] = {}
 AI_MODELS = {
@@ -555,7 +551,10 @@ def configured_ai_models() -> list[tuple[str, str, str, str, str]]:
         if api_key:
             configured.append((model_id, provider, default_model, api_key, label))
             seen.add(model_id)
-    return configured
+    provider_priority = {"groq": 0, "gemini": 1, "openrouter": 2, "mistral": 3}
+    # Keep any configured within-provider ordering, while always honoring the
+    # requested provider priority even if Render still has an older env value.
+    return sorted(configured, key=lambda choice: provider_priority.get(choice[1], 99))
 
 
 def choose_auto_model(
@@ -569,17 +568,27 @@ def choose_auto_model(
         tier = "compact"
         preferences = [
             "groq:openai/gpt-oss-20b",
+            "groq:qwen/qwen3.8-27b",
+            "groq:openai/gpt-oss-120b",
             "gemini:gemini-3.1-flash-lite",
             "gemini:gemini-3.5-flash-lite",
-            "mistral:mistral-small-latest",
+            "gemini:gemini-3.6-flash",
+            "gemini:gemini-3.7-flash",
+            "gemini:gemini-3.8-flash",
             "openrouter:openrouter/free",
+            "mistral:mistral-small-latest",
         ]
     elif text_chars >= 14_000 or question_count >= 40 or (file_bytes >= 8 * 1024 * 1024 and text_chars >= 8_000):
         tier = "large"
         preferences = [
             "groq:openai/gpt-oss-120b",
+            "groq:qwen/qwen3.8-27b",
+            "groq:openai/gpt-oss-20b",
             "gemini:gemini-3.8-flash",
             "gemini:gemini-3.7-flash",
+            "gemini:gemini-3.6-flash",
+            "gemini:gemini-3.5-flash-lite",
+            "gemini:gemini-3.1-flash-lite",
             "openrouter:openrouter/free",
             "mistral:mistral-small-latest",
         ]
@@ -587,10 +596,15 @@ def choose_auto_model(
         tier = "balanced"
         preferences = [
             "groq:openai/gpt-oss-20b",
-            "gemini:gemini-3.5-flash-lite",
-            "mistral:mistral-small-latest",
-            "openrouter:openrouter/free",
+            "groq:qwen/qwen3.8-27b",
             "groq:openai/gpt-oss-120b",
+            "gemini:gemini-3.5-flash-lite",
+            "gemini:gemini-3.1-flash-lite",
+            "gemini:gemini-3.6-flash",
+            "gemini:gemini-3.7-flash",
+            "gemini:gemini-3.8-flash",
+            "openrouter:openrouter/free",
+            "mistral:mistral-small-latest",
         ]
 
     configured_ids = {choice[0] for choice in models}
@@ -830,17 +844,9 @@ def provider_failure_reason(error: ProviderError) -> str:
     return "unavailable"
 
 
-def diversify_fallback_order(primary, candidates):
-    """Try one model from each provider before repeating a provider."""
-    ordered = [primary]
-    seen_providers = {primary[1]}
-    for choice in candidates:
-        if choice[1] not in seen_providers:
-            ordered.append(choice)
-            seen_providers.add(choice[1])
-    used_ids = {choice[0] for choice in ordered}
-    ordered.extend(choice for choice in candidates if choice[0] not in used_ids)
-    return ordered
+def fallback_order(primary, candidates):
+    """Try the selected model first, then the configured provider priority."""
+    return [primary, *candidates]
 
 
 def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_model: str, question_count: int, excluded_questions: list[str] | None = None) -> tuple[dict[str, Any], list[str], dict[str, str] | None, bool]:
@@ -853,13 +859,9 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
         if not manual_choice:
             raise HTTPException(status_code=422, detail="That model is not configured. Refresh the page and choose an available model.")
         remaining_models = [choice for choice in models if choice[0] != selected_model]
-        ordered = diversify_fallback_order(manual_choice, remaining_models)
+        ordered = fallback_order(manual_choice, remaining_models)
     else:
-        # Auto rotates the first model to spread normal traffic across providers.
-        with _provider_sequence_lock:
-            start = next(_provider_sequence) % len(models)
-        rotated = models[start:] + models[:start]
-        ordered = diversify_fallback_order(rotated[0], rotated[1:])
+        ordered = models
 
     completed: list[dict[str, Any]] = []
     used_models: list[str] = []
@@ -1010,7 +1012,7 @@ def transcribe_voice_audio(audio: bytes, mime_type: str, topic: str = "") -> tup
         "openrouter": os.getenv("OPENROUTER_API_KEY", "").strip(),
     }
     configured_providers = [provider for _id, provider, _model, _key, _label in configured_ai_models()]
-    priority = ["groq", "mistral", "gemini", "openrouter"]
+    priority = ["groq", "gemini", "openrouter", "mistral"]
     providers = [provider for provider in priority if provider in configured_providers and provider_keys[provider]]
     if not providers:
         raise HTTPException(status_code=503, detail="No configured provider can transcribe voice input. Add a Groq, Mistral, Gemini, or OpenRouter API key to Render.")
@@ -1105,12 +1107,12 @@ def voice_reply_with_fallback(request: VoiceChatRequest) -> tuple[str, str, dict
     if request.model == "auto":
         selected_model, _reason = choose_auto_model(models, 0, len(request.topic) + len(request.message), 1)
         primary = next((choice for choice in models if choice[0] == selected_model), models[0])
-        ordered = diversify_fallback_order(primary, [choice for choice in models if choice[0] != primary[0]])
+        ordered = fallback_order(primary, [choice for choice in models if choice[0] != primary[0]])
     else:
         primary = next((choice for choice in models if choice[0] == request.model), None)
         if not primary:
             raise HTTPException(status_code=422, detail="That model is not configured. Refresh and choose one of the available models.")
-        ordered = diversify_fallback_order(primary, [choice for choice in models if choice[0] != primary[0]])
+        ordered = fallback_order(primary, [choice for choice in models if choice[0] != primary[0]])
     mode_instructions = {
         "multiple_choice": "Run this as a multiple-choice oral quiz. Ask exactly one question at a time with four concise options labeled A, B, C, and D. Do not disclose the correct option until the student answers. Then say whether it is correct, briefly explain, and ask the next question.",
         "identification": "Run this as an identification quiz. Describe one concept, process, person, or term without naming it, and ask the student to identify it. After they answer, give brief feedback and the correct term, then ask another identification question.",
@@ -1130,7 +1132,7 @@ def voice_reply_with_fallback(request: VoiceChatRequest) -> tuple[str, str, dict
     ]
     failures = []
     pending_fallback = None
-    for model_id, provider, model, api_key, _label in ordered[:MAX_MODELS_PER_VOICE_TURN]:
+    for model_id, provider, model, api_key, _label in ordered:
         try:
             answer = generate_voice_reply(provider, model, api_key, system_prompt, history, request.message.strip())
             fallback = {"from": pending_fallback, "to": model_id} if pending_fallback else None
