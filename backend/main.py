@@ -611,8 +611,10 @@ class ProviderError(RuntimeError):
         self.partial_items = partial_items or []
 
 
-def salvage_complete_items(content: str) -> list[dict[str, Any]]:
+def salvage_complete_items(content: Any) -> list[dict[str, Any]]:
     """Recover complete item objects if a provider truncates a JSON response."""
+    if not isinstance(content, str) or not content.strip():
+        return []
     match = re.search(r'"items"\s*:\s*\[', content)
     if not match:
         return []
@@ -686,17 +688,30 @@ def generate_with_provider(provider: str, model: str, api_key: str, prompt: str,
         body = response.json()
         if provider == "gemini":
             content = "".join(
-                part.get("text", "")
+                str(part.get("text") or "")
                 for candidate in body.get("candidates", [])[:1]
                 for part in candidate.get("content", {}).get("parts", [])
             )
         else:
-            content = body["choices"][0]["message"]["content"]
+            message = body.get("choices", [])[0].get("message", {})
+            raw_content = message.get("content")
+            if isinstance(raw_content, str):
+                content = raw_content
+            elif isinstance(raw_content, list):
+                # Some compatible OpenAI endpoints return text as content parts.
+                content = "".join(
+                    str(part.get("text") or "")
+                    for part in raw_content
+                    if isinstance(part, dict)
+                )
+            else:
+                # Refusals and empty model responses can have content=null.
+                content = ""
         payload = json.loads(content)
         if not isinstance(payload, dict):
             raise ValueError("response was not a JSON object")
         return payload
-    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+    except (ValueError, KeyError, TypeError, AttributeError, IndexError) as exc:
         raise ProviderError(provider, model_id, response.status_code, "provider returned invalid JSON", salvage_complete_items(content)) from exc
 
 
