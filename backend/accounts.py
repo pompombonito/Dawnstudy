@@ -10,6 +10,7 @@ import secrets
 import threading
 import time
 from functools import lru_cache
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -24,11 +25,15 @@ SETS_TAB = "StudySets"
 USAGE_TAB = "AIUsage"
 PROGRESS_TAB = "CardProgress"
 REVIEWS_TAB = "ReviewLogs"
+SHARES_TAB = "StudyShares"
+REPORTS_TAB = "CardReports"
 USER_COLUMNS = ["user_id", "username", "email", "password_hash", "google_sub", "display_name", "created_at"]
 SET_COLUMNS = ["set_id", "user_id", "title", "type", "items_json", "sources_json", "created_at"]
 USAGE_COLUMNS = ["scope_key", "usage_date", "generation_count"]
 PROGRESS_COLUMNS = ["user_id", "set_id", "card_id", "due_at", "interval_days", "ease_factor", "repetitions", "lapses", "last_reviewed_at", "last_rating"]
 REVIEW_COLUMNS = ["user_id", "set_id", "card_id", "reviewed_at", "rating", "was_correct"]
+SHARE_COLUMNS = ["token", "user_id", "set_id", "created_at"]
+REPORT_COLUMNS = ["report_id", "user_id", "set_id", "card_id", "reason", "note", "created_at"]
 _schema_ready = False
 _schema_lock = threading.Lock()
 _user_write_lock = threading.Lock()
@@ -105,10 +110,10 @@ def ensure_schema() -> None:
             return
         metadata = _api("GET", "")
         titles = {sheet.get("properties", {}).get("title") for sheet in metadata.get("sheets", [])}
-        missing = [title for title in (USERS_TAB, SETS_TAB, USAGE_TAB, PROGRESS_TAB, REVIEWS_TAB) if title not in titles]
+        missing = [title for title in (USERS_TAB, SETS_TAB, USAGE_TAB, PROGRESS_TAB, REVIEWS_TAB, SHARES_TAB, REPORTS_TAB) if title not in titles]
         if missing:
             _api("POST", ":batchUpdate", body={"requests": [{"addSheet": {"properties": {"title": title}}} for title in missing]})
-        for tab, columns in ((USERS_TAB, USER_COLUMNS), (SETS_TAB, SET_COLUMNS), (USAGE_TAB, USAGE_COLUMNS), (PROGRESS_TAB, PROGRESS_COLUMNS), (REVIEWS_TAB, REVIEW_COLUMNS)):
+        for tab, columns in ((USERS_TAB, USER_COLUMNS), (SETS_TAB, SET_COLUMNS), (USAGE_TAB, USAGE_COLUMNS), (PROGRESS_TAB, PROGRESS_COLUMNS), (REVIEWS_TAB, REVIEW_COLUMNS), (SHARES_TAB, SHARE_COLUMNS), (REPORTS_TAB, REPORT_COLUMNS)):
             header_range = quote(f"{tab}!A1", safe="!'")
             values = _api("GET", f"/values/{header_range}").get("values", [])
             if not values:
@@ -255,6 +260,7 @@ def delete_study_set(user_id: str, set_id: str) -> bool:
         )
         _delete_rows_for_set(PROGRESS_TAB, PROGRESS_COLUMNS, user_id, set_id)
         _delete_rows_for_set(REVIEWS_TAB, REVIEW_COLUMNS, user_id, set_id)
+        _delete_rows_for_set(SHARES_TAB, SHARE_COLUMNS, user_id, set_id)
         return True
 
 
@@ -266,6 +272,35 @@ def _delete_rows_for_set(tab: str, columns: list[str], user_id: str, set_id: str
     matching = [row_number for row_number, row in _rows(tab, columns) if row["user_id"] == user_id and row["set_id"] == set_id]
     if matching:
         _api("POST", ":batchUpdate", body={"requests": [{"deleteDimension": {"range": {"sheetId": sheet_id, "dimension": "ROWS", "startIndex": row_number - 1, "endIndex": row_number}}} for row_number in reversed(matching)]})
+
+
+def get_or_create_study_share(user_id: str, set_id: str) -> str:
+    with _set_write_lock:
+        existing = next((row["token"] for _, row in _rows(SHARES_TAB, SHARE_COLUMNS) if row["user_id"] == user_id and row["set_id"] == set_id), None)
+        if existing:
+            return existing
+        token = secrets.token_urlsafe(32)
+        _append(SHARES_TAB, [token, user_id, set_id, datetime.now(timezone.utc).isoformat()])
+        return token
+
+
+def revoke_study_share(user_id: str, set_id: str) -> bool:
+    with _set_write_lock:
+        exists = any(row["user_id"] == user_id and row["set_id"] == set_id for _, row in _rows(SHARES_TAB, SHARE_COLUMNS))
+        if exists:
+            _delete_rows_for_set(SHARES_TAB, SHARE_COLUMNS, user_id, set_id)
+        return exists
+
+
+def get_shared_study_set(token: str) -> dict[str, Any] | None:
+    share = next((row for _, row in _rows(SHARES_TAB, SHARE_COLUMNS) if hmac.compare_digest(row["token"], token)), None)
+    if not share:
+        return None
+    return next((study_set for study_set in list_study_sets(share["user_id"]) if study_set["id"] == share["set_id"]), None)
+
+
+def save_card_report(report: dict[str, str]) -> None:
+    _append(REPORTS_TAB, [report.get(column, "") for column in REPORT_COLUMNS])
 
 
 def review_data(user_id: str) -> tuple[list[dict[str, str]], list[dict[str, str]]]:

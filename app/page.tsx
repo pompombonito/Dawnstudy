@@ -2,13 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  BookOpen, Check, CheckSquare, ChevronLeft, ChevronRight, CircleHelp, Clock3,
-  CloudUpload, Cpu, FileText, Globe2, GraduationCap, Layers3, LogOut, Menu, Moon,
-  Plus, Sparkles, Sun, Trash2, UserRound, X,
+  AlarmClock, BookOpen, Check, CheckSquare, ChevronLeft, ChevronRight, CircleHelp, Clock3,
+  CloudUpload, Copy, Cpu, FileText, Flag, Globe2, GraduationCap, Layers3, LogOut, Menu, Moon,
+  Plus, Share2, Sparkles, Sun, Trash2, UserRound, X,
 } from "lucide-react";
 
 type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification";
-type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string };
+type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string; source_refs?: string[] };
 type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; created_at: string; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; usage?: { remaining: number; limit: number; resets_at: string } };
 type ReviewItem = { study_set_id: string; study_set_title: string; type: Kind; card: Card; retried?: boolean; intervals: { again: string; hard: string; good: string; easy: string } };
 type Progress = { total_reviews: number; reviewed_today: number; accuracy: number; current_streak: number; best_streak: number; due_count: number; total_cards: number; week: { date: string; reviews: number }[] };
@@ -16,6 +16,7 @@ type Account = { id: string; username: string; email: string; display_name: stri
 type LoginResult = { token: string; user: Account };
 type ModelOption = { id: string; provider: string; name: string };
 type Theme = "dark" | "light";
+type PracticeAnswer = string | string[] | null;
 
 type GoogleIdResponse = { credential: string };
 type GoogleIdentity = {
@@ -53,6 +54,25 @@ async function responseError(response: Response) {
   } catch { return `Request failed (${response.status}).`; }
 }
 
+function normalizedAnswer(value: string) {
+  return value.toLocaleLowerCase().trim().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+function isPracticeAnswerCorrect(card: Card, type: Kind, response: PracticeAnswer) {
+  if (response === null) return false;
+  const expected = (card.correct_answer || card.answer).split("|").map(normalizedAnswer).filter(Boolean).sort();
+  if (type === "checkbox") {
+    const actual = (Array.isArray(response) ? response : [response]).map(normalizedAnswer).filter(Boolean).sort();
+    return actual.length === expected.length && actual.every((answer, index) => answer === expected[index]);
+  }
+  const actual = Array.isArray(response) ? response[0] || "" : response;
+  return normalizedAnswer(actual) === expected[0];
+}
+
+function displayPracticeAnswer(response: PracticeAnswer) {
+  return Array.isArray(response) ? response.join(" · ") : response || "No answer";
+}
+
 export default function Home() {
   const [selected, setSelected] = useState<Kind>("flashcards");
   const [file, setFile] = useState<File | null>(null);
@@ -69,6 +89,19 @@ export default function Home() {
   const [current, setCurrent] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
+  const [practiceActive, setPracticeActive] = useState(false);
+  const [practiceComplete, setPracticeComplete] = useState(false);
+  const [practiceIndex, setPracticeIndex] = useState(0);
+  const [practiceSecondsPerQuestion, setPracticeSecondsPerQuestion] = useState(30);
+  const [practiceTimeLeft, setPracticeTimeLeft] = useState(0);
+  const [practiceAnswers, setPracticeAnswers] = useState<PracticeAnswer[]>([]);
+  const [shareUrl, setShareUrl] = useState("");
+  const [shareBusy, setShareBusy] = useState(false);
+  const [reportingCard, setReportingCard] = useState(false);
+  const [reportReason, setReportReason] = useState("incorrect_answer");
+  const [reportNote, setReportNote] = useState("");
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportedCards, setReportedCards] = useState<string[]>([]);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [reviewQueue, setReviewQueue] = useState<ReviewItem[]>([]);
   const [reviewActive, setReviewActive] = useState(false);
@@ -160,6 +193,13 @@ export default function Home() {
     }
   }, [authOpen]);
 
+  useEffect(() => {
+    if (!practiceActive || practiceComplete) return;
+    if (practiceTimeLeft <= 0) { setPracticeComplete(true); return; }
+    const timeout = window.setTimeout(() => setPracticeTimeLeft((seconds) => seconds - 1), 1000);
+    return () => window.clearTimeout(timeout);
+  }, [practiceActive, practiceComplete, practiceTimeLeft]);
+
   function acceptLogin(data: LoginResult) {
     localStorage.setItem(TOKEN_KEY, data.token);
     setAuthToken(data.token); setAccount(data.user); setAuthOpen(false);
@@ -209,7 +249,7 @@ export default function Home() {
       }
       if (data.incomplete) generationNotice = [generationNotice, `Only ${data.items.length} of ${data.requested_count} requested questions could be completed by the available models.`].filter(Boolean).join(" ");
       if (data.usage) generationNotice = [generationNotice, `${data.usage.remaining} of ${data.usage.limit} generations left today${authToken ? " for your account" : " in this browser"}.`].filter(Boolean).join(" ");
-      setResult(studySet); setCurrent(0); setRevealed(false); setSelectedOption(null);
+      setResult(studySet); setCurrent(0); setRevealed(false); setSelectedOption(null); setShareUrl(""); setPracticeActive(false);
       const saved = await fetch(`${API_BASE}/api/study-sets`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
@@ -248,8 +288,66 @@ export default function Home() {
   }
 
   function openSavedSet(studySet: StudySet) {
-    setReviewActive(false); setResult(studySet); setSelected(studySet.type); setCurrent(0); setRevealed(false); setSelectedOption(null); setError(""); setNotice("");
+    setReviewActive(false); setPracticeActive(false); setPracticeComplete(false); setShareUrl(""); setResult(studySet); setSelected(studySet.type); setCurrent(0); setRevealed(false); setSelectedOption(null); setError(""); setNotice("");
     document.querySelector(".result-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function startPractice() {
+    if (!result) return;
+    setPracticeAnswers(Array.from({ length: result.items.length }, () => null));
+    setPracticeIndex(0); setPracticeTimeLeft(result.items.length * practiceSecondsPerQuestion);
+    setPracticeComplete(false); setPracticeActive(true); setError("");
+  }
+
+  async function shareCurrentSet() {
+    if (!result || !authToken) { setAuthOpen(true); return; }
+    setShareBusy(true); setError("");
+    try {
+      const response = await fetch(`${API_BASE}/api/study-sets/${encodeURIComponent(result.id)}/share`, { method: "POST", headers: { Authorization: `Bearer ${authToken}` } });
+      if (!response.ok) throw new Error(await responseError(response));
+      const data: { token: string } = await response.json();
+      const url = `${window.location.origin}/shared/${data.token}`;
+      setShareUrl(url);
+      try { await navigator.clipboard.writeText(url); setNotice("Share link copied. Anyone who has it can view this set until you turn the link off."); }
+      catch { setNotice("Share link created. Anyone who has it can view this set until you turn the link off."); }
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not create a share link."); }
+    finally { setShareBusy(false); }
+  }
+
+  async function turnOffShareLink() {
+    if (!result || !authToken) return;
+    setShareBusy(true); setError("");
+    try {
+      const response = await fetch(`${API_BASE}/api/study-sets/${encodeURIComponent(result.id)}/share`, { method: "DELETE", headers: { Authorization: `Bearer ${authToken}` } });
+      if (!response.ok) throw new Error(await responseError(response));
+      setShareUrl(""); setNotice("The share link has been turned off.");
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not turn off the share link."); }
+    finally { setShareBusy(false); }
+  }
+
+  async function submitCardReport() {
+    if (!result || !currentCard?.card_id || !authToken || reportBusy) return;
+    setReportBusy(true); setError("");
+    try {
+      const response = await fetch(`${API_BASE}/api/reports`, {
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ study_set_id: result.id, card_id: currentCard.card_id, reason: reportReason, note: reportNote }),
+      });
+      if (!response.ok) throw new Error(await responseError(response));
+      setReportedCards((old) => [...old, currentCard.card_id!]); setReportingCard(false); setReportNote("");
+      setNotice("Thanks. Your report was sent for review.");
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not send your report."); }
+    finally { setReportBusy(false); }
+  }
+
+  function updatePracticeAnswer(index: number, answer: PracticeAnswer) {
+    setPracticeAnswers((old) => old.map((entry, position) => position === index ? answer : entry));
+  }
+
+  function togglePracticeChoice(index: number, option: string) {
+    const currentAnswer = practiceAnswers[index];
+    const selected = Array.isArray(currentAnswer) ? currentAnswer : currentAnswer ? [currentAnswer] : [];
+    updatePracticeAnswer(index, selected.includes(option) ? selected.filter((item) => item !== option) : [...selected, option]);
   }
 
   async function startReview() {
@@ -296,6 +394,13 @@ export default function Home() {
 
   const currentCard = result?.items[current] || result?.items[0];
   const modelName = (modelId?: string) => models.find((item) => item.id === modelId)?.name || modelId;
+  const practiceCard = result?.items[practiceIndex];
+  const practiceScore = result ? result.items.reduce((score, card, index) => score + (isPracticeAnswerCorrect(card, result.type, practiceAnswers[index]) ? 1 : 0), 0) : 0;
+  const practicePercent = result?.items.length ? Math.round(practiceScore / result.items.length * 100) : 0;
+  const reportReasons = [
+    ["incorrect_answer", "Incorrect answer"], ["unclear_question", "Unclear question"],
+    ["bad_source", "Source reference is wrong"], ["other", "Other issue"],
+  ];
   function renderMultipleChoice(card: Card) {
     const correctAnswer = (card.correct_answer || card.answer).trim().toLocaleLowerCase();
     const isCorrect = (option: string) => option.trim().toLocaleLowerCase() === correctAnswer;
@@ -351,20 +456,44 @@ export default function Home() {
           {account && progress && <section className="progress-panel"><div className="progress-copy"><div className="result-kicker"><span/> YOUR STUDY PROGRESS</div><h2>Small steps add up.</h2><p>Review a little each day to keep ideas fresh.</p><div className="progress-stats"><div><strong>{progress.reviewed_today}</strong><span>today</span></div><div><strong>{progress.accuracy}%</strong><span>accuracy</span></div><div><strong>{progress.current_streak} <small>days</small></strong><span>current streak</span></div><div><strong>{progress.best_streak} <small>days</small></strong><span>best streak</span></div></div><div className="week-bars" aria-label="Reviews during the past seven days">{progress.week.map((day) => <div key={day.date} title={`${day.reviews} reviews`}><i style={{ height: `${Math.max(8, Math.min(100, day.reviews * 18))}%` }}/><small>{new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: "narrow" })}</small></div>)}</div></div><button className="review-start" onClick={() => void startReview()}><Clock3 size={17}/><span>Review due</span><b>{progress.due_count}</b><ChevronRight size={16}/></button></section>}
           <div className="type-grid">{types.map(({ id, title, detail, icon: Icon }) => <button key={id} className={`type-card ${selected === id ? "chosen" : ""}`} onClick={() => { setSelected(id); setResult(null); setCurrent(0); setRevealed(false); setError(""); }}><span className="type-icon"><Icon size={19}/></span><span className="type-text"><strong>{title}</strong><small>{detail}</small></span>{selected === id && <span className="check-icon"><Check size={13} strokeWidth={3}/></span>}</button>)}</div>
           <section className={`upload-zone ${dragging ? "dragging" : ""} ${file ? "has-file" : ""}`} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); selectFile(event.dataTransfer.files[0]); }} onClick={() => !file && input.current?.click()} role="button" tabIndex={0} onKeyDown={(event) => event.key === "Enter" && input.current?.click()}>
-            <input ref={input} type="file" accept=".pdf,.docx,.txt,.md" hidden onChange={(event) => selectFile(event.target.files?.[0])}/>
-            <span className="upload-icon">{file ? <FileText size={22}/> : <CloudUpload size={23}/>}</span><span className="upload-copy">{file ? <><strong>{file.name}</strong><small>{(file.size / 1024 / 1024).toFixed(2)} MB · ready to study</small></> : <><strong>Drop your study material here</strong><small>or <span className="browse-link">browse your files</span></small></>}</span>{file ? <button className="remove-file" title="Remove file" onClick={(event) => { event.stopPropagation(); setFile(null); }}><X size={18}/></button> : <span className="format-hint">PDF, DOCX, TXT, MD <i>·</i> Max 15 MB</span>}
+            <input ref={input} type="file" accept=".pdf,.pptx,.docx,.txt,.md,.png,.jpg,.jpeg,.webp" hidden onChange={(event) => selectFile(event.target.files?.[0])}/>
+            <span className="upload-icon">{file ? <FileText size={22}/> : <CloudUpload size={23}/>}</span><span className="upload-copy">{file ? <><strong>{file.name}</strong><small>{(file.size / 1024 / 1024).toFixed(2)} MB · ready to study</small></> : <><strong>Drop your study material here</strong><small>or <span className="browse-link">browse your files</span></small></>}</span>{file ? <button className="remove-file" title="Remove file" onClick={(event) => { event.stopPropagation(); setFile(null); }}><X size={18}/></button> : <span className="format-hint">PDF, PPTX, DOCX, TXT, MD, or image <i>·</i> Max 15 MB</span>}
           </section>
-          <div className="model-row"><label htmlFor="model-choice"><Cpu size={16}/> AI model</label><select id="model-choice" value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}><option value="auto">Auto choose · switch when busy or limited</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select><label className="count-label" htmlFor="question-count">Questions</label><select id="question-count" value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{[10, 20, 30, 40, 50].map((count) => <option key={count} value={count}>{count} questions</option>)}</select><span className="model-help">{modelChoice === "auto" ? "Auto uses file size, extracted text, and question count to choose a compact model for smaller jobs and a stronger one for larger jobs." : "Your choice is tried first. Another configured model can help if it fails or returns a partial set."} Up to 50 questions per generation. Daily cap: 5 generations per account, resetting at midnight Manila time.</span></div>
+          <div className="model-row"><label htmlFor="model-choice"><Cpu size={16}/> AI model</label><select id="model-choice" value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}><option value="auto">Auto choose · switch when busy or limited</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select><label className="count-label" htmlFor="question-count">Questions</label><select id="question-count" value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{[10, 20, 30, 40, 50].map((count) => <option key={count} value={count}>{count} questions</option>)}</select><span className="model-help">{modelChoice === "auto" ? "Auto uses file size, extracted text, and question count to choose a compact model for smaller jobs and a stronger one for larger jobs." : "Your choice is tried first. Another configured model can help if it fails or returns a partial set."} Up to 50 questions per request; each submitted request uses one of 5 daily generations, even if fallback models are tried. Your allowance resets at midnight Manila time. Provider free quotas are shared and may still be busy or exhausted.</span></div>
           <div className="options-row"><button className={`web-toggle ${web ? "on" : ""}`} onClick={() => setWeb(!web)}><span className="toggle-track"><span/></span><Globe2 size={16}/><span>Enrich with the web</span><span className="optional-tag">OPTIONAL</span></button><button className="web-info" title="Searches the web for relevant context and includes source links with your results."><CircleHelp size={15}/></button></div>
-          <div className="generate-row"><span className="privacy-note"><span className="privacy-dot"/> Sent to your selected AI provider; sets sync to your account.</span><button className="generate-button" onClick={generate} disabled={busy}>{busy ? <><span className="spinner"/> Making my study set…</> : <><Sparkles size={16}/> Make my study set <ChevronRight size={16}/></>}</button></div>
+          <div className="generate-row"><span className="privacy-note"><span className="privacy-dot"/> Sent to your selected AI provider; sets sync to your account.</span><button className="generate-button" onClick={generate} disabled={busy}>{busy ? <><span className="spinner"/> Trying available models…</> : <><Sparkles size={16}/> Make my study set <ChevronRight size={16}/></>}</button></div>
           {error && <div className="error-box"><CircleHelp size={16}/><span>{error}</span></div>}
           {notice && <div className="notice-box"><Check size={15}/><span>{notice}</span></div>}
           {reviewActive && <section className="review-panel"><div className="result-head"><div><div className="result-kicker"><span/> SPACED REPETITION</div><h2>{reviewQueue.length ? reviewQueue[0].study_set_title : "Review complete"}</h2><p>{reviewQueue.length ? `${reviewQueue.length} cards in this session · ${reviewQueue[0].type.replaceAll("_", " ")}` : "You’re all caught up for now. Nice work showing up."}</p></div><button className="plain-icon" title="Close review" onClick={() => { setReviewActive(false); setReviewQueue([]); setSelectedOption(null); }}><X size={18}/></button></div>{reviewQueue.length ? <div className="study-card"><div className="study-card-top"><span className="flashcard-label">REVIEW {reviewQueue.length} LEFT</span></div>{reviewQueue[0].type === "multiple_choice" && reviewQueue[0].card.options?.length ? renderMultipleChoice(reviewQueue[0].card) : <button className={`study-face ${revealed ? "is-revealed" : ""}`} onClick={() => setRevealed(!revealed)}><span className="face-label">{revealed ? "THE ANSWER" : "YOUR QUESTION"}</span><span className="face-question">{revealed ? reviewQueue[0].card.answer : reviewQueue[0].card.question}</span>{!revealed && <span className="tap-hint">Tap to reveal <span>↗</span></span>}</button>}{revealed && reviewQueue[0].card.explanation && <p className="explanation">{reviewQueue[0].card.explanation}</p>}{revealed && <div className="rating-row"><button disabled={reviewBusy} onClick={() => void gradeCard("again")}><b>Again</b><small>{reviewQueue[0].intervals.again}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("hard")}><b>Hard</b><small>{reviewQueue[0].intervals.hard}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("good")}><b>Good</b><small>{reviewQueue[0].intervals.good}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("easy")}><b>Easy</b><small>{reviewQueue[0].intervals.easy}</small></button></div>}</div> : <button className="review-done" onClick={() => { setReviewActive(false); setReviewQueue([]); }}>Back to study desk <ChevronRight size={15}/></button>}</section>}
-          {result && currentCard && !reviewActive && <section className="result-panel"><div className="result-head"><div><div className="result-kicker"><span/> YOUR STUDY SET</div><h2>{result.title}</h2><p>{result.items.length} {types.find((type) => type.id === result.type)?.title.toLowerCase()} · ready when you are{result.model ? ` · ${modelName(result.model)}` : ""}</p></div><button className="plain-icon" title="Close study set" onClick={() => setResult(null)}><X size={18}/></button></div>
+          {result && practiceActive && !reviewActive && <section className="practice-panel">
+            <div className="result-head"><div><div className="result-kicker"><span/> TIMED PRACTICE TEST</div><h2>{result.title}</h2><p>{practiceComplete ? "Test results and missed answers" : `${result.items.length} questions · ${practiceSecondsPerQuestion} seconds per question`}</p></div><button className="plain-icon" title="Exit practice test" onClick={() => { setPracticeActive(false); setPracticeComplete(false); }}><X size={18}/></button></div>
+            {!practiceComplete && practiceCard ? <>
+              <div className="practice-timer"><AlarmClock size={18}/><span>{Math.floor(practiceTimeLeft / 60)}:{String(practiceTimeLeft % 60).padStart(2, "0")} remaining</span><span className="practice-progress">Question {practiceIndex + 1} of {result.items.length}</span></div>
+              <div className="practice-question"><span className="face-label">QUESTION {practiceIndex + 1}</span><h3>{practiceCard.question}</h3>
+                {practiceCard.options?.length ? <div className="practice-choices">{practiceCard.options.map((option, index) => {
+                  const checkboxMode = result.type === "checkbox";
+                  const answer = practiceAnswers[practiceIndex];
+                  const selected = checkboxMode ? Array.isArray(answer) && answer.includes(option) : answer === option;
+                  return <button type="button" key={`${index}-${option}`} className={`practice-choice ${selected ? "selected" : ""}`} onClick={() => checkboxMode ? togglePracticeChoice(practiceIndex, option) : updatePracticeAnswer(practiceIndex, option)}><i>{checkboxMode ? (selected ? "✓" : "") : String.fromCharCode(65 + index)}</i><span>{option}</span></button>;
+                })}</div> : <label className="practice-written"><span>Your answer</span><textarea value={typeof practiceAnswers[practiceIndex] === "string" ? practiceAnswers[practiceIndex] as string : ""} onChange={(event) => updatePracticeAnswer(practiceIndex, event.target.value)} rows={3} placeholder="Type your answer"/></label>}
+              </div>
+              <div className="practice-controls"><button className="control-button" disabled={practiceIndex === 0} onClick={() => setPracticeIndex((index) => Math.max(0, index - 1))}><ChevronLeft size={15}/> Previous</button><span>{practiceAnswers.filter((answer) => answer !== null && answer !== "" && (!Array.isArray(answer) || answer.length > 0)).length} answered</span><div>{practiceIndex < result.items.length - 1 && <button className="control-button next" onClick={() => setPracticeIndex((index) => Math.min(result.items.length - 1, index + 1))}>Next <ChevronRight size={15}/></button>}<button className="finish-test" onClick={() => setPracticeComplete(true)}>Finish test</button></div></div>
+            </> : practiceComplete ? <>
+              <div className="practice-score"><strong>{practiceScore}<span>/{result.items.length}</span></strong><div><b>{practicePercent}%</b><small>{practicePercent >= 80 ? "Great work — keep it up." : "Review the missed answers below."}</small></div></div>
+              <h3 className="missed-heading">Review missed answers</h3>
+              {practiceScore === result.items.length ? <p className="all-correct">You answered every question correctly.</p> : <div className="missed-list">{result.items.map((card, index) => isPracticeAnswerCorrect(card, result.type, practiceAnswers[index]) ? null : <article className="missed-card" key={`${card.card_id || card.question}-${index}`}><strong>{index + 1}. {card.question}</strong><p><b>Your answer:</b> {displayPracticeAnswer(practiceAnswers[index])}</p><p><b>Correct answer:</b> {card.correct_answer || card.answer}</p>{card.explanation && <small>{card.explanation}</small>}{card.source_refs?.length ? <small className="missed-source">Source: {card.source_refs.join(", ")}</small> : null}</article>)}</div>}
+              <button className="finish-test" onClick={() => { setPracticeActive(false); setPracticeComplete(false); }}>Back to study cards</button>
+            </> : null}
+          </section>}
+          {result && currentCard && !reviewActive && !practiceActive && <section className="result-panel"><div className="result-head"><div><div className="result-kicker"><span/> YOUR STUDY SET</div><h2>{result.title}</h2><p>{result.items.length} {types.find((type) => type.id === result.type)?.title.toLowerCase()} · ready when you are{result.model ? ` · ${modelName(result.model)}` : ""}</p></div><button className="plain-icon" title="Close study set" onClick={() => setResult(null)}><X size={18}/></button></div>
+            <div className="set-action-row"><label>Test pace<select value={practiceSecondsPerQuestion} onChange={(event) => setPracticeSecondsPerQuestion(Number(event.target.value))}><option value={20}>20 sec / question</option><option value={30}>30 sec / question</option><option value={45}>45 sec / question</option></select></label><button className="action-button" onClick={startPractice}><AlarmClock size={15}/> Start timed test</button><button className="action-button" onClick={() => void shareCurrentSet()} disabled={shareBusy}><Share2 size={15}/>{shareBusy ? "Working…" : "Share set"}</button></div>
+            {shareUrl && <div className="share-link-row"><span>Anyone with this link can view this set:</span><a href={shareUrl} target="_blank" rel="noreferrer">{shareUrl}</a><button className="plain-icon" title="Copy share link" onClick={() => { void navigator.clipboard.writeText(shareUrl).then(() => setNotice("Share link copied.")).catch(() => setNotice("Select and copy the share link above.")); }}><Copy size={15}/></button><button className="share-revoke" disabled={shareBusy} onClick={() => void turnOffShareLink()}>Turn off link</button></div>}
             <div className="study-card"><div className="study-card-top"><span className="flashcard-label">{result.type === "flashcards" ? "FLASHCARD" : types.find((type) => type.id === result.type)?.title.toUpperCase()}</span><span className="card-number">{String(current + 1).padStart(2,"0")} <i>/</i> {String(result.items.length).padStart(2,"0")}</span></div>
               {result.type === "multiple_choice" && currentCard.options?.length ? renderMultipleChoice(currentCard) : <button className={`study-face ${revealed ? "is-revealed" : ""}`} onClick={() => setRevealed(!revealed)}><span className="face-label">{revealed ? "THE ANSWER" : "YOUR QUESTION"}</span><span className="face-question">{revealed ? currentCard.answer : currentCard.question}</span>{!revealed && <span className="tap-hint">Tap to reveal <span>↗</span></span>}</button>}
+              {currentCard.source_refs?.length ? <div className="material-citations"><strong>From your material</strong>{currentCard.source_refs.map((source) => <span key={source}>{source}</span>)}</div> : null}
               {revealed && currentCard.explanation && <p className="explanation">{currentCard.explanation}</p>}
               {revealed && account && authToken && currentCard.card_id && <><div className="rating-prompt">How well did you recall it? Your answer schedules this card for another review.</div><div className="rating-row"><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("again")}><b>Again</b><small>Hard to recall</small></button><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("hard")}><b>Hard</b><small>With effort</small></button><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("good")}><b>Good</b><small>Recalled it</small></button><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("easy")}><b>Easy</b><small>Very easy</small></button></div></>}
+              {currentCard.card_id && <div className="card-report-wrap">{reportedCards.includes(currentCard.card_id) ? <span className="report-sent"><Check size={14}/> Report received</span> : <button className="report-toggle" onClick={() => setReportingCard(!reportingCard)}><Flag size={14}/> Report an issue with this card</button>}{reportingCard && !reportedCards.includes(currentCard.card_id) && <div className="card-report-form"><label>What should we review?<select value={reportReason} onChange={(event) => setReportReason(event.target.value)}>{reportReasons.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><textarea value={reportNote} onChange={(event) => setReportNote(event.target.value)} maxLength={500} rows={2} placeholder="Optional note to help us check it"/><button className="action-button" disabled={reportBusy} onClick={() => void submitCardReport()}>{reportBusy ? "Sending…" : "Send report"}</button></div>}</div>}
               <div className="study-controls"><button className="control-button" onClick={() => { setCurrent((current - 1 + result.items.length) % result.items.length); setRevealed(false); setSelectedOption(null); }}><ChevronLeft size={16}/> Previous</button><span className="dots">{result.items.slice(0, Math.min(result.items.length, 7)).map((_, index) => <i key={index} className={index === current ? "dot-active" : ""}/>)}</span><button className="control-button next" onClick={() => { setCurrent((current + 1) % result.items.length); setRevealed(false); setSelectedOption(null); }}>Next <ChevronRight size={16}/></button></div>
               {result.sources?.length ? <div className="source-links"><Globe2 size={14}/><span>Sources:</span>{result.sources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer">{source.title}</a>)}</div> : null}
             </div></section>}
