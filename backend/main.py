@@ -18,7 +18,8 @@ from pydantic import BaseModel, Field
 from pypdf import PdfReader
 from pptx import Presentation
 from PIL import Image, ImageOps
-import pytesseract
+import tessdata
+import tesserocr
 
 from accounts import (
     StorageError,
@@ -483,14 +484,14 @@ def extract_material(filename: str, raw: bytes) -> tuple[str, list[str]]:
         if suffix in {"png", "jpg", "jpeg", "webp"}:
             image = ImageOps.exif_transpose(Image.open(BytesIO(raw))).convert("RGB")
             image.thumbnail((2600, 2600))
-            text = pytesseract.image_to_string(image, config="--psm 6", timeout=35).strip()
+            with tesserocr.PyTessBaseAPI(path=tessdata.data_path(), lang="eng", psm=tesserocr.PSM.SINGLE_BLOCK) as ocr:
+                ocr.SetImage(image)
+                text = ocr.GetUTF8Text().strip()
             return f"[SOURCE: Uploaded image]\n{text}", ["Uploaded image"]
         if suffix in {"txt", "md"}:
             return f"[SOURCE: Document]\n{raw.decode('utf-8-sig')}", ["Document"]
-    except pytesseract.TesseractNotFoundError as exc:
-        raise HTTPException(status_code=503, detail="Image OCR is unavailable on this API instance. Redeploy the Render service so its Tesseract OCR dependency can install.") from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=422, detail="Image OCR took too long. Crop the image to the relevant notes and try again.") from exc
+        raise HTTPException(status_code=422, detail="Image OCR could not read this image. Crop it to the relevant notes and try again.") from exc
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"We couldn't read this file. Check that it isn't damaged or password-protected. ({exc.__class__.__name__})") from exc
     raise HTTPException(status_code=415, detail="Choose a PDF, PPTX, DOCX, TXT, MD, PNG, JPG, JPEG, or WEBP file.")
