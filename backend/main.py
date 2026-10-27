@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import re
 import threading
 import hashlib
@@ -709,6 +710,52 @@ def safe_model_items(items: Any) -> list[dict[str, Any]]:
     return safe
 
 
+def answer_texts_for_options(answer: str, options: list[str]) -> list[str]:
+    """Resolve either answer text or A/B/C/D labels to the displayed option text."""
+    resolved = []
+    for part in (piece.strip() for piece in answer.split("|")):
+        letter = re.fullmatch(r"(?:option\s*)?([A-D])(?:[.):\-])?", part, re.IGNORECASE)
+        if letter:
+            index = ord(letter.group(1).upper()) - ord("A")
+            if index < len(options):
+                resolved.append(options[index])
+            continue
+        match = next((option for option in options if normalized_question(option) == normalized_question(part)), None)
+        if match:
+            resolved.append(match)
+    return list(dict.fromkeys(resolved))
+
+
+def randomize_choice_options(items: list[dict[str, Any]], study_format: str) -> list[dict[str, Any]]:
+    if study_format not in {"multiple_choice", "checkbox"}:
+        return items
+    randomized = []
+    previous_correct_index = None
+    for original in items:
+        item = dict(original)
+        options = list(item.get("options") or [])
+        if len(options) < 2:
+            randomized.append(item)
+            continue
+        answer = str(item.get("correct_answer") or item.get("answer") or "")
+        correct_options = answer_texts_for_options(answer, options)
+        random.shuffle(options)
+        if study_format == "multiple_choice" and len(correct_options) == 1:
+            correct_index = options.index(correct_options[0])
+            # Avoid a visible answer-position pattern even in a short quiz.
+            if correct_index == previous_correct_index:
+                replacement_index = (correct_index + random.randrange(1, len(options))) % len(options)
+                options[correct_index], options[replacement_index] = options[replacement_index], options[correct_index]
+                correct_index = replacement_index
+            previous_correct_index = correct_index
+            item["correct_answer"] = correct_options[0]
+        elif study_format == "checkbox" and correct_options:
+            item["correct_answer"] = " | ".join(correct_options)
+        item["options"] = options
+        randomized.append(item)
+    return randomized
+
+
 def normalized_question(question: str) -> str:
     return re.sub(r"\W+", " ", question.casefold()).strip()
 
@@ -973,10 +1020,13 @@ def generate(
     return {
         "title": str(payload.get("title") or filename.rsplit(".", 1)[0])[:100],
         "type": format,
-        "items": [
-            {**item, "source_refs": [label for label in item.get("source_refs", []) if label in source_labels]}
-            for item in payload["items"][:question_count]
-        ],
+        "items": randomize_choice_options(
+            [
+                {**item, "source_refs": [label for label in item.get("source_refs", []) if label in source_labels]}
+                for item in payload["items"][:question_count]
+            ],
+            format,
+        ),
         "sources": sources,
         "model": used_models[-1],
         "auto_model": auto_model,

@@ -308,3 +308,13 @@
 :root[data-theme="dark"] .shared-sources{background:#172124;border-color:#354345}:root[data-theme="dark"] .shared-sources strong{color:#c6d7d0}:root[data-theme="dark"] .shared-sources a{color:#92cbbb}
 :root[data-theme="dark"] .shared-message h1{color:#e1eee8}
 @media(max-width:700px){.shared-shell{padding:0 14px 30px}.shared-content{margin-top:28px}.shared-content>h1{font-size:21px}.shared-card{padding:13px}.shared-card h2{font-size:15px}.shared-brand{height:57px}}
+
+.exercise-fullscreen-toggle{position:fixed;top:72px;right:18px;z-index:15;display:flex;align-items:center;gap:7px;min-height:38px;padding:0 13px;border:1px solid #0e5c61;border-radius:9px;background:#12666c;color:#fffdf7;box-shadow:0 4px 14px #174e4d35;font:700 11px 'DM Sans',sans-serif;cursor:pointer;transition:background .15s,transform .15s}
+.exercise-fullscreen-toggle:hover{background:#0c555c;transform:translateY(-1px)}
+.exercise-fullscreen-toggle svg{color:#ffd18e}
+.exercise-fullscreen-toggle.is-fullscreen{border-color:#a75849;background:#b95f50}
+.exercise-fullscreen-toggle.is-fullscreen:hover{background:#a94e43}
+.exercise-fullscreen-toggle.is-fullscreen svg{color:#fff4e8}
+:root:fullscreen{background:var(--paper);overflow:auto}
+:root:fullscreen .exercise-fullscreen-toggle{top:14px;right:18px}
+@media(max-width:700px){.exercise-fullscreen-toggle{top:64px;right:12px;min-height:36px;padding:0 11px;font-size:10px}:root:fullscreen .exercise-fullscreen-toggle{top:10px;right:10px}}

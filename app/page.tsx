@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   AlarmClock, BookOpen, Check, CheckSquare, ChevronLeft, ChevronRight, CircleHelp, Clock3,
   CloudUpload, Copy, Cpu, FileText, Flag, Globe2, GraduationCap, Layers3, LogOut, Menu, Moon,
-  Plus, Share2, Sparkles, Sun, Trash2, UserRound, X,
+  Maximize2, Minimize2, Plus, Share2, Sparkles, Sun, Trash2, UserRound, X,
 } from "lucide-react";
 
 type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification";
@@ -82,6 +82,35 @@ function displayPracticeAnswer(response: PracticeAnswer | undefined) {
   return Array.isArray(response) ? response.join(" · ") : response || "No answer";
 }
 
+function shuffleSavedItems(items: Card[], kind: Kind) {
+  let previousCorrectIndex: number | null = null;
+  return shuffleItems(items).map((card) => {
+    const options = [...(card.options || [])];
+    if (options.length < 2 || (kind !== "multiple_choice" && kind !== "checkbox")) return card;
+    const correctValues = (card.correct_answer || card.answer || "").split("|").map((value) => value.trim()).filter(Boolean);
+    const correctOptions = correctValues.map((value) => {
+      const letter = value.match(/^(?:option\s*)?([A-D])(?:[.):\-])?$/i);
+      if (letter) return options[letter[1].toUpperCase().charCodeAt(0) - 65];
+      return options.find((option) => normalizedAnswer(option) === normalizedAnswer(value));
+    }).filter((value): value is string => Boolean(value));
+    const shuffledOptions = shuffleItems(options);
+    if (kind === "multiple_choice" && correctOptions.length === 1) {
+      let correctIndex = shuffledOptions.indexOf(correctOptions[0]);
+      if (correctIndex === previousCorrectIndex) {
+        const replacementIndex = (correctIndex + 1 + Math.floor(Math.random() * (shuffledOptions.length - 1))) % shuffledOptions.length;
+        [shuffledOptions[correctIndex], shuffledOptions[replacementIndex]] = [shuffledOptions[replacementIndex], shuffledOptions[correctIndex]];
+        correctIndex = replacementIndex;
+      }
+      previousCorrectIndex = correctIndex;
+    }
+    return {
+      ...card,
+      options: shuffledOptions,
+      ...(correctOptions.length ? { correct_answer: correctOptions.join(" | ") } : {}),
+    };
+  });
+}
+
 export default function Home() {
   const [selected, setSelected] = useState<Kind>("flashcards");
   const [file, setFile] = useState<File | null>(null);
@@ -104,6 +133,7 @@ export default function Home() {
   const [practiceSecondsPerQuestion, setPracticeSecondsPerQuestion] = useState(30);
   const [practiceTimeLeft, setPracticeTimeLeft] = useState(0);
   const [practiceAnswers, setPracticeAnswers] = useState<PracticeAnswer[]>([]);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [shareUrl, setShareUrl] = useState("");
   const [shareBusy, setShareBusy] = useState(false);
   const [reportingCard, setReportingCard] = useState(false);
@@ -209,6 +239,26 @@ export default function Home() {
     return () => window.clearTimeout(timeout);
   }, [practiceActive, practiceComplete, practiceTimeLeft, practiceSecondsPerQuestion]);
 
+  useEffect(() => {
+    const syncFullscreenState = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", syncFullscreenState);
+    return () => document.removeEventListener("fullscreenchange", syncFullscreenState);
+  }, []);
+
+  async function toggleExerciseFullscreen() {
+    if (document.fullscreenElement) {
+      try { await document.exitFullscreen(); }
+      catch { setNotice("Could not exit fullscreen. Press Esc to leave fullscreen mode."); }
+      return;
+    }
+    if (!document.documentElement.requestFullscreen) {
+      setNotice("Fullscreen is not supported in this browser.");
+      return;
+    }
+    try { await document.documentElement.requestFullscreen(); }
+    catch { setNotice("Fullscreen was blocked by the browser. Use the fullscreen button to try again."); }
+  }
+
   function acceptLogin(data: LoginResult) {
     localStorage.setItem(TOKEN_KEY, data.token);
     setAuthToken(data.token); setAccount(data.user); setAuthOpen(false);
@@ -298,12 +348,15 @@ export default function Home() {
   }
 
   function openSavedSet(studySet: StudySet) {
-    setReviewActive(false); setPracticeActive(false); setPracticeComplete(false); setShareUrl(""); setResult({ ...studySet, items: shuffleItems(studySet.items) }); setSelected(studySet.type); setCurrent(0); setRevealed(false); setSelectedOption(null); setError(""); setNotice("");
+    setReviewActive(false); setPracticeActive(false); setPracticeComplete(false); setShareUrl(""); setResult({ ...studySet, items: shuffleSavedItems(studySet.items, studySet.type) }); setSelected(studySet.type); setCurrent(0); setRevealed(false); setSelectedOption(null); setError(""); setNotice("");
     document.querySelector(".result-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function startPractice() {
     if (!result) return;
+    if (practiceSecondsPerQuestion > 0 && !document.fullscreenElement) {
+      void toggleExerciseFullscreen();
+    }
     setPracticeAnswers(Array.from({ length: result.items.length }, () => null));
     setPracticeIndex(0); setPracticeTimeLeft(practiceSecondsPerQuestion === 0 ? 0 : result.items.length * practiceSecondsPerQuestion);
     setPracticeComplete(false); setPracticeActive(true); setError("");
@@ -431,6 +484,8 @@ export default function Home() {
     </div>;
   }
 
+  const FullscreenIcon = isFullscreen ? Minimize2 : Maximize2;
+
   return (
     <main className="shell">
       <aside className="sidebar">
@@ -460,6 +515,7 @@ export default function Home() {
       <section className="main-area" id="home">
         <header className="topbar"><div className="crumb"><span>Your space</span><ChevronRight size={14}/><b>Study desk</b></div><div className="top-actions"><button className="theme-toggle" onClick={() => setColorTheme(theme === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>{theme === "dark" ? <Sun size={16}/> : <Moon size={16}/>}<span>{theme === "dark" ? "Light mode" : "Dark mode"}</span></button><span className="today-pill"><span className="status-dot"/> YOUR STUDY DESK</span>{!account && <button className="top-signin" onClick={() => setAuthOpen(true)}><UserRound size={14}/> Sign in</button>}<button className="profile-mobile" onClick={() => account ? signOut() : setAuthOpen(true)} title={account ? "Sign out" : "Sign in with Google"}>{account ? <LogOut size={18}/> : <Menu size={20}/>}</button></div></header>
         <div className="content">
+          {result && !reviewActive && <button className={`exercise-fullscreen-toggle ${isFullscreen ? "is-fullscreen" : ""}`} type="button" onClick={() => void toggleExerciseFullscreen()} aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"} aria-pressed={isFullscreen}><FullscreenIcon size={16}/><span>{isFullscreen ? "Exit fullscreen" : "Fullscreen"}</span></button>}
           <div className="access-banner"><GraduationCap size={19}/><span><strong>For Centro Escolar University students, for now.</strong> To conserve AI tokens, Dawnstudy is limited to verified Google accounts ending in <b>@ceu.edu.ph</b>, <b>@mnl.ceu.edu.ph</b>, <b>@mkt.ceu.edu.ph</b>, or <b>@mls.ceu.edu.ph</b>.</span></div>
           <section className="welcome"><div className="welcome-copy"><div className="eyebrow"><span/> A FRESH PAGE, A FRESH START</div><h1>Make today<br/>a little <em>brighter.</em></h1><p>Drop in your notes. We’ll help the important things stick.</p></div><div className="sunrise-art" aria-hidden="true"><div className="sun"/><div className="cloud cloud-one"/><div className="cloud cloud-two"/><div className="horizon h-back"/><div className="horizon h-front"/></div><span className="welcome-note">one page at a time <span>✳</span></span></section>
           <div className="section-intro"><div><div className="section-title-row"><h2>Start a study set</h2></div><p>Choose how you’d like to practice.</p></div><span className="quiet-note">Good things take practice <span>↗</span></span></div>
