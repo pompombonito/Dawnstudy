@@ -494,6 +494,7 @@ export default function Home() {
       const mimeType = blob.type || "audio/webm";
       const extension = mimeType.includes("mp4") ? "mp4" : mimeType.includes("ogg") ? "ogg" : "webm";
       form.append("file", blob, `voice-reply.${extension}`);
+      form.append("topic", voiceTopic);
       const response = await fetch(API_BASE + "/api/voice/transcribe", {
         method: "POST", headers: { Authorization: "Bearer " + authToken }, body: form,
       });
@@ -777,7 +778,7 @@ export default function Home() {
               <label>Voice persona<select value={voicePersona} onChange={(event) => { const value = event.target.value as VoicePersona; setVoicePersona(value); localStorage.setItem(VOICE_PERSONA_KEY, value); }}>{voicePersonas.map((persona) => <option key={persona.id} value={persona.id}>{persona.name}</option>)}</select></label>
               <div className="voice-device-choice"><label>Device voice<select value={deviceVoiceURI} onChange={(event) => { setDeviceVoiceURI(event.target.value); if (event.target.value) localStorage.setItem(VOICE_DEVICE_KEY, event.target.value); else localStorage.removeItem(VOICE_DEVICE_KEY); }}><option value="">Device default</option>{deviceVoiceURI && !deviceVoices.some((voice) => voice.voiceURI === deviceVoiceURI) && <option value={deviceVoiceURI}>Saved voice unavailable · use default</option>}{[...deviceVoices].sort((a, b) => Number(b.default) - Number(a.default) || a.name.localeCompare(b.name)).map((voice) => <option key={voice.voiceURI} value={voice.voiceURI}>{voice.name} · {voice.lang}</option>)}</select></label><button className="voice-preview" type="button" disabled={!speechAvailable} onClick={() => speakVoiceReply("Hello! I’m ready to help you review.")} aria-label="Preview selected voice" title="Preview selected voice"><Volume2 size={15}/></button></div>
               <button className="voice-start" type="button" onClick={beginVoiceReview} disabled={voiceBusy}><Mic size={16}/> Start voice review</button>
-              <p className="voice-privacy">Choose a speaking style and an available device voice. Replies use your browser’s voice engine; the voice choices depend on your device. Dawnstudy records up to 30 seconds per reply and sends the audio to a configured AI provider for transcription. Provider quotas or rates may apply.</p>
+              <p className="voice-privacy">Voice input is transcribed as English, with your topic used to help recognize technical terms. Choose a speaking style and device voice for replies. Audio is sent to a configured provider; its quotas or rates may apply.</p>
             </div> : <div className="voice-session">
               <div className="voice-session-bar"><div><strong>Reviewing: {voiceTopic}</strong><small>{voiceMode.replaceAll("_", " ")} · {voiceModelUsed ? "Answered by " + modelName(voiceModelUsed) : "Connecting to your selected model…"}</small></div><button type="button" className="voice-end" onClick={endVoiceReview}>End review</button></div>
               {voiceFallbackNote && <p className="voice-fallback">{voiceFallbackNote}</p>}
