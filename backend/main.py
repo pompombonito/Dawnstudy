@@ -75,7 +75,7 @@ UNLIMITED_GENERATION_EMAILS = {
     "corpuz2580868@mnl.ceu.edu.ph",
     "macaldo2214944@ceu.edu.ph",
 }
-MAX_MODELS_PER_GENERATION = 3
+MAX_MODELS_PER_VOICE_TURN = 3
 ALLOWED_EMAIL_DOMAINS = ("@ceu.edu.ph", "@mnl.ceu.edu.ph", "@mkt.ceu.edu.ph", "@mls.ceu.edu.ph")
 OWNER_EMAIL = "daquioagjairo30@gmail.com"
 FORMATS = {"flashcards", "multiple_choice", "checkbox", "identification"}
@@ -852,43 +852,57 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
     title = ""
     fallback: dict[str, str] | None = None
     pending_fallback: tuple[str, str] | None = None
-    for model_id, provider, model, api_key, _label in ordered[:MAX_MODELS_PER_GENERATION]:
-        remaining = question_count - len(completed)
-        if remaining <= 0:
-            break
-        model_prompt = prompt_builder(remaining, completed)
-        if excluded_questions:
-            history = json.dumps(excluded_questions[-40:], ensure_ascii=False)
-            model_prompt += f"\n\nAvoid questions already included in this student's earlier study sets for the same material. Create different questions that explore other details. Do not repeat or closely paraphrase these earlier questions: {history}"
-        model_schema = json.loads(json.dumps(schema))
-        model_schema["properties"]["items"]["maxItems"] = remaining
-        max_tokens = min(14_000, max(2_500, 650 + remaining * 220))
-        failed_reason = None
-        try:
-            payload = generate_with_provider(provider, model, api_key, model_prompt, model_schema, max_tokens)
-            if not title:
-                title = str(payload.get("title") or "").strip()
-            candidates = safe_model_items(payload.get("items"))
-        except ProviderError as exc:
-            failures.append(exc)
-            print(f"AI provider {provider} ({model}) failed: HTTP {exc.status}" if exc.status else f"AI provider {provider} ({model}) failed: {exc}")
-            candidates = safe_model_items(exc.partial_items)
-            failed_reason = provider_failure_reason(exc)
-            if not candidates and pending_fallback is None:
-                pending_fallback = (model_id, failed_reason)
+    # Try every configured model (including alternates from the same provider),
+    # rather than stopping after three. If providers return valid but short
+    # responses, give only those productive models bounded continuation passes.
+    retry_models = []
+    for attempt_round in range(3):
+        pass_models = ordered if attempt_round == 0 else retry_models
+        retry_models = []
+        for model_id, provider, model, api_key, _label in pass_models:
+            remaining = question_count - len(completed)
+            if remaining <= 0:
+                break
+            model_prompt = prompt_builder(remaining, completed)
+            if excluded_questions:
+                history = json.dumps(excluded_questions[-40:], ensure_ascii=False)
+                model_prompt += f"\n\nAvoid questions already included in this student's earlier study sets for the same material. Create different questions that explore other details. Do not repeat or closely paraphrase these earlier questions: {history}"
+            model_schema = json.loads(json.dumps(schema))
+            model_schema["properties"]["items"]["maxItems"] = remaining
+            max_tokens = min(14_000, max(2_500, 650 + remaining * 220))
+            failed_reason = None
+            retryable_response = False
+            try:
+                payload = generate_with_provider(provider, model, api_key, model_prompt, model_schema, max_tokens)
+                retryable_response = True
+                if not title:
+                    title = str(payload.get("title") or "").strip()
+                candidates = safe_model_items(payload.get("items"))
+            except ProviderError as exc:
+                failures.append(exc)
+                print(f"AI provider {provider} ({model}) failed: HTTP {exc.status}" if exc.status else f"AI provider {provider} ({model}) failed: {exc}")
+                candidates = safe_model_items(exc.partial_items)
+                failed_reason = provider_failure_reason(exc)
+                # A 2xx invalid/truncated JSON response can be salvaged and
+                # continued with the same model once; rate limits are not retried.
+                retryable_response = exc.status is not None and 200 <= exc.status < 300
+                if not candidates and pending_fallback is None:
+                    pending_fallback = (model_id, failed_reason)
 
-        added = add_unique_items(completed, candidates, question_count, excluded_questions)
-        if added:
-            if model_id not in used_models:
-                used_models.append(model_id)
-            if pending_fallback and pending_fallback[0] != model_id and not fallback:
-                fallback = {"from": pending_fallback[0], "to": model_id, "reason": pending_fallback[1]}
-            if len(completed) < question_count:
-                pending_fallback = (model_id, "incomplete")
-            else:
-                pending_fallback = None
-        elif pending_fallback is None and len(completed) < question_count:
-            pending_fallback = (model_id, failed_reason or "incomplete")
+            added = add_unique_items(completed, candidates, question_count, excluded_questions)
+            if added:
+                if model_id not in used_models:
+                    used_models.append(model_id)
+                if pending_fallback and pending_fallback[0] != model_id and not fallback:
+                    fallback = {"from": pending_fallback[0], "to": model_id, "reason": pending_fallback[1]}
+                if len(completed) < question_count:
+                    pending_fallback = (model_id, "incomplete")
+                    if retryable_response and attempt_round < 2:
+                        retry_models.append((model_id, provider, model, api_key, _label))
+                else:
+                    pending_fallback = None
+            elif pending_fallback is None and len(completed) < question_count:
+                pending_fallback = (model_id, failed_reason or "incomplete")
 
     if not completed:
         if failures and all(failure.status == 429 for failure in failures):
@@ -897,7 +911,13 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
             raise HTTPException(status_code=503, detail="All configured models are temporarily unavailable or rate-limited. Please try again shortly.")
         raise HTTPException(status_code=502, detail="No configured model could generate this study set. Check the provider keys and model names in Render.")
 
-    return {"title": title, "items": completed}, used_models, fallback, len(completed) < question_count
+    if len(completed) < question_count:
+        raise HTTPException(
+            status_code=503,
+            detail=f"The available models generated only {len(completed)} of {question_count} requested questions after fallback and continuation attempts. No partial set was saved; try again shortly or request fewer questions.",
+        )
+
+    return {"title": title, "items": completed}, used_models, fallback, False
 
 
 def generate_voice_reply(provider: str, model: str, api_key: str, system_prompt: str, history: list[dict[str, str]], message: str) -> str:
@@ -1095,7 +1115,7 @@ def voice_reply_with_fallback(request: VoiceChatRequest) -> tuple[str, str, dict
     ]
     failures = []
     pending_fallback = None
-    for model_id, provider, model, api_key, _label in ordered[:MAX_MODELS_PER_GENERATION]:
+    for model_id, provider, model, api_key, _label in ordered[:MAX_MODELS_PER_VOICE_TURN]:
         try:
             answer = generate_voice_reply(provider, model, api_key, system_prompt, history, request.message.strip())
             fallback = {"from": pending_fallback, "to": model_id} if pending_fallback else None
