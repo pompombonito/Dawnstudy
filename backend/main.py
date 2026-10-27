@@ -69,6 +69,12 @@ MAX_BYTES = 15 * 1024 * 1024
 MAX_TEXT = 22_000
 MAX_QUESTIONS_PER_GENERATION = 50
 ACCOUNT_DAILY_GENERATIONS = 5
+UNLIMITED_GENERATION_EMAILS = {
+    "hipolito2213611@ceu.edu.ph",
+    "daquioag2200174@ceu.edu.ph",
+    "corpuz2580868@mnl.ceu.edu.ph",
+    "macaldo2214944@ceu.edu.ph",
+}
 MAX_MODELS_PER_GENERATION = 3
 ALLOWED_EMAIL_DOMAINS = ("@ceu.edu.ph", "@mnl.ceu.edu.ph", "@mkt.ceu.edu.ph", "@mls.ceu.edu.ph")
 OWNER_EMAIL = "daquioagjairo30@gmail.com"
@@ -1104,12 +1110,17 @@ def voice_reply_with_fallback(request: VoiceChatRequest) -> tuple[str, str, dict
     raise HTTPException(status_code=503, detail="Voice Review models are temporarily unavailable. Try again shortly.")
 
 
-def reserve_user_generation(user_id: str) -> tuple[int, int, str]:
+def reserve_user_generation(user_id: str, email: str) -> tuple[int, int | None, str]:
     limit = ACCOUNT_DAILY_GENERATIONS
-    identity = f"account:{user_id}"
     manila_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
     local_day = manila_now.date().isoformat()
     next_reset = (manila_now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)).isoformat()
+    if email.strip().casefold() in UNLIMITED_GENERATION_EMAILS:
+        # These students bypass Dawnstudy's per-account daily generation quota.
+        # AI providers may still enforce their own rate and token limits.
+        return 0, None, next_reset
+
+    identity = f"account:{user_id}"
     scope_key = hashlib.sha256(identity.encode("utf-8")).hexdigest()
     has_sheets = bool(os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", "").strip() and os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip())
 
@@ -1183,7 +1194,7 @@ def generate(
         if str(item.get("question") or "").strip()
     ))
 
-    _used_today, daily_limit, usage_reset = reserve_user_generation(user["user_id"])
+    _used_today, daily_limit, usage_reset = reserve_user_generation(user["user_id"], user["email"])
 
     web_context = ""
     sources: list[dict[str, str]] = []
@@ -1235,7 +1246,7 @@ def generate(
         auto_model, auto_reason = choose_auto_model(configured_ai_models(), len(raw), len(text), question_count)
         selected_model = auto_model
     payload, used_models, fallback, incomplete = generate_with_fallback(prompt_for_remaining, schema, selected_model, question_count, excluded_questions)
-    remaining_today = max(0, daily_limit - _used_today)
+    remaining_today = max(0, daily_limit - _used_today) if daily_limit is not None else None
     return {
         "title": str(payload.get("title") or filename.rsplit(".", 1)[0])[:100],
         "type": format,
@@ -1256,7 +1267,7 @@ def generate(
         "requested_count": question_count,
         "material_fingerprint": material_fingerprint,
         "previous_question_count": len(excluded_questions),
-        "usage": {"remaining": remaining_today, "limit": daily_limit, "resets_at": usage_reset},
+        "usage": {"remaining": remaining_today, "limit": daily_limit, "resets_at": usage_reset, "unlimited": daily_limit is None},
     }
 
 

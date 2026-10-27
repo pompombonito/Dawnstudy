@@ -10,7 +10,7 @@ import {
 
 type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification";
 type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string; source_refs?: string[] };
-type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; created_at: string; material_fingerprint?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; usage?: { remaining: number; limit: number; resets_at: string } };
+type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; created_at: string; material_fingerprint?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; usage?: { remaining: number | null; limit: number | null; resets_at: string; unlimited?: boolean } };
 type ReviewItem = { study_set_id: string; study_set_title: string; type: Kind; card: Card; retried?: boolean; intervals: { again: string; hard: string; good: string; easy: string } };
 type Progress = { total_reviews: number; reviewed_today: number; accuracy: number; current_streak: number; best_streak: number; due_count: number; total_cards: number; week: { date: string; reviews: number }[] };
 type Account = { id: string; username: string; email: string; display_name: string };
@@ -30,6 +30,12 @@ type GoogleIdentity = {
 declare global { interface Window { google?: { accounts: { id: GoogleIdentity } } } }
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
+const UNLIMITED_GENERATION_EMAILS = new Set([
+  "hipolito2213611@ceu.edu.ph",
+  "daquioag2200174@ceu.edu.ph",
+  "corpuz2580868@mnl.ceu.edu.ph",
+  "macaldo2214944@ceu.edu.ph",
+]);
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
 const TOKEN_KEY = "dawnstudy_session_v1";
 const THEME_KEY = "dawnstudy_theme_v1";
@@ -177,6 +183,7 @@ export default function Home() {
   const [showAll, setShowAll] = useState(false);
   const [account, setAccount] = useState<Account | null>(null);
   const [authToken, setAuthToken] = useState("");
+  const hasUnlimitedGenerations = account ? UNLIMITED_GENERATION_EMAILS.has(account.email.trim().toLowerCase()) : false;
   const [authOpen, setAuthOpen] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
@@ -361,7 +368,8 @@ export default function Home() {
       }
       if (data.incomplete) generationNotice = [generationNotice, `Only ${data.items.length} of ${data.requested_count} requested questions could be completed by the available models.`].filter(Boolean).join(" ");
       if (data.previous_question_count) generationNotice = [generationNotice, `Checked ${data.previous_question_count} questions from your earlier sets to avoid repeats.`].filter(Boolean).join(" ");
-      if (data.usage) generationNotice = [generationNotice, `${data.usage.remaining} of ${data.usage.limit} generations left today${authToken ? " for your account" : " in this browser"}.`].filter(Boolean).join(" ");
+      if (data.usage?.unlimited) generationNotice = [generationNotice, "No Dawnstudy daily generation cap applies to your account. AI provider limits may still apply."].filter(Boolean).join(" ");
+      else if (data.usage && data.usage.remaining !== null && data.usage.limit !== null) generationNotice = [generationNotice, `${data.usage.remaining} of ${data.usage.limit} generations left today${authToken ? " for your account" : " in this browser"}.`].filter(Boolean).join(" ");
       setResult(studySet); setCurrent(0); setRevealed(false); setSelectedOption(null); setShareUrl(""); setPracticeActive(false);
       const saved = await fetch(`${API_BASE}/api/study-sets`, {
         method: "POST",
@@ -727,7 +735,7 @@ export default function Home() {
             <input ref={input} type="file" accept=".pdf,.pptx,.docx,.txt,.md,.png,.jpg,.jpeg,.webp" hidden onChange={(event) => selectFile(event.target.files?.[0])}/>
             <span className="upload-icon">{file ? <FileText size={22}/> : <CloudUpload size={23}/>}</span><span className="upload-copy">{file ? <><strong>{file.name}</strong><small>{(file.size / 1024 / 1024).toFixed(2)} MB · ready to study</small></> : <><strong>Drop your study material here</strong><small>or <span className="browse-link">browse your files</span></small></>}</span>{file ? <button className="remove-file" title="Remove file" onClick={(event) => { event.stopPropagation(); setFile(null); }}><X size={18}/></button> : <span className="format-hint">PDF, PPTX, DOCX, TXT, MD, or image <i>·</i> Max 15 MB</span>}
           </section>
-          <div className="model-row"><label htmlFor="model-choice"><Cpu size={16}/> AI model</label><select id="model-choice" value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}><option value="auto">Auto choose · switch when busy or limited</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select><label className="count-label" htmlFor="question-count">Questions</label><select id="question-count" value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{[10, 20, 30, 40, 50].map((count) => <option key={count} value={count}>{count} questions</option>)}</select><span className="model-help">{modelChoice === "auto" ? "Auto uses file size, extracted text, and question count to choose a compact model for smaller jobs and a stronger one for larger jobs." : "Your choice is tried first. Another configured model can help if it fails or returns a partial set."} Up to 50 questions per request; each submitted request uses one of 5 daily generations, even if fallback models are tried. Your allowance resets at midnight Manila time. Provider free quotas are shared and may still be busy or exhausted.</span></div>
+          <div className="model-row"><label htmlFor="model-choice"><Cpu size={16}/> AI model</label><select id="model-choice" value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}><option value="auto">Auto choose · switch when busy or limited</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select><label className="count-label" htmlFor="question-count">Questions</label><select id="question-count" value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{[10, 20, 30, 40, 50].map((count) => <option key={count} value={count}>{count} questions</option>)}</select><span className="model-help">{modelChoice === "auto" ? "Auto uses file size, extracted text, and question count to choose a compact model for smaller jobs and a stronger one for larger jobs." : "Your choice is tried first. Another configured model can help if it fails or returns a partial set."} Up to 50 questions per request. {hasUnlimitedGenerations ? "No Dawnstudy daily generation cap applies to your account." : "Each submitted request uses one of 5 daily generations, even if fallback models are tried; your allowance resets at midnight Manila time."} Provider free quotas are shared and may still be busy or exhausted.</span></div>
           <div className="options-row"><button className={`web-toggle ${web ? "on" : ""}`} onClick={() => setWeb(!web)}><span className="toggle-track"><span/></span><Globe2 size={16}/><span>Enrich with the web</span><span className="optional-tag">OPTIONAL</span></button><button className="web-info" title="Searches the web for relevant context and includes source links with your results."><CircleHelp size={15}/></button></div>
           <div className="generate-row"><span className="privacy-note"><span className="privacy-dot"/> Sent to your selected AI provider; sets sync to your account.</span><button className="generate-button" onClick={generate} disabled={busy}>{busy ? <><span className="spinner"/> Trying available models…</> : <><Sparkles size={16}/> Make my study set <ChevronRight size={16}/></>}</button></div>
           {error && <div className="error-box"><CircleHelp size={16}/><span>{error}</span></div>}
