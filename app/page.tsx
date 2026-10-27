@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import {
   AlarmClock, BookOpen, Check, CheckSquare, ChevronLeft, ChevronRight, CircleHelp, Clock3,
-  CloudUpload, Copy, Cpu, FileText, Flag, Globe2, GraduationCap, Layers3, LogOut, Menu, Moon,
-  Maximize2, Minimize2, Plus, Share2, Sparkles, Sun, Trash2, UserRound, X,
+  CloudUpload, Copy, Cpu, FileText, Flag, Globe2, GraduationCap, Layers3, LogOut, Menu, Mic,
+  MicOff, Moon, Maximize2, Minimize2, Plus, Send, Share2, Sparkles, Sun, Trash2, UserRound,
+  Volume2, X,
 } from "lucide-react";
 
 type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification";
@@ -19,11 +20,25 @@ type Theme = "dark" | "light";
 type PracticeAnswer = string | string[] | null;
 
 type GoogleIdResponse = { credential: string };
+type VoiceTurn = { role: "user" | "assistant"; content: string };
+type BrowserSpeechResult = ArrayLike<{ transcript: string }>;
+type BrowserSpeechRecognizer = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  maxAlternatives: number;
+  onresult: ((event: { results: ArrayLike<BrowserSpeechResult> }) => void) | null;
+  onerror: ((event: { error: string }) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+type BrowserSpeechRecognizerConstructor = new () => BrowserSpeechRecognizer;
 type GoogleIdentity = {
   initialize: (config: { client_id: string; callback: (response: GoogleIdResponse) => void }) => void;
   renderButton: (element: HTMLElement, options: Record<string, string | number | boolean>) => void;
 };
-declare global { interface Window { google?: { accounts: { id: GoogleIdentity } } } }
+declare global { interface Window { google?: { accounts: { id: GoogleIdentity } }; SpeechRecognition?: BrowserSpeechRecognizerConstructor; webkitSpeechRecognition?: BrowserSpeechRecognizerConstructor } }
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
@@ -134,6 +149,16 @@ export default function Home() {
   const [practiceTimeLeft, setPracticeTimeLeft] = useState(0);
   const [practiceAnswers, setPracticeAnswers] = useState<PracticeAnswer[]>([]);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [voiceTopic, setVoiceTopic] = useState("");
+  const [voiceModelChoice, setVoiceModelChoice] = useState("auto");
+  const [voiceMessages, setVoiceMessages] = useState<VoiceTurn[]>([]);
+  const [voiceActive, setVoiceActive] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  const [voiceListening, setVoiceListening] = useState(false);
+  const [voiceDraft, setVoiceDraft] = useState("");
+  const [voiceError, setVoiceError] = useState("");
+  const [voiceModelUsed, setVoiceModelUsed] = useState("");
+  const [voiceFallbackNote, setVoiceFallbackNote] = useState("");
   const [shareUrl, setShareUrl] = useState("");
   const [shareBusy, setShareBusy] = useState(false);
   const [reportingCard, setReportingCard] = useState(false);
@@ -154,6 +179,9 @@ export default function Home() {
   const [authError, setAuthError] = useState("");
   const input = useRef<HTMLInputElement>(null);
   const googleButton = useRef<HTMLDivElement>(null);
+  const speechRecognizer = useRef<BrowserSpeechRecognizer | null>(null);
+  const voiceMessagesElement = useRef<HTMLDivElement>(null);
+  const voiceSessionId = useRef(0);
 
   async function loadAccountSets(token: string) {
     if (!API_BASE) return;
@@ -244,6 +272,10 @@ export default function Home() {
     document.addEventListener("fullscreenchange", syncFullscreenState);
     return () => document.removeEventListener("fullscreenchange", syncFullscreenState);
   }, []);
+
+  useEffect(() => {
+    voiceMessagesElement.current?.scrollTo({ top: voiceMessagesElement.current.scrollHeight, behavior: "smooth" });
+  }, [voiceMessages]);
 
   async function toggleExerciseFullscreen() {
     if (document.fullscreenElement) {
@@ -360,6 +392,96 @@ export default function Home() {
     setPracticeAnswers(Array.from({ length: result.items.length }, () => null));
     setPracticeIndex(0); setPracticeTimeLeft(practiceSecondsPerQuestion === 0 ? 0 : result.items.length * practiceSecondsPerQuestion);
     setPracticeComplete(false); setPracticeActive(true); setError("");
+  }
+
+  function speakVoiceReply(text: string) {
+    if (!("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = navigator.language || "en-US";
+    window.speechSynthesis.speak(utterance);
+  }
+
+  async function sendVoiceTurn(message: string, previousHistory: VoiceTurn[] = voiceMessages) {
+    const cleanMessage = message.trim();
+    if (!cleanMessage || !authToken) return;
+    const sessionId = voiceSessionId.current;
+    const history = previousHistory.slice(-12);
+    setVoiceMessages([...previousHistory, { role: "user", content: cleanMessage }]);
+    setVoiceBusy(true); setVoiceError(""); setVoiceFallbackNote("");
+    try {
+      if (!API_BASE) throw new Error("The API address is not configured for this site.");
+      const response = await fetch(API_BASE + "/api/voice/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + authToken },
+        body: JSON.stringify({ topic: voiceTopic, message: cleanMessage, history, model: voiceModelChoice }),
+      });
+      if (!response.ok) throw new Error(await responseError(response));
+      const data: { answer: string; model: string; fallback?: { from: string; to: string } | null } = await response.json();
+      if (sessionId !== voiceSessionId.current) return;
+      setVoiceMessages((current) => [...current, { role: "assistant", content: data.answer }]);
+      setVoiceModelUsed(data.model);
+      if (data.fallback) {
+        const from = models.find((item) => item.id === data.fallback?.from)?.name || data.fallback.from;
+        const to = models.find((item) => item.id === data.fallback?.to)?.name || data.fallback.to;
+        setVoiceFallbackNote(from + " was unavailable, so " + to + " replied.");
+      }
+      speakVoiceReply(data.answer);
+    } catch (caught) {
+      if (sessionId !== voiceSessionId.current) return;
+      setVoiceError(caught instanceof Error ? caught.message : "Could not continue the voice review.");
+    } finally { if (sessionId === voiceSessionId.current) setVoiceBusy(false); }
+  }
+
+  function beginVoiceReview() {
+    if (!authToken || !account) {
+      setAuthOpen(true); setVoiceError("Sign in with your verified CEU Google account to use Voice Review.");
+      return;
+    }
+    if (voiceTopic.trim().length < 2) { setVoiceError("Enter a topic you want to review first."); return; }
+    voiceSessionId.current += 1;
+    setVoiceActive(true); setVoiceMessages([]); setVoiceError(""); setVoiceFallbackNote("");
+    void sendVoiceTurn("Start by asking me one question about this topic.", []);
+  }
+
+  function endVoiceReview() {
+    voiceSessionId.current += 1;
+    speechRecognizer.current?.stop(); speechRecognizer.current = null;
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    setVoiceActive(false); setVoiceListening(false); setVoiceBusy(false);
+  }
+
+  function toggleVoiceInput() {
+    if (voiceListening) {
+      speechRecognizer.current?.stop();
+      return;
+    }
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) {
+      setVoiceError("Voice input is not available in this browser. You can still type your replies below.");
+      return;
+    }
+    const recognizer = new Recognition();
+    recognizer.lang = navigator.language || "en-US";
+    recognizer.continuous = false;
+    recognizer.interimResults = false;
+    recognizer.maxAlternatives = 1;
+    recognizer.onresult = (event) => {
+      const transcript = event.results[event.results.length - 1]?.[0]?.transcript?.trim();
+      if (transcript) {
+        setVoiceDraft("");
+        void sendVoiceTurn(transcript);
+      }
+    };
+    recognizer.onerror = (event) => {
+      setVoiceError(event.error === "not-allowed" ? "Allow microphone access in your browser to speak your answer." : "I couldn't hear that clearly. Try again or type your reply.");
+      setVoiceListening(false); speechRecognizer.current = null;
+    };
+    recognizer.onend = () => { setVoiceListening(false); speechRecognizer.current = null; };
+    speechRecognizer.current = recognizer;
+    setVoiceError(""); setVoiceListening(true);
+    try { recognizer.start(); }
+    catch { setVoiceListening(false); speechRecognizer.current = null; setVoiceError("The microphone could not start. Check browser permissions and try again."); }
   }
 
   async function shareCurrentSet() {
@@ -492,6 +614,7 @@ export default function Home() {
         <a className="brand" href="#home"><span className="brand-icon"><Sparkles size={19} strokeWidth={2.2} /></span><span className="brand-copy"><span>dawn<span className="brand-light">study</span></span><small>by Devon</small></span></a>
         <div className="side-kicker">YOUR SPACE</div>
         <button className="nav-item active" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}><span className="nav-icon"><BookOpen size={18}/></span> Study desk</button>
+        <button className="nav-item" onClick={() => document.querySelector(".voice-review")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><Mic size={18}/></span> Voice review</button>
         <button className="nav-item" onClick={() => document.querySelector(".recent-section")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><Layers3 size={18}/></span> My study sets <span className="nav-count">{sets.length}</span></button>
         <button className="nav-item" onClick={() => document.querySelector(".progress-panel")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><Clock3 size={18}/></span> Study progress</button>
         <button className="nav-item" onClick={() => document.querySelector(".about-section")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><UserRound size={18}/></span> About the Developer</button>
@@ -566,6 +689,28 @@ export default function Home() {
           <section className="recent-section"><div className="recent-head"><div><div className="section-title-row"><h2>Your recent sets</h2><span className="recent-count">{sets.length}</span></div><p>{account ? "Synced to your account." : "Sign in with your CEU Google account to view your sets."}</p></div>{sets.length > 3 && <button className="see-all" onClick={() => setShowAll(!showAll)}>{showAll ? "Show less" : "See all"} <ChevronRight size={15}/></button>}</div>
             {sets.length ? <div className="recent-grid">{sets.slice(0, showAll ? sets.length : 3).map((studySet, index) => <div className="recent-card-wrap" key={studySet.id}><button className="recent-card" onClick={() => openSavedSet(studySet)}><span className={`recent-art art-${["aqua", "coral", "gold"][index % 3]}`}><BookOpen size={18}/><span className="art-orbit"/></span><span className="recent-info"><span className="subject-label">{types.find((type) => type.id === studySet.type)?.title.toUpperCase()}</span><strong>{studySet.title}</strong><small>{studySet.items.length} cards <i>·</i> {ageLabel(studySet.created_at)}</small></span><ChevronRight size={16} className="recent-arrow"/></button><button className="recent-delete" title={`Delete ${studySet.title}`} aria-label={`Delete ${studySet.title}`} onClick={() => void removeStudySet(studySet)}><Trash2 size={15}/></button></div>)}</div> : <div className="empty-sets"><Layers3 size={20}/><span>{account ? "Your study sets will appear here after you make one." : "Sign in with your CEU Google account to access Dawnstudy."}</span></div>}
             <div className="bottom-note"><span>✳</span> Little by little, a little becomes a lot. <i>— A study reminder</i></div>
+          </section>
+          <section className="voice-review" id="voice-review">
+            <div className="voice-review-heading"><div><div className="result-kicker"><span/> VOICE REVIEW</div><h2>Talk it through.</h2><p>Choose a topic and have a spoken, back-and-forth review with an AI study partner.</p></div><span className="voice-mark"><Mic size={20}/></span></div>
+            {!voiceActive ? <div className="voice-setup">
+              <label>What topic do you want to review?<input value={voiceTopic} onChange={(event) => setVoiceTopic(event.target.value)} maxLength={200} placeholder="e.g. Cell division, pharmacology, or network layers"/></label>
+              <label>Conversation model<select value={voiceModelChoice} onChange={(event) => setVoiceModelChoice(event.target.value)}><option value="auto">Auto · switch if a model is busy or limited</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select></label>
+              <button className="voice-start" type="button" onClick={beginVoiceReview} disabled={voiceBusy}><Mic size={16}/> Start voice review</button>
+              <p className="voice-privacy">Your browser handles microphone recognition and reads replies aloud. Dawnstudy sends recognized text to the selected provider. Continue while that provider has available quota.</p>
+            </div> : <div className="voice-session">
+              <div className="voice-session-bar"><div><strong>Reviewing: {voiceTopic}</strong><small>{voiceModelUsed ? "Answered by " + modelName(voiceModelUsed) : "Connecting to your selected model…"}</small></div><button type="button" className="voice-end" onClick={endVoiceReview}>End review</button></div>
+              {voiceFallbackNote && <p className="voice-fallback">{voiceFallbackNote}</p>}
+              <div className="voice-transcript" ref={voiceMessagesElement} role="log" aria-live="polite">
+                {voiceMessages.map((turn, index) => <article className={turn.role === "assistant" ? "voice-message assistant" : "voice-message user"} key={index}><span>{turn.role === "assistant" ? "STUDY PARTNER" : "YOU"}</span><p>{turn.content}</p>{turn.role === "assistant" && <button type="button" className="voice-replay" onClick={() => speakVoiceReply(turn.content)} aria-label="Read this reply aloud"><Volume2 size={14}/> Listen</button>}</article>)}
+                {voiceBusy && <p className="voice-thinking"><span className="spinner"/> Thinking of your next question…</p>}
+              </div>
+              <form className="voice-compose" onSubmit={(event) => { event.preventDefault(); if (!voiceBusy && voiceDraft.trim()) { void sendVoiceTurn(voiceDraft); setVoiceDraft(""); } }}>
+                <button type="button" className={voiceListening ? "voice-mic listening" : "voice-mic"} onClick={toggleVoiceInput} disabled={voiceBusy} aria-label={voiceListening ? "Stop listening" : "Speak your answer"} title={voiceListening ? "Stop listening" : "Speak your answer"}>{voiceListening ? <MicOff size={18}/> : <Mic size={18}/>}</button>
+                <input value={voiceDraft} onChange={(event) => setVoiceDraft(event.target.value)} maxLength={1200} placeholder={voiceListening ? "Listening… speak now" : "Speak or type your answer"} aria-label="Your reply"/>
+                <button type="submit" className="voice-send" disabled={voiceBusy || !voiceDraft.trim()} aria-label="Send reply"><Send size={17}/></button>
+              </form>
+            </div>}
+            {voiceError && <p className="voice-error" role="alert">{voiceError}</p>}
           </section>
           <section className="about-section" id="about"><div className="about-header"><div className="about-identity"><span className="eyebrow"><span/> THE PERSON BEHIND DAWNSTUDY</span><h2>Hey, I’m Devon! <span role="img" aria-label="waving hand">👋</span></h2><p>Computer Engineering Student &amp; Developer</p><strong>Centro Escolar University Manila</strong><div className="about-tags"><span>Network Engineering</span><span>Applied AI</span></div></div></div><div className="about-body"><h3>Building Dawnstudy</h3><p>I’m Jairo Devon A. Daquioag, a Computer Engineering student at Centro Escolar University Manila who enjoys building things that solve problems, no matter how small.</p><p>I created Dawnstudy with my fellow students in mind. I wanted to make studying more accessible by turning PDFs into flashcards, multiple-choice questions, identification questions, and select-all-that-apply exercises—all powered by free-tier AI models.</p><p>I’m a tech generalist at heart, with a particular interest in Network Engineering and Applied AI. I enjoy exploring technology, experimenting with different AI models, and finding practical ways to use them to make everyday tasks easier.</p><p>For me, technology isn’t just about building something impressive. It’s about building something useful, especially when it can help others without costing them anything.</p></div><div className="about-links"><h3>Let’s connect</h3><a href="https://www.linkedin.com/in/jairo-devon-daquioag-466124295/" target="_blank" rel="noreferrer"><span className="social-mark">in</span><span><strong>LinkedIn</strong><small>Jairo Devon Daquioag</small></span><span className="external-mark">↗</span></a><a href="https://www.instagram.com/jairodaquioag/" target="_blank" rel="noreferrer"><span className="social-mark">◎</span><span><strong>Instagram</strong><small>@jairodaquioag</small></span><span className="external-mark">↗</span></a><a href="mailto:daquioagjairodevon@gmail.com"><span className="social-mark">✉</span><span><strong>Email</strong><small>daquioagjairodevon@gmail.com</small></span><span className="external-mark">↗</span></a></div></section>
         </div>
