@@ -68,6 +68,7 @@ export default function Home() {
   const [result, setResult] = useState<StudySet | null>(null);
   const [current, setCurrent] = useState(0);
   const [revealed, setRevealed] = useState(false);
+  const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [reviewQueue, setReviewQueue] = useState<ReviewItem[]>([]);
   const [reviewActive, setReviewActive] = useState(false);
@@ -168,7 +169,7 @@ export default function Home() {
 
   function selectFile(nextFile?: File) {
     if (!nextFile) return;
-    setFile(nextFile); setError(""); setNotice(""); setResult(null);
+    setFile(nextFile); setError(""); setNotice(""); setResult(null); setSelectedOption(null);
   }
 
   function setColorTheme(nextTheme: Theme) {
@@ -180,7 +181,7 @@ export default function Home() {
   async function generate() {
     if (!authToken || !account) {
       setAuthOpen(true);
-      setError("Sign in with your verified @ceu.edu.ph Google account to make a study set.");
+      setError("Sign in with your verified CEU Google account (@ceu.edu.ph, @mnl.ceu.edu.ph, @mkt.ceu.edu.ph, or @mls.ceu.edu.ph) to make a study set.");
       return;
     }
     if (!file) { setError("Choose a study material first."); return; }
@@ -208,7 +209,7 @@ export default function Home() {
       }
       if (data.incomplete) generationNotice = [generationNotice, `Only ${data.items.length} of ${data.requested_count} requested questions could be completed by the available models.`].filter(Boolean).join(" ");
       if (data.usage) generationNotice = [generationNotice, `${data.usage.remaining} of ${data.usage.limit} generations left today${authToken ? " for your account" : " in this browser"}.`].filter(Boolean).join(" ");
-      setResult(studySet); setCurrent(0); setRevealed(false);
+      setResult(studySet); setCurrent(0); setRevealed(false); setSelectedOption(null);
       const saved = await fetch(`${API_BASE}/api/study-sets`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
@@ -247,7 +248,7 @@ export default function Home() {
   }
 
   function openSavedSet(studySet: StudySet) {
-    setReviewActive(false); setResult(studySet); setSelected(studySet.type); setCurrent(0); setRevealed(false); setError(""); setNotice("");
+    setReviewActive(false); setResult(studySet); setSelected(studySet.type); setCurrent(0); setRevealed(false); setSelectedOption(null); setError(""); setNotice("");
     document.querySelector(".result-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
@@ -258,7 +259,7 @@ export default function Home() {
       const response = await fetch(`${API_BASE}/api/reviews/due?limit=50`, { headers: { Authorization: `Bearer ${authToken}` } });
       if (!response.ok) throw new Error(await responseError(response));
       const data = await response.json();
-      setReviewQueue(data.items || []); setReviewActive(true); setResult(null); setRevealed(false);
+      setReviewQueue(data.items || []); setReviewActive(true); setResult(null); setRevealed(false); setSelectedOption(null);
       document.querySelector(".review-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not load your review queue."); }
   }
@@ -274,7 +275,7 @@ export default function Home() {
         const remaining = old.slice(1);
         return rating === "again" && !item.retried && remaining.length ? [...remaining, { ...item, retried: true }] : remaining;
       });
-      setRevealed(false); void loadProgress(authToken);
+      setRevealed(false); setSelectedOption(null); void loadProgress(authToken);
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not save your review."); }
     finally { setReviewBusy(false); }
   }
@@ -287,7 +288,7 @@ export default function Home() {
       if (!response.ok) throw new Error(await responseError(response));
       const data = await response.json();
       setNotice(`Card added to your review schedule · next review ${data.next_review_in}.`);
-      setCurrent((index) => (index + 1) % result.items.length); setRevealed(false);
+      setCurrent((index) => (index + 1) % result.items.length); setRevealed(false); setSelectedOption(null);
       void loadProgress(authToken);
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not save this card's review schedule."); }
     finally { setReviewBusy(false); }
@@ -295,6 +296,25 @@ export default function Home() {
 
   const currentCard = result?.items[current] || result?.items[0];
   const modelName = (modelId?: string) => models.find((item) => item.id === modelId)?.name || modelId;
+  function renderMultipleChoice(card: Card) {
+    const correctAnswer = (card.correct_answer || card.answer).trim().toLocaleLowerCase();
+    const isCorrect = (option: string) => option.trim().toLocaleLowerCase() === correctAnswer;
+    const selectedAnswer = selectedOption === null ? undefined : card.options?.[selectedOption];
+    const selectedIsCorrect = Boolean(selectedAnswer && isCorrect(selectedAnswer));
+    return <div className={`study-face choice-study-face ${revealed ? "is-revealed" : ""}`}>
+      <span className="face-label">{revealed ? "ANSWER FEEDBACK" : "CHOOSE YOUR ANSWER"}</span>
+      <span className="face-question">{card.question}</span>
+      <div className="choice-options">{card.options?.map((option, index) => {
+        const correct = isCorrect(option);
+        const selected = selectedOption === index;
+        const status = selectedOption === null ? "" : correct ? "choice-correct" : selected ? "choice-wrong" : "";
+        return <button type="button" key={`${index}-${option}`} className={`choice-option ${status}`} disabled={selectedOption !== null} aria-pressed={selected} onClick={() => { setSelectedOption(index); setRevealed(true); }}>
+          <i>{String.fromCharCode(65 + index)}</i><span>{option}</span>{revealed && correct && <Check size={16} aria-label="Correct answer"/>}
+        </button>;
+      })}</div>
+      {selectedOption === null ? <span className="tap-hint choice-hint">Select an option to reveal the answer</span> : <p className={`choice-feedback ${selectedIsCorrect ? "correct" : "wrong"}`} role="status">{selectedIsCorrect ? "Correct! Nice work." : "Not quite. The correct answer is highlighted in green."}</p>}
+    </div>;
+  }
 
   return (
     <main className="shell">
@@ -325,7 +345,7 @@ export default function Home() {
       <section className="main-area" id="home">
         <header className="topbar"><div className="crumb"><span>Your space</span><ChevronRight size={14}/><b>Study desk</b></div><div className="top-actions"><button className="theme-toggle" onClick={() => setColorTheme(theme === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>{theme === "dark" ? <Sun size={16}/> : <Moon size={16}/>}<span>{theme === "dark" ? "Light mode" : "Dark mode"}</span></button><span className="today-pill"><span className="status-dot"/> YOUR STUDY DESK</span>{!account && <button className="top-signin" onClick={() => setAuthOpen(true)}><UserRound size={14}/> Sign in</button>}<button className="profile-mobile" onClick={() => account ? signOut() : setAuthOpen(true)} title={account ? "Sign out" : "Sign in with Google"}>{account ? <LogOut size={18}/> : <Menu size={20}/>}</button></div></header>
         <div className="content">
-          <div className="access-banner"><GraduationCap size={19}/><span><strong>For Centro Escolar University students, for now.</strong> To conserve AI tokens, Dawnstudy is limited to verified Google accounts ending in <b>@ceu.edu.ph</b>.</span></div>
+          <div className="access-banner"><GraduationCap size={19}/><span><strong>For Centro Escolar University students, for now.</strong> To conserve AI tokens, Dawnstudy is limited to verified Google accounts ending in <b>@ceu.edu.ph</b>, <b>@mnl.ceu.edu.ph</b>, <b>@mkt.ceu.edu.ph</b>, or <b>@mls.ceu.edu.ph</b>.</span></div>
           <section className="welcome"><div className="welcome-copy"><div className="eyebrow"><span/> A FRESH PAGE, A FRESH START</div><h1>Make today<br/>a little <em>brighter.</em></h1><p>Drop in your notes. We’ll help the important things stick.</p></div><div className="sunrise-art" aria-hidden="true"><div className="sun"/><div className="cloud cloud-one"/><div className="cloud cloud-two"/><div className="horizon h-back"/><div className="horizon h-front"/></div><span className="welcome-note">one page at a time <span>✳</span></span></section>
           <div className="section-intro"><div><div className="section-title-row"><h2>Start a study set</h2></div><p>Choose how you’d like to practice.</p></div><span className="quiet-note">Good things take practice <span>↗</span></span></div>
           {account && progress && <section className="progress-panel"><div className="progress-copy"><div className="result-kicker"><span/> YOUR STUDY PROGRESS</div><h2>Small steps add up.</h2><p>Review a little each day to keep ideas fresh.</p><div className="progress-stats"><div><strong>{progress.reviewed_today}</strong><span>today</span></div><div><strong>{progress.accuracy}%</strong><span>accuracy</span></div><div><strong>{progress.current_streak} <small>days</small></strong><span>current streak</span></div><div><strong>{progress.best_streak} <small>days</small></strong><span>best streak</span></div></div><div className="week-bars" aria-label="Reviews during the past seven days">{progress.week.map((day) => <div key={day.date} title={`${day.reviews} reviews`}><i style={{ height: `${Math.max(8, Math.min(100, day.reviews * 18))}%` }}/><small>{new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: "narrow" })}</small></div>)}</div></div><button className="review-start" onClick={() => void startReview()}><Clock3 size={17}/><span>Review due</span><b>{progress.due_count}</b><ChevronRight size={16}/></button></section>}
@@ -339,13 +359,13 @@ export default function Home() {
           <div className="generate-row"><span className="privacy-note"><span className="privacy-dot"/> Sent to your selected AI provider; sets sync to your account.</span><button className="generate-button" onClick={generate} disabled={busy}>{busy ? <><span className="spinner"/> Making my study set…</> : <><Sparkles size={16}/> Make my study set <ChevronRight size={16}/></>}</button></div>
           {error && <div className="error-box"><CircleHelp size={16}/><span>{error}</span></div>}
           {notice && <div className="notice-box"><Check size={15}/><span>{notice}</span></div>}
-          {reviewActive && <section className="review-panel"><div className="result-head"><div><div className="result-kicker"><span/> SPACED REPETITION</div><h2>{reviewQueue.length ? reviewQueue[0].study_set_title : "Review complete"}</h2><p>{reviewQueue.length ? `${reviewQueue.length} cards in this session · ${reviewQueue[0].type.replaceAll("_", " ")}` : "You’re all caught up for now. Nice work showing up."}</p></div><button className="plain-icon" title="Close review" onClick={() => { setReviewActive(false); setReviewQueue([]); }}><X size={18}/></button></div>{reviewQueue.length ? <div className="study-card"><div className="study-card-top"><span className="flashcard-label">REVIEW {reviewQueue.length} LEFT</span></div><button className={`study-face ${revealed ? "is-revealed" : ""}`} onClick={() => setRevealed(!revealed)}><span className="face-label">{revealed ? "THE ANSWER" : "YOUR QUESTION"}</span><span className="face-question">{revealed ? reviewQueue[0].card.answer : reviewQueue[0].card.question}</span>{!revealed && reviewQueue[0].card.options && <span className="answer-options">{reviewQueue[0].card.options.map((option, index) => <span key={`${index}-${option}`}><i>{String.fromCharCode(65 + index)}</i>{option}</span>)}</span>}{!revealed && <span className="tap-hint">Tap to reveal <span>↗</span></span>}</button>{revealed && reviewQueue[0].card.explanation && <p className="explanation">{reviewQueue[0].card.explanation}</p>}{revealed && <div className="rating-row"><button disabled={reviewBusy} onClick={() => void gradeCard("again")}><b>Again</b><small>{reviewQueue[0].intervals.again}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("hard")}><b>Hard</b><small>{reviewQueue[0].intervals.hard}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("good")}><b>Good</b><small>{reviewQueue[0].intervals.good}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("easy")}><b>Easy</b><small>{reviewQueue[0].intervals.easy}</small></button></div>}</div> : <button className="review-done" onClick={() => { setReviewActive(false); setReviewQueue([]); }}>Back to study desk <ChevronRight size={15}/></button>}</section>}
+          {reviewActive && <section className="review-panel"><div className="result-head"><div><div className="result-kicker"><span/> SPACED REPETITION</div><h2>{reviewQueue.length ? reviewQueue[0].study_set_title : "Review complete"}</h2><p>{reviewQueue.length ? `${reviewQueue.length} cards in this session · ${reviewQueue[0].type.replaceAll("_", " ")}` : "You’re all caught up for now. Nice work showing up."}</p></div><button className="plain-icon" title="Close review" onClick={() => { setReviewActive(false); setReviewQueue([]); setSelectedOption(null); }}><X size={18}/></button></div>{reviewQueue.length ? <div className="study-card"><div className="study-card-top"><span className="flashcard-label">REVIEW {reviewQueue.length} LEFT</span></div>{reviewQueue[0].type === "multiple_choice" && reviewQueue[0].card.options?.length ? renderMultipleChoice(reviewQueue[0].card) : <button className={`study-face ${revealed ? "is-revealed" : ""}`} onClick={() => setRevealed(!revealed)}><span className="face-label">{revealed ? "THE ANSWER" : "YOUR QUESTION"}</span><span className="face-question">{revealed ? reviewQueue[0].card.answer : reviewQueue[0].card.question}</span>{!revealed && <span className="tap-hint">Tap to reveal <span>↗</span></span>}</button>}{revealed && reviewQueue[0].card.explanation && <p className="explanation">{reviewQueue[0].card.explanation}</p>}{revealed && <div className="rating-row"><button disabled={reviewBusy} onClick={() => void gradeCard("again")}><b>Again</b><small>{reviewQueue[0].intervals.again}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("hard")}><b>Hard</b><small>{reviewQueue[0].intervals.hard}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("good")}><b>Good</b><small>{reviewQueue[0].intervals.good}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("easy")}><b>Easy</b><small>{reviewQueue[0].intervals.easy}</small></button></div>}</div> : <button className="review-done" onClick={() => { setReviewActive(false); setReviewQueue([]); }}>Back to study desk <ChevronRight size={15}/></button>}</section>}
           {result && currentCard && !reviewActive && <section className="result-panel"><div className="result-head"><div><div className="result-kicker"><span/> YOUR STUDY SET</div><h2>{result.title}</h2><p>{result.items.length} {types.find((type) => type.id === result.type)?.title.toLowerCase()} · ready when you are{result.model ? ` · ${modelName(result.model)}` : ""}</p></div><button className="plain-icon" title="Close study set" onClick={() => setResult(null)}><X size={18}/></button></div>
             <div className="study-card"><div className="study-card-top"><span className="flashcard-label">{result.type === "flashcards" ? "FLASHCARD" : types.find((type) => type.id === result.type)?.title.toUpperCase()}</span><span className="card-number">{String(current + 1).padStart(2,"0")} <i>/</i> {String(result.items.length).padStart(2,"0")}</span></div>
-              <button className={`study-face ${revealed ? "is-revealed" : ""}`} onClick={() => setRevealed(!revealed)}><span className="face-label">{revealed ? "THE ANSWER" : "YOUR QUESTION"}</span><span className="face-question">{revealed ? currentCard.answer : currentCard.question}</span>{!revealed && currentCard.options && <span className="answer-options">{currentCard.options.map((option, index) => <span key={`${index}-${option}`}><i>{String.fromCharCode(65 + index)}</i>{option}</span>)}</span>}{!revealed && <span className="tap-hint">Tap to reveal <span>↗</span></span>}</button>
+              {result.type === "multiple_choice" && currentCard.options?.length ? renderMultipleChoice(currentCard) : <button className={`study-face ${revealed ? "is-revealed" : ""}`} onClick={() => setRevealed(!revealed)}><span className="face-label">{revealed ? "THE ANSWER" : "YOUR QUESTION"}</span><span className="face-question">{revealed ? currentCard.answer : currentCard.question}</span>{!revealed && <span className="tap-hint">Tap to reveal <span>↗</span></span>}</button>}
               {revealed && currentCard.explanation && <p className="explanation">{currentCard.explanation}</p>}
               {revealed && account && authToken && currentCard.card_id && <><div className="rating-prompt">How well did you recall it? Your answer schedules this card for another review.</div><div className="rating-row"><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("again")}><b>Again</b><small>Hard to recall</small></button><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("hard")}><b>Hard</b><small>With effort</small></button><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("good")}><b>Good</b><small>Recalled it</small></button><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("easy")}><b>Easy</b><small>Very easy</small></button></div></>}
-              <div className="study-controls"><button className="control-button" onClick={() => { setCurrent((current - 1 + result.items.length) % result.items.length); setRevealed(false); }}><ChevronLeft size={16}/> Previous</button><span className="dots">{result.items.slice(0, Math.min(result.items.length, 7)).map((_, index) => <i key={index} className={index === current ? "dot-active" : ""}/>)}</span><button className="control-button next" onClick={() => { setCurrent((current + 1) % result.items.length); setRevealed(false); }}>Next <ChevronRight size={16}/></button></div>
+              <div className="study-controls"><button className="control-button" onClick={() => { setCurrent((current - 1 + result.items.length) % result.items.length); setRevealed(false); setSelectedOption(null); }}><ChevronLeft size={16}/> Previous</button><span className="dots">{result.items.slice(0, Math.min(result.items.length, 7)).map((_, index) => <i key={index} className={index === current ? "dot-active" : ""}/>)}</span><button className="control-button next" onClick={() => { setCurrent((current + 1) % result.items.length); setRevealed(false); setSelectedOption(null); }}>Next <ChevronRight size={16}/></button></div>
               {result.sources?.length ? <div className="source-links"><Globe2 size={14}/><span>Sources:</span>{result.sources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer">{source.title}</a>)}</div> : null}
             </div></section>}
           <section className="recent-section"><div className="recent-head"><div><div className="section-title-row"><h2>Your recent sets</h2><span className="recent-count">{sets.length}</span></div><p>{account ? "Synced to your account." : "Sign in with your CEU Google account to view your sets."}</p></div>{sets.length > 3 && <button className="see-all" onClick={() => setShowAll(!showAll)}>{showAll ? "Show less" : "See all"} <ChevronRight size={15}/></button>}</div>
@@ -362,7 +382,7 @@ export default function Home() {
           <div className="auth-mark"><Sparkles size={19}/></div>
           <p className="auth-eyebrow">YOUR STUDY SPACE</p>
           <h2 id="auth-title">Sign in with Google</h2>
-          <p className="auth-subtitle">Dawnstudy is currently for Centro Escolar University students. Use your verified <b>@ceu.edu.ph</b> Google account. Access is limited to conserve AI tokens.</p>
+          <p className="auth-subtitle">Dawnstudy is currently for Centro Escolar University students. Use your verified Google account ending in <b>@ceu.edu.ph</b>, <b>@mnl.ceu.edu.ph</b>, <b>@mkt.ceu.edu.ph</b>, or <b>@mls.ceu.edu.ph</b>. Access is limited to conserve AI tokens.</p>
           {GOOGLE_CLIENT_ID ? <div className="google-button-wrap"><div ref={googleButton}/></div> : <div className="google-not-ready">Google sign-in is not configured yet. Please try again later.</div>}
           {authError && <div className="auth-error">{authError}</div>}
         </section>

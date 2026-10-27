@@ -1,6 +1,6 @@
 # Dawnstudy
 
-A student study desk that turns uploaded notes into flashcards, multiple-choice questions, select-all-that-apply questions, or identification prompts. Access currently requires a verified Google account ending in `@ceu.edu.ph`, with one owner account exception. The interface is a Next.js app for Vercel; the Python API runs on Render and can use Groq, Gemini, Mistral, and OpenRouter's free-model router. The selected model is tried first and other configured models can help finish a partial response. Optional web enrichment uses Tavily Search and returns source links alongside the study set.
+A student study desk that turns uploaded notes into flashcards, multiple-choice questions, select-all-that-apply questions, or identification prompts. Access currently requires a verified Google account ending in `@ceu.edu.ph`, `@mnl.ceu.edu.ph`, `@mkt.ceu.edu.ph`, or `@mls.ceu.edu.ph`, with one owner account exception. The interface is a Next.js app for Vercel; the Python API runs on Render and can use Groq, Gemini, Mistral, and OpenRouter's free-model router. The selected model is tried first and other configured models can help finish a partial response. Optional web enrichment uses Tavily Search and returns source links alongside the study set.
 
 ## Run locally
 
@@ -31,7 +31,7 @@ Free services have limits: Render spins down after 15 minutes without traffic, a
 
 ### Google sign-in and Sheets storage
 
-Access requires Google sign-in through a Google Cloud OAuth client and a configured Google Sheet. Username/password and guest access are not available. Sign-in accepts verified Google accounts ending in `@ceu.edu.ph`, plus the developer's `daquioagjairo30@gmail.com` account.
+Access requires Google sign-in through a Google Cloud OAuth client and a configured Google Sheet. Username/password and guest access are not available. Sign-in accepts verified Google accounts ending in `@ceu.edu.ph`, `@mnl.ceu.edu.ph`, `@mkt.ceu.edu.ph`, or `@mls.ceu.edu.ph`, plus the developer's `daquioagjairo30@gmail.com` account.
 
 1. In Google Cloud Console, create/select a project and enable the **Google Sheets API**.
 2. Create a Google spreadsheet. The API creates the `Users`, `StudySets`, `AIUsage`, `CardProgress`, and `ReviewLogs` tabs and their header rows automatically on first account or generation use.

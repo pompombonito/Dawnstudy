@@ -60,7 +60,7 @@ MAX_TEXT = 22_000
 MAX_QUESTIONS_PER_GENERATION = 50
 ACCOUNT_DAILY_GENERATIONS = 5
 MAX_MODELS_PER_GENERATION = 3
-ALLOWED_EMAIL_DOMAIN = "@ceu.edu.ph"
+ALLOWED_EMAIL_DOMAINS = ("@ceu.edu.ph", "@mnl.ceu.edu.ph", "@mkt.ceu.edu.ph", "@mls.ceu.edu.ph")
 OWNER_EMAIL = "daquioagjairo30@gmail.com"
 FORMATS = {"flashcards", "multiple_choice", "checkbox", "identification"}
 bearer = HTTPBearer(auto_error=False)
@@ -121,7 +121,7 @@ def auth_response(user: dict[str, str]) -> dict[str, Any]:
 
 def is_allowed_email(email: str) -> bool:
     normalized = email.strip().casefold()
-    return normalized.endswith(ALLOWED_EMAIL_DOMAIN) or normalized == OWNER_EMAIL
+    return normalized.endswith(ALLOWED_EMAIL_DOMAINS) or normalized == OWNER_EMAIL
 
 
 def authenticated_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> dict[str, str]:
@@ -135,7 +135,7 @@ def authenticated_user(credentials: HTTPAuthorizationCredentials | None = Depend
     if not user:
         raise HTTPException(status_code=401, detail="Your session expired. Please sign in again.")
     if not is_allowed_email(user.get("email", "")):
-        raise HTTPException(status_code=403, detail="Dawnstudy is currently limited to verified @ceu.edu.ph accounts.")
+        raise HTTPException(status_code=403, detail="Dawnstudy is limited to verified CEU accounts ending in @ceu.edu.ph, @mnl.ceu.edu.ph, @mkt.ceu.edu.ph, or @mls.ceu.edu.ph.")
     return user
 
 
@@ -145,7 +145,7 @@ def storage_http_error(exc: StorageError) -> HTTPException:
     if "EMAIL_TAKEN" in str(exc):
         return HTTPException(status_code=409, detail="An account already uses this email. Sign in with Google instead.")
     if "CEU_ONLY" in str(exc):
-        return HTTPException(status_code=403, detail="Dawnstudy is currently limited to verified @ceu.edu.ph accounts.")
+        return HTTPException(status_code=403, detail="Dawnstudy is limited to verified CEU accounts ending in @ceu.edu.ph, @mnl.ceu.edu.ph, @mkt.ceu.edu.ph, or @mls.ceu.edu.ph.")
     return HTTPException(status_code=503, detail=str(exc))
 
 
@@ -171,7 +171,7 @@ def google_sign_in(body: GoogleSignIn):
     try:
         profile = verify_google_credential(body.credential)
         if not is_allowed_email(profile["email"]):
-            raise HTTPException(status_code=403, detail="Use a verified Google account ending in @ceu.edu.ph to access Dawnstudy.")
+            raise HTTPException(status_code=403, detail="Use a verified Google account ending in @ceu.edu.ph, @mnl.ceu.edu.ph, @mkt.ceu.edu.ph, or @mls.ceu.edu.ph to access Dawnstudy.")
         match = find_user_by_google_sub(profile["google_sub"])
         if match:
             user = match[1]
