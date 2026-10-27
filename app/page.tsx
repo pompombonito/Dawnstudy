@@ -21,13 +21,13 @@ type PracticeAnswer = string | string[] | null;
 
 type GoogleIdResponse = { credential: string };
 type VoiceTurn = { role: "user" | "assistant"; content: string };
-type BrowserSpeechResult = ArrayLike<{ transcript: string }>;
+type BrowserSpeechResult = ArrayLike<{ transcript: string; isFinal?: boolean }>;
 type BrowserSpeechRecognizer = {
   lang: string;
   continuous: boolean;
   interimResults: boolean;
   maxAlternatives: number;
-  onresult: ((event: { results: ArrayLike<BrowserSpeechResult> }) => void) | null;
+  onresult: ((event: { results: ArrayLike<BrowserSpeechResult>; resultIndex?: number }) => void) | null;
   onerror: ((event: { error: string }) => void) | null;
   onend: (() => void) | null;
   start: () => void;
@@ -180,6 +180,7 @@ export default function Home() {
   const input = useRef<HTMLInputElement>(null);
   const googleButton = useRef<HTMLDivElement>(null);
   const speechRecognizer = useRef<BrowserSpeechRecognizer | null>(null);
+  const voiceWantsMic = useRef(false);
   const voiceMessagesElement = useRef<HTMLDivElement>(null);
   const voiceSessionId = useRef(0);
 
@@ -446,6 +447,7 @@ export default function Home() {
 
   function endVoiceReview() {
     voiceSessionId.current += 1;
+    voiceWantsMic.current = false;
     speechRecognizer.current?.stop(); speechRecognizer.current = null;
     if ("speechSynthesis" in window) window.speechSynthesis.cancel();
     setVoiceActive(false); setVoiceListening(false); setVoiceBusy(false);
@@ -453,7 +455,10 @@ export default function Home() {
 
   function toggleVoiceInput() {
     if (voiceListening) {
+      voiceWantsMic.current = false;
       speechRecognizer.current?.stop();
+      speechRecognizer.current = null;
+      setVoiceListening(false);
       return;
     }
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -463,25 +468,58 @@ export default function Home() {
     }
     const recognizer = new Recognition();
     recognizer.lang = navigator.language || "en-US";
-    recognizer.continuous = false;
+    recognizer.continuous = true;
     recognizer.interimResults = false;
     recognizer.maxAlternatives = 1;
     recognizer.onresult = (event) => {
-      const transcript = event.results[event.results.length - 1]?.[0]?.transcript?.trim();
+      const finalResults = Array.from(event.results).slice(event.resultIndex ?? event.results.length - 1).filter((result) => result?.[0]?.isFinal !== false);
+      const transcript = finalResults.map((result) => result[0]?.transcript?.trim()).filter(Boolean).join(" ");
       if (transcript) {
+        voiceWantsMic.current = false;
+        recognizer.stop();
+        speechRecognizer.current = null;
+        setVoiceListening(false);
         setVoiceDraft("");
         void sendVoiceTurn(transcript);
       }
     };
     recognizer.onerror = (event) => {
-      setVoiceError(event.error === "not-allowed" ? "Allow microphone access in your browser to speak your answer." : "I couldn't hear that clearly. Try again or type your reply.");
+      if (event.error === "no-speech") {
+        setVoiceError("I haven’t heard anything yet. Keep speaking, or type your reply.");
+        return;
+      }
+      voiceWantsMic.current = false;
+      const messages: Record<string, string> = {
+        "not-allowed": "Microphone access is blocked. Allow it for this site in your browser’s address bar, then try again.",
+        "service-not-allowed": "This browser’s speech recognition service is unavailable. Try Chrome or Edge, or type your reply.",
+        "audio-capture": "No microphone was detected. Connect or enable a microphone, then try again.",
+        network: "The browser’s speech recognition service could not connect. Check your connection and try again.",
+      };
+      setVoiceError(messages[event.error] || "The microphone stopped unexpectedly. Try again or type your reply.");
       setVoiceListening(false); speechRecognizer.current = null;
     };
-    recognizer.onend = () => { setVoiceListening(false); speechRecognizer.current = null; };
+    recognizer.onend = () => {
+      if (voiceWantsMic.current && speechRecognizer.current === recognizer) {
+        window.setTimeout(() => {
+          if (!voiceWantsMic.current || speechRecognizer.current !== recognizer) return;
+          try { recognizer.start(); }
+          catch {
+            voiceWantsMic.current = false;
+            speechRecognizer.current = null;
+            setVoiceListening(false);
+            setVoiceError("The browser stopped listening. Tap the microphone to try again, or type your reply.");
+          }
+        }, 250);
+        return;
+      }
+      if (speechRecognizer.current === recognizer) speechRecognizer.current = null;
+      setVoiceListening(false);
+    };
     speechRecognizer.current = recognizer;
+    voiceWantsMic.current = true;
     setVoiceError(""); setVoiceListening(true);
     try { recognizer.start(); }
-    catch { setVoiceListening(false); speechRecognizer.current = null; setVoiceError("The microphone could not start. Check browser permissions and try again."); }
+    catch { voiceWantsMic.current = false; setVoiceListening(false); speechRecognizer.current = null; setVoiceError("The microphone could not start. Allow microphone access in your browser settings and try again."); }
   }
 
   async function shareCurrentSet() {
