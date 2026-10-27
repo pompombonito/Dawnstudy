@@ -625,6 +625,7 @@ class ProviderError(RuntimeError):
         message: str,
         partial_items: list[dict[str, Any]] | None = None,
         error_code: str | None = None,
+        error_field: str | None = None,
     ):
         super().__init__(message)
         self.provider = provider
@@ -632,22 +633,39 @@ class ProviderError(RuntimeError):
         self.status = status
         self.partial_items = partial_items or []
         self.error_code = error_code
+        self.error_field = error_field
 
 
-def provider_error_code(response: requests.Response) -> str | None:
-    """Return only a provider's short error code, never its potentially sensitive message."""
+def provider_error_diagnostics(response: requests.Response) -> tuple[str | None, str | None]:
+    """Return safe error identifiers, never a provider's potentially sensitive message."""
     try:
         body = response.json()
     except ValueError:
-        return None
+        return None, None
     if not isinstance(body, dict):
-        return None
+        return None, None
     error = body.get("error")
-    if isinstance(error, dict):
-        value = error.get("type") or error.get("status") or error.get("code")
-    else:
-        value = error
-    return str(value)[:80] if isinstance(value, (str, int)) else None
+    if not isinstance(error, dict):
+        return (str(error)[:80], None) if isinstance(error, (str, int)) else (None, None)
+    code = error.get("code")
+    if not isinstance(code, str) or not code:
+        code = error.get("status") or error.get("type")
+    field = error.get("param")
+    if not isinstance(field, str) or not field:
+        details = error.get("details", [])
+        if isinstance(details, list):
+            for detail in details:
+                if not isinstance(detail, dict):
+                    continue
+                violations = detail.get("fieldViolations", [])
+                if isinstance(violations, list):
+                    field = next((item.get("field") for item in violations if isinstance(item, dict) and isinstance(item.get("field"), str)), None)
+                if field:
+                    break
+    return (
+        str(code)[:80] if isinstance(code, (str, int)) else None,
+        str(field)[:120] if isinstance(field, str) else None,
+    )
 
 
 def post_provider_json(url: str, headers: dict[str, str], payload: dict[str, Any]) -> requests.Response:
@@ -701,6 +719,8 @@ def describe_provider_failure(error: ProviderError) -> str:
     detail = f"HTTP {error.status}"
     if error.error_code:
         detail += f" ({error.error_code})"
+    if error.error_field:
+        detail += f" at {error.error_field}"
     return detail
 
 
@@ -772,12 +792,14 @@ def generate_with_provider(provider: str, model: str, api_key: str, prompt: str,
         raise ProviderError(provider, model_id, None, "network request failed") from exc
 
     if not response.ok:
+        error_code, error_field = provider_error_diagnostics(response)
         raise ProviderError(
             provider,
             model_id,
             response.status_code,
             "provider returned an error",
-            error_code=provider_error_code(response),
+            error_code=error_code,
+            error_field=error_field,
         )
     content = ""
     try:
@@ -967,7 +989,12 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
                 history = json.dumps(excluded_questions[-40:], ensure_ascii=False)
                 model_prompt += f"\n\nAvoid questions already included in this student's earlier study sets for the same material. Create different questions that explore other details. Do not repeat or closely paraphrase these earlier questions: {history}"
             model_schema = json.loads(json.dumps(schema))
-            model_schema["properties"]["items"]["maxItems"] = remaining
+            if provider == "gemini":
+                # Large maxItems bounds can make Gemini's structured-output grammar invalid.
+                # The prompt and add_unique_items() still enforce the requested count.
+                model_schema["properties"]["items"].pop("maxItems", None)
+            else:
+                model_schema["properties"]["items"]["maxItems"] = remaining
             max_tokens = min(14_000, max(2_500, 650 + remaining * 220))
             failed_reason = None
             retryable_response = False
