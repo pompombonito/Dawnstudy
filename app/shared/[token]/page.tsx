@@ -35,9 +35,9 @@ export default function SharedStudySetPage() {
   }
 
   const card = studySet?.items[index];
-  const expectedAnswer = card?.correct_answer || card?.answer || "";
-  const expectedAnswers = expectedAnswer.split("|").map((answer) => answer.trim().toLocaleLowerCase());
-  const isCorrect = (option: string) => expectedAnswers.includes(option.trim().toLocaleLowerCase());
+  const expectedAnswer = String(card?.correct_answer || card?.answer || "");
+  const expectedAnswers = expectedAnswer.split("|").map((answer) => String(answer ?? "").trim().toLocaleLowerCase());
+  const isCorrect = (option: string) => expectedAnswers.includes(String(option ?? "").trim().toLocaleLowerCase());
   const checkboxMode = studySet?.type === "checkbox";
 
   return <main className="shared-shell">

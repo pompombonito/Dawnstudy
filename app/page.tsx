@@ -54,13 +54,13 @@ async function responseError(response: Response) {
   } catch { return `Request failed (${response.status}).`; }
 }
 
-function normalizedAnswer(value: string) {
-  return value.toLocaleLowerCase().trim().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+function normalizedAnswer(value: unknown) {
+  return String(value ?? "").toLocaleLowerCase().trim().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
-function isPracticeAnswerCorrect(card: Card, type: Kind, response: PracticeAnswer) {
-  if (response === null) return false;
-  const expected = (card.correct_answer || card.answer).split("|").map(normalizedAnswer).filter(Boolean).sort();
+function isPracticeAnswerCorrect(card: Card, type: Kind, response: PracticeAnswer | undefined) {
+  if (response === null || response === undefined) return false;
+  const expected = String(card.correct_answer || card.answer || "").split("|").map(normalizedAnswer).filter(Boolean).sort();
   if (type === "checkbox") {
     const actual = (Array.isArray(response) ? response : [response]).map(normalizedAnswer).filter(Boolean).sort();
     return actual.length === expected.length && actual.every((answer, index) => answer === expected[index]);
@@ -69,7 +69,7 @@ function isPracticeAnswerCorrect(card: Card, type: Kind, response: PracticeAnswe
   return normalizedAnswer(actual) === expected[0];
 }
 
-function displayPracticeAnswer(response: PracticeAnswer) {
+function displayPracticeAnswer(response: PracticeAnswer | undefined) {
   return Array.isArray(response) ? response.join(" · ") : response || "No answer";
 }
 
@@ -402,8 +402,8 @@ export default function Home() {
     ["bad_source", "Source reference is wrong"], ["other", "Other issue"],
   ];
   function renderMultipleChoice(card: Card) {
-    const correctAnswer = (card.correct_answer || card.answer).trim().toLocaleLowerCase();
-    const isCorrect = (option: string) => option.trim().toLocaleLowerCase() === correctAnswer;
+    const correctAnswer = normalizedAnswer(card.correct_answer || card.answer);
+    const isCorrect = (option: string) => normalizedAnswer(option) === correctAnswer;
     const selectedAnswer = selectedOption === null ? undefined : card.options?.[selectedOption];
     const selectedIsCorrect = Boolean(selectedAnswer && isCorrect(selectedAnswer));
     return <div className={`study-face choice-study-face ${revealed ? "is-revealed" : ""}`}>
