@@ -617,12 +617,91 @@ def choose_auto_model(
 
 
 class ProviderError(RuntimeError):
-    def __init__(self, provider: str, model_id: str, status: int | None, message: str, partial_items: list[dict[str, Any]] | None = None):
+    def __init__(
+        self,
+        provider: str,
+        model_id: str,
+        status: int | None,
+        message: str,
+        partial_items: list[dict[str, Any]] | None = None,
+        error_code: str | None = None,
+    ):
         super().__init__(message)
         self.provider = provider
         self.model_id = model_id
         self.status = status
         self.partial_items = partial_items or []
+        self.error_code = error_code
+
+
+def provider_error_code(response: requests.Response) -> str | None:
+    """Return only a provider's short error code, never its potentially sensitive message."""
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    if not isinstance(body, dict):
+        return None
+    error = body.get("error")
+    if isinstance(error, dict):
+        value = error.get("type") or error.get("status") or error.get("code")
+    else:
+        value = error
+    return str(value)[:80] if isinstance(value, (str, int)) else None
+
+
+def post_provider_json(url: str, headers: dict[str, str], payload: dict[str, Any]) -> requests.Response:
+    """Send UTF-8 JSON without expanding every non-ASCII character into a unicode escape."""
+    request_headers = {**headers, "Content-Type": "application/json; charset=utf-8"}
+    return requests.post(
+        url,
+        headers=request_headers,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        timeout=60,
+    )
+
+
+def compact_provider_prompt(prompt: str) -> str | None:
+    """Keep the start and end of course material when retrying an oversized request."""
+    compacted_prompt = prompt
+    match = re.search(r"(<course_material>\s*)(.*?)(\s*</course_material>)", prompt, re.DOTALL)
+    if match:
+        material = match.group(2)
+        if len(material) > 4_000:
+            marker = "\n[Middle of course material omitted after provider rejected the request size.]\n"
+            target_length = min(8_000, len(material) // 2)
+            content_length = max(0, target_length - len(marker))
+            keep_start = (content_length * 2) // 3
+            keep_end = content_length - keep_start
+            compacted_material = f"{material[:keep_start]}{marker}{material[-keep_end:]}"
+            compacted_prompt = prompt[:match.start(2)] + compacted_material + prompt[match.end(2):]
+
+    for history_marker in (
+        "Do not repeat or closely paraphrase these earlier questions: ",
+        "Do not repeat or closely paraphrase these already completed questions: ",
+    ):
+        before, separator, encoded_history = compacted_prompt.rpartition(history_marker)
+        if not separator:
+            continue
+        try:
+            history = json.loads(encoded_history)
+        except ValueError:
+            continue
+        if isinstance(history, list) and len(history) > 10:
+            compacted_prompt = before + separator + json.dumps(history[-10:], ensure_ascii=False)
+
+    return compacted_prompt if compacted_prompt != prompt else None
+
+
+def describe_provider_failure(error: ProviderError) -> str:
+    if error.status is None:
+        return str(error)
+    if 200 <= error.status < 300:
+        return str(error)
+    detail = f"HTTP {error.status}"
+    if error.error_code:
+        detail += f" ({error.error_code})"
+    return detail
 
 
 def salvage_complete_items(content: Any) -> list[dict[str, Any]]:
@@ -655,18 +734,16 @@ def generate_with_provider(provider: str, model: str, api_key: str, prompt: str,
     model_id = f"{provider}:{model}"
     try:
         if provider == "gemini":
-            response = requests.post(
+            response = post_provider_json(
                 f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
                 headers={"x-goog-api-key": api_key},
-                json={
+                payload={
                     "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                     "generationConfig": {
                         "responseFormat": {"text": {"mimeType": "APPLICATION_JSON", "schema": schema}},
-                        "temperature": 0.3,
                         "maxOutputTokens": max_tokens,
                     },
                 },
-                timeout=60,
             )
         else:
             base_url = {
@@ -678,17 +755,16 @@ def generate_with_provider(provider: str, model: str, api_key: str, prompt: str,
             if provider == "openrouter":
                 headers["HTTP-Referer"] = "https://dawnstudy.vercel.app"
                 headers["X-Title"] = "Dawnstudy"
-            response = requests.post(
+            response = post_provider_json(
                 base_url,
                 headers=headers,
-                json={
+                payload={
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "response_format": {"type": "json_object"},
                     "temperature": 0.3,
                     ("max_completion_tokens" if provider == "groq" else "max_tokens"): max_tokens,
                 },
-                timeout=60,
             )
     except requests.Timeout as exc:
         raise ProviderError(provider, model_id, None, "request timed out") from exc
@@ -696,7 +772,13 @@ def generate_with_provider(provider: str, model: str, api_key: str, prompt: str,
         raise ProviderError(provider, model_id, None, "network request failed") from exc
 
     if not response.ok:
-        raise ProviderError(provider, model_id, response.status_code, "provider returned an error")
+        raise ProviderError(
+            provider,
+            model_id,
+            response.status_code,
+            "provider returned an error",
+            error_code=provider_error_code(response),
+        )
     content = ""
     try:
         body = response.json()
@@ -890,14 +972,21 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
             failed_reason = None
             retryable_response = False
             try:
-                payload = generate_with_provider(provider, model, api_key, model_prompt, model_schema, max_tokens)
+                try:
+                    payload = generate_with_provider(provider, model, api_key, model_prompt, model_schema, max_tokens)
+                except ProviderError as exc:
+                    compacted_prompt = compact_provider_prompt(model_prompt) if exc.status == 413 else None
+                    if not compacted_prompt:
+                        raise
+                    print(f"AI provider {provider} ({model}) rejected request size; retrying with a compact source excerpt")
+                    payload = generate_with_provider(provider, model, api_key, compacted_prompt, model_schema, max_tokens)
                 retryable_response = True
                 if not title:
                     title = str(payload.get("title") or "").strip()
                 candidates = safe_model_items(payload.get("items"))
             except ProviderError as exc:
                 failures.append(exc)
-                print(f"AI provider {provider} ({model}) failed: HTTP {exc.status}" if exc.status else f"AI provider {provider} ({model}) failed: {exc}")
+                print(f"AI provider {provider} ({model}) failed: {describe_provider_failure(exc)}")
                 candidates = safe_model_items(exc.partial_items)
                 failed_reason = provider_failure_reason(exc)
                 # A 2xx invalid/truncated JSON response can be salvaged and
@@ -946,15 +1035,14 @@ def generate_voice_reply(provider: str, model: str, api_key: str, system_prompt:
                 for item in history
             ]
             contents.append({"role": "user", "parts": [{"text": message}]})
-            response = requests.post(
+            response = post_provider_json(
                 f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
                 headers={"x-goog-api-key": api_key},
-                json={
+                payload={
                     "systemInstruction": {"parts": [{"text": system_prompt}]},
                     "contents": contents,
-                    "generationConfig": {"temperature": 0.65, "maxOutputTokens": 350},
+                    "generationConfig": {"maxOutputTokens": 350},
                 },
-                timeout=60,
             )
         else:
             base_url = {
@@ -965,10 +1053,10 @@ def generate_voice_reply(provider: str, model: str, api_key: str, system_prompt:
             headers = {"Authorization": f"Bearer {api_key}"}
             if provider == "openrouter":
                 headers.update({"HTTP-Referer": "https://dawnstudy.vercel.app", "X-Title": "Dawnstudy"})
-            response = requests.post(
+            response = post_provider_json(
                 base_url,
                 headers=headers,
-                json={
+                payload={
                     "model": model,
                     "messages": [
                         {"role": "system", "content": system_prompt},
@@ -978,7 +1066,6 @@ def generate_voice_reply(provider: str, model: str, api_key: str, system_prompt:
                     "temperature": 0.65,
                     "max_tokens": 350,
                 },
-                timeout=60,
             )
     except requests.Timeout as exc:
         raise ProviderError(provider, model_id, None, "request timed out") from exc
