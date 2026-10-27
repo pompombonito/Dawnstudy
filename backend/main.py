@@ -90,6 +90,11 @@ AI_MODELS = {
     "gemini:gemini-3.5-flash-lite": ("gemini", "gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite"),
     "gemini:gemini-3.1-flash-lite": ("gemini", "gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite"),
     "mistral:mistral-small-latest": ("mistral", "mistral-small-latest", "Mistral Small"),
+    "mistral:ministral-8b-latest": ("mistral", "ministral-8b-latest", "Ministral 3 8B"),
+    "mistral:mistral-medium-latest": ("mistral", "mistral-medium-latest", "Mistral Medium 3.5"),
+    "openrouter:qwen/qwen3.8-27b:free": ("openrouter", "qwen/qwen3.8-27b:free", "Qwen 3.8 27B (Free)"),
+    "openrouter:google/gemma-4-26b-a4b-it:free": ("openrouter", "google/gemma-4-26b-a4b-it:free", "Gemma 4 26B (Free)"),
+    "openrouter:google/gemma-4-31b-it:free": ("openrouter", "google/gemma-4-31b-it:free", "Gemma 4 31B (Free)"),
     "openrouter:openrouter/free": ("openrouter", "openrouter/free", "OpenRouter Free Model Router"),
 }
 DEFAULT_MODEL_ORDER = ",".join(AI_MODELS)
@@ -542,7 +547,11 @@ def configured_ai_models() -> list[tuple[str, str, str, str, str]]:
     requested_order = os.getenv("AI_MODEL_ORDER", DEFAULT_MODEL_ORDER)
     configured = []
     seen = set()
-    for model_id in [item.strip() for item in requested_order.split(",")]:
+    requested_model_ids = [item.strip() for item in requested_order.split(",")]
+    # AI_MODEL_ORDER historically controlled ordering. Append newly supported
+    # models as well, so an older Render environment value does not hide them.
+    requested_model_ids.extend(model_id for model_id in AI_MODELS if model_id not in requested_model_ids)
+    for model_id in requested_model_ids:
         model_info = AI_MODELS.get(model_id)
         if not model_info or model_id in seen:
             continue
@@ -575,8 +584,13 @@ def choose_auto_model(
             "gemini:gemini-3.6-flash",
             "gemini:gemini-3.7-flash",
             "gemini:gemini-3.8-flash",
+            "openrouter:qwen/qwen3.8-27b:free",
+            "openrouter:google/gemma-4-26b-a4b-it:free",
+            "openrouter:google/gemma-4-31b-it:free",
             "openrouter:openrouter/free",
             "mistral:mistral-small-latest",
+            "mistral:ministral-8b-latest",
+            "mistral:mistral-medium-latest",
         ]
     elif text_chars >= 14_000 or question_count >= 40 or (file_bytes >= 8 * 1024 * 1024 and text_chars >= 8_000):
         tier = "large"
@@ -589,8 +603,13 @@ def choose_auto_model(
             "gemini:gemini-3.6-flash",
             "gemini:gemini-3.5-flash-lite",
             "gemini:gemini-3.1-flash-lite",
+            "openrouter:qwen/qwen3.8-27b:free",
+            "openrouter:google/gemma-4-31b-it:free",
+            "openrouter:google/gemma-4-26b-a4b-it:free",
             "openrouter:openrouter/free",
             "mistral:mistral-small-latest",
+            "mistral:mistral-medium-latest",
+            "mistral:ministral-8b-latest",
         ]
     else:
         tier = "balanced"
@@ -603,8 +622,13 @@ def choose_auto_model(
             "gemini:gemini-3.6-flash",
             "gemini:gemini-3.7-flash",
             "gemini:gemini-3.8-flash",
+            "openrouter:qwen/qwen3.8-27b:free",
+            "openrouter:google/gemma-4-26b-a4b-it:free",
+            "openrouter:google/gemma-4-31b-it:free",
             "openrouter:openrouter/free",
             "mistral:mistral-small-latest",
+            "mistral:ministral-8b-latest",
+            "mistral:mistral-medium-latest",
         ]
 
     configured_ids = {choice[0] for choice in models}
@@ -749,16 +773,78 @@ def salvage_complete_items(content: Any) -> list[dict[str, Any]]:
     return recovered
 
 
+def strict_json_schema(schema: Any) -> Any:
+    """Normalize the study-set schema for providers' strict JSON-schema modes."""
+    if isinstance(schema, list):
+        return [strict_json_schema(value) if isinstance(value, (dict, list)) else value for value in schema]
+    if not isinstance(schema, dict):
+        return schema
+    normalized = {
+        key: strict_json_schema(value) if isinstance(value, (dict, list)) else value
+        for key, value in schema.items()
+        if key != "maxItems"
+    }
+    if normalized.get("type") == "object":
+        properties = normalized.get("properties", {})
+        normalized["required"] = list(properties)
+        normalized["additionalProperties"] = False
+    return normalized
+
+
+def parse_study_set_json(content: Any) -> dict[str, Any]:
+    """Parse a study-set object, tolerating code fences or text around valid JSON."""
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("response was empty")
+
+    def is_study_set(value: Any) -> bool:
+        return isinstance(value, dict) and isinstance(value.get("items"), list)
+
+    stripped = content.strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", stripped, flags=re.IGNORECASE | re.DOTALL)
+    if fenced:
+        stripped = fenced.group(1).strip()
+    try:
+        payload = json.loads(stripped)
+        if is_study_set(payload):
+            return payload
+    except json.JSONDecodeError:
+        pass
+
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", content):
+        try:
+            payload, _end = decoder.raw_decode(content, match.start())
+        except json.JSONDecodeError:
+            continue
+        if is_study_set(payload):
+            return payload
+    raise ValueError("response did not contain a study-set JSON object")
+
+
 def generate_with_provider(provider: str, model: str, api_key: str, prompt: str, schema: dict[str, Any], max_tokens: int) -> dict[str, Any]:
     """Call one provider and normalize its JSON response."""
     model_id = f"{provider}:{model}"
+    strict_json_models = {
+        ("groq", "openai/gpt-oss-120b"),
+        ("groq", "openai/gpt-oss-20b"),
+        ("groq", "qwen/qwen3.8-27b"),
+        ("openrouter", "qwen/qwen3.8-27b:free"),
+    }
+    strict_json = (provider, model) in strict_json_models
+    provider_prompt = prompt
+    if strict_json:
+        provider_prompt += (
+            "\n\nJSON contract: include every field in the requested schema for every item. "
+            "When a field is not used by this study format, return an empty string for text fields "
+            "and an empty array for list fields. Return the title and items fields exactly as specified."
+        )
     try:
         if provider == "gemini":
             response = post_provider_json(
                 f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
                 headers={"x-goog-api-key": api_key},
                 payload={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                    "contents": [{"role": "user", "parts": [{"text": provider_prompt}]}],
                     "generationConfig": {
                         "responseFormat": {"text": {"mimeType": "APPLICATION_JSON", "schema": schema}},
                         "maxOutputTokens": max_tokens,
@@ -775,17 +861,41 @@ def generate_with_provider(provider: str, model: str, api_key: str, prompt: str,
             if provider == "openrouter":
                 headers["HTTP-Referer"] = "https://dawnstudy.vercel.app"
                 headers["X-Title"] = "Dawnstudy"
+            response_format = {"type": "json_object"}
+            if strict_json:
+                response_format = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "dawnstudy_study_set",
+                        "strict": True,
+                        "schema": strict_json_schema(schema),
+                    },
+                }
+            request_payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": provider_prompt}],
+                "response_format": response_format,
+                "temperature": 0.3,
+                ("max_completion_tokens" if provider == "groq" else "max_tokens"): max_tokens,
+            }
+            if provider == "openrouter":
+                # OpenRouter can route a model alias across multiple providers.
+                # Require each endpoint to honor JSON mode/schema instead of
+                # silently selecting one that ignores response_format.
+                request_payload["provider"] = {"require_parameters": True}
             response = post_provider_json(
                 base_url,
                 headers=headers,
-                payload={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "response_format": {"type": "json_object"},
-                    "temperature": 0.3,
-                    ("max_completion_tokens" if provider == "groq" else "max_tokens"): max_tokens,
-                },
+                payload=request_payload,
             )
+            if not response.ok and strict_json:
+                error_code, _error_field = provider_error_diagnostics(response)
+                if error_code == "json_validate_failed":
+                    # If an upstream rejects constrained decoding itself, retry
+                    # once in JSON mode and let our parser validate the shape.
+                    print(f"AI provider {provider} ({model}) rejected strict JSON; retrying in JSON mode")
+                    request_payload["response_format"] = {"type": "json_object"}
+                    response = post_provider_json(base_url, headers=headers, payload=request_payload)
     except requests.Timeout as exc:
         raise ProviderError(provider, model_id, None, "request timed out") from exc
     except requests.RequestException as exc:
@@ -825,9 +935,14 @@ def generate_with_provider(provider: str, model: str, api_key: str, prompt: str,
             else:
                 # Refusals and empty model responses can have content=null.
                 content = ""
-        payload = json.loads(content)
-        if not isinstance(payload, dict):
-            raise ValueError("response was not a JSON object")
+        payload = parse_study_set_json(content)
+        if not any(
+            isinstance(item, dict)
+            and str(item.get("question") or "").strip()
+            and str(item.get("answer") or "").strip()
+            for item in payload["items"]
+        ):
+            raise ValueError("response contained no valid study items")
         return payload
     except (ValueError, KeyError, TypeError, AttributeError, IndexError) as exc:
         raise ProviderError(provider, model_id, response.status_code, "provider returned invalid JSON", salvage_complete_items(content)) from exc
