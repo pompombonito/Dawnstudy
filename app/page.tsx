@@ -19,6 +19,7 @@ type ModelOption = { id: string; provider: string; name: string };
 type Theme = "dark" | "light";
 type PracticeAnswer = string | string[] | null;
 type VoiceMode = "multiple_choice" | "identification" | "open_ended" | "enumeration";
+type VoicePersona = "warm_tutor" | "calm_mentor" | "energetic_coach" | "clear_lecturer";
 
 type GoogleIdResponse = { credential: string };
 type VoiceTurn = { role: "user" | "assistant"; content: string };
@@ -32,6 +33,14 @@ const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
 const TOKEN_KEY = "dawnstudy_session_v1";
 const THEME_KEY = "dawnstudy_theme_v1";
+const VOICE_PERSONA_KEY = "dawnstudy_voice_persona_v1";
+const VOICE_DEVICE_KEY = "dawnstudy_device_voice_v1";
+const voicePersonas: { id: VoicePersona; name: string; rate: number; pitch: number }[] = [
+  { id: "warm_tutor", name: "Warm tutor", rate: 0.96, pitch: 1.04 },
+  { id: "calm_mentor", name: "Calm mentor", rate: 0.88, pitch: 0.92 },
+  { id: "energetic_coach", name: "Energetic coach", rate: 1.08, pitch: 1.12 },
+  { id: "clear_lecturer", name: "Clear lecturer", rate: 0.94, pitch: 0.98 },
+];
 const types: { id: Kind; title: string; detail: string; icon: typeof Layers3 }[] = [
   { id: "flashcards", title: "Flashcards", detail: "Quick question & answer pairs", icon: Layers3 },
   { id: "multiple_choice", title: "Multiple choice", detail: "Choose the best answer", icon: CircleHelp },
@@ -140,6 +149,10 @@ export default function Home() {
   const [voiceTopic, setVoiceTopic] = useState("");
   const [voiceMode, setVoiceMode] = useState<VoiceMode>("open_ended");
   const [voiceModelChoice, setVoiceModelChoice] = useState("auto");
+  const [voicePersona, setVoicePersona] = useState<VoicePersona>("warm_tutor");
+  const [deviceVoiceURI, setDeviceVoiceURI] = useState("");
+  const [deviceVoices, setDeviceVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [speechAvailable, setSpeechAvailable] = useState(false);
   const [voiceMessages, setVoiceMessages] = useState<VoiceTurn[]>([]);
   const [voiceActive, setVoiceActive] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState(false);
@@ -199,6 +212,9 @@ export default function Home() {
     const initialTheme: Theme = savedTheme === "light" ? "light" : "dark";
     document.documentElement.dataset.theme = initialTheme;
     setTheme(initialTheme);
+    const savedPersona = localStorage.getItem(VOICE_PERSONA_KEY) as VoicePersona | null;
+    if (savedPersona && voicePersonas.some((persona) => persona.id === savedPersona)) setVoicePersona(savedPersona);
+    setDeviceVoiceURI(localStorage.getItem(VOICE_DEVICE_KEY) || "");
     setSets([]);
     if (API_BASE) {
       fetch(`${API_BASE}/api/models`).then((response) => response.ok ? response.json() : null)
@@ -215,6 +231,18 @@ export default function Home() {
         void loadAccountSets(token);
       })
       .catch(() => { localStorage.removeItem(TOKEN_KEY); setAuthToken(""); setAccount(null); });
+  }, []);
+
+  useEffect(() => {
+    if (!("speechSynthesis" in window)) return;
+    setSpeechAvailable(true);
+    const refreshDeviceVoices = () => {
+      const available = window.speechSynthesis.getVoices();
+      setDeviceVoices(available);
+    };
+    refreshDeviceVoices();
+    window.speechSynthesis.addEventListener("voiceschanged", refreshDeviceVoices);
+    return () => window.speechSynthesis.removeEventListener("voiceschanged", refreshDeviceVoices);
   }, []);
 
   useEffect(() => {
@@ -391,7 +419,12 @@ export default function Home() {
     if (!("speechSynthesis" in window)) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = navigator.language || "en-US";
+    const voice = deviceVoices.find((item) => item.voiceURI === deviceVoiceURI);
+    const persona = voicePersonas.find((item) => item.id === voicePersona) || voicePersonas[0];
+    utterance.voice = voice || null;
+    utterance.lang = voice?.lang || navigator.language || "en-US";
+    utterance.rate = persona.rate;
+    utterance.pitch = persona.pitch;
     window.speechSynthesis.speak(utterance);
   }
 
@@ -741,8 +774,10 @@ export default function Home() {
               <label>What topic do you want to review?<input value={voiceTopic} onChange={(event) => setVoiceTopic(event.target.value)} maxLength={200} placeholder="e.g. Cell division, pharmacology, or network layers"/></label>
               <label>Practice format<select value={voiceMode} onChange={(event) => setVoiceMode(event.target.value as VoiceMode)}><option value="multiple_choice">Multiple Choice Questions</option><option value="identification">Identification</option><option value="open_ended">Open-ended Questions</option><option value="enumeration">Enumeration</option></select></label>
               <label>Conversation model<select value={voiceModelChoice} onChange={(event) => setVoiceModelChoice(event.target.value)}><option value="auto">Auto · switch if a model is busy or limited</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select></label>
+              <label>Voice persona<select value={voicePersona} onChange={(event) => { const value = event.target.value as VoicePersona; setVoicePersona(value); localStorage.setItem(VOICE_PERSONA_KEY, value); }}>{voicePersonas.map((persona) => <option key={persona.id} value={persona.id}>{persona.name}</option>)}</select></label>
+              <div className="voice-device-choice"><label>Device voice<select value={deviceVoiceURI} onChange={(event) => { setDeviceVoiceURI(event.target.value); if (event.target.value) localStorage.setItem(VOICE_DEVICE_KEY, event.target.value); else localStorage.removeItem(VOICE_DEVICE_KEY); }}><option value="">Device default</option>{deviceVoiceURI && !deviceVoices.some((voice) => voice.voiceURI === deviceVoiceURI) && <option value={deviceVoiceURI}>Saved voice unavailable · use default</option>}{[...deviceVoices].sort((a, b) => Number(b.default) - Number(a.default) || a.name.localeCompare(b.name)).map((voice) => <option key={voice.voiceURI} value={voice.voiceURI}>{voice.name} · {voice.lang}</option>)}</select></label><button className="voice-preview" type="button" disabled={!speechAvailable} onClick={() => speakVoiceReply("Hello! I’m ready to help you review.")} aria-label="Preview selected voice" title="Preview selected voice"><Volume2 size={15}/></button></div>
               <button className="voice-start" type="button" onClick={beginVoiceReview} disabled={voiceBusy}><Mic size={16}/> Start voice review</button>
-              <p className="voice-privacy">Dawnstudy records up to 30 seconds per reply and transcribes it through a configured AI provider. Audio is sent to that provider; provider quotas or rates may apply. Replies are read aloud by your browser.</p>
+              <p className="voice-privacy">Choose a speaking style and an available device voice. Replies use your browser’s voice engine; the voice choices depend on your device. Dawnstudy records up to 30 seconds per reply and sends the audio to a configured AI provider for transcription. Provider quotas or rates may apply.</p>
             </div> : <div className="voice-session">
               <div className="voice-session-bar"><div><strong>Reviewing: {voiceTopic}</strong><small>{voiceMode.replaceAll("_", " ")} · {voiceModelUsed ? "Answered by " + modelName(voiceModelUsed) : "Connecting to your selected model…"}</small></div><button type="button" className="voice-end" onClick={endVoiceReview}>End review</button></div>
               {voiceFallbackNote && <p className="voice-fallback">{voiceFallbackNote}</p>}
