@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+import random
 import re
 import secrets
 import threading
@@ -40,6 +41,12 @@ _user_write_lock = threading.Lock()
 _usage_write_lock = threading.Lock()
 _set_write_lock = threading.Lock()
 _review_write_lock = threading.Lock()
+_row_cache_lock = threading.Lock()
+_row_cache: dict[tuple[str, tuple[str, ...]], tuple[float, list[tuple[int, dict[str, str]]]]] = {}
+_row_cache_ttl = 2.0
+_row_cache_max_characters = 2_000_000
+_cached_row_tabs = {USERS_TAB, SETS_TAB}
+_sheets_retry_count = 4
 
 
 class StorageError(RuntimeError):
@@ -72,6 +79,30 @@ def _credentials():
         raise StorageError("GOOGLE_SERVICE_ACCOUNT_JSON is not valid service-account JSON.") from exc
 
 
+def _invalidate_rows(tab: str) -> None:
+    with _row_cache_lock:
+        for key in [key for key in _row_cache if key[0] == tab]:
+            _row_cache.pop(key, None)
+
+
+def _parse_rows(values: list[list[Any]], columns: list[str]) -> list[tuple[int, dict[str, str]]]:
+    results = []
+    for row_number, row in enumerate(values[1:], start=2):
+        padded = list(row[: len(columns)]) + [""] * max(0, len(columns) - len(row))
+        results.append((row_number, dict(zip(columns, map(str, padded)))))
+    return results
+
+
+def _sheets_retry_delay(response: requests.Response, attempt: int) -> float:
+    retry_after = response.headers.get("Retry-After", "")
+    try:
+        requested_delay = float(retry_after)
+    except (TypeError, ValueError):
+        requested_delay = 0.0
+    backoff = min(8.0, 2.0 ** attempt)
+    return min(8.0, max(backoff, requested_delay)) + random.uniform(0.0, 0.5)
+
+
 def _api(method: str, path: str, *, params: dict[str, str] | None = None, body: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
         credentials = _credentials()
@@ -82,19 +113,34 @@ def _api(method: str, path: str, *, params: dict[str, str] | None = None, body: 
     except Exception as exc:
         raise StorageError("Google Sheets service-account authentication failed. Check the JSON key configured on Render.") from exc
     url = f"https://sheets.googleapis.com/v4/spreadsheets/{quote(_spreadsheet_id(), safe='')}{path}"
-    try:
-        response = requests.request(
-            method,
-            url,
-            headers={"Authorization": f"Bearer {credentials.token}"},
-            params=params,
-            json=body,
-            timeout=20,
-        )
-    except requests.RequestException as exc:
-        raise StorageError("Could not connect to the Google Sheets API.") from exc
+    response = None
+    for attempt in range(_sheets_retry_count + 1):
+        try:
+            response = requests.request(
+                method,
+                url,
+                headers={"Authorization": f"Bearer {credentials.token}"},
+                params=params,
+                json=body,
+                timeout=20,
+            )
+        except requests.RequestException as exc:
+            raise StorageError("Could not connect to the Google Sheets API.") from exc
+        if response.status_code != 429 or attempt == _sheets_retry_count:
+            break
+        delay = _sheets_retry_delay(response, attempt)
+        print(f"Google Sheets API rate-limited a request (HTTP 429); retrying in {delay:.1f}s ({attempt + 1}/{_sheets_retry_count}).")
+        time.sleep(delay)
+    if response is None:
+        raise StorageError("Could not connect to the Google Sheets API.")
+    if response.status_code == 429:
+        raise StorageError("Google Sheets is temporarily rate-limiting Dawnstudy (HTTP 429). Please wait a minute and try again.")
+    if response.status_code == 403:
+        raise StorageError("Google Sheets denied access (HTTP 403). Check that the Sheets API is enabled and the service account can edit the spreadsheet.")
+    if response.status_code == 404:
+        raise StorageError("The configured Google Sheets spreadsheet was not found. Check GOOGLE_SHEETS_SPREADSHEET_ID on Render.")
     if response.status_code >= 400:
-        raise StorageError(f"Google Sheets API returned HTTP {response.status_code}. Check that the Sheets API is enabled and the service account can edit the spreadsheet.")
+        raise StorageError(f"Google Sheets API returned HTTP {response.status_code}.")
     try:
         return response.json() if response.content else {}
     except ValueError as exc:
@@ -128,15 +174,29 @@ def ensure_schema() -> None:
         _schema_ready = True
 
 
-def _rows(tab: str, columns: list[str]) -> list[tuple[int, dict[str, str]]]:
+def _rows(tab: str, columns: list[str], *, use_cache: bool = True) -> list[tuple[int, dict[str, str]]]:
     ensure_schema()
     range_name = quote(f"{tab}!A:{chr(64 + len(columns))}", safe="!:")
-    values = _api("GET", f"/values/{range_name}").get("values", [])
-    results = []
-    for row_number, row in enumerate(values[1:], start=2):
-        padded = list(row[: len(columns)]) + [""] * max(0, len(columns) - len(row))
-        results.append((row_number, dict(zip(columns, map(str, padded)))))
-    return results
+    cache_key = (tab, tuple(columns))
+
+    def read_rows() -> list[tuple[int, dict[str, str]]]:
+        values = _api("GET", f"/values/{range_name}").get("values", [])
+        return _parse_rows(values, columns)
+
+    if not use_cache or tab not in _cached_row_tabs:
+        return read_rows()
+    # Keep the lock through cache fills to collapse simultaneous requests into one Sheets read.
+    with _row_cache_lock:
+        cached = _row_cache.get(cache_key)
+        if cached and time.monotonic() - cached[0] < _row_cache_ttl:
+            return [(number, dict(row)) for number, row in cached[1]]
+        results = read_rows()
+        cache_characters = sum(len(key) + len(value) for _, row in results for key, value in row.items())
+        if cache_characters <= _row_cache_max_characters:
+            _row_cache[cache_key] = (time.monotonic(), results)
+        else:
+            _row_cache.pop(cache_key, None)
+        return [(number, dict(row)) for number, row in results]
 
 
 def _append(tab: str, row: list[str]) -> None:
@@ -148,6 +208,7 @@ def _append(tab: str, row: list[str]) -> None:
         params={"valueInputOption": "RAW", "insertDataOption": "INSERT_ROWS"},
         body={"values": [row]},
     )
+    _invalidate_rows(tab)
 
 
 def _update_user(row_number: int, user: dict[str, str]) -> None:
@@ -158,6 +219,7 @@ def _update_user(row_number: int, user: dict[str, str]) -> None:
         params={"valueInputOption": "RAW"},
         body={"values": [[user.get(column, "") for column in USER_COLUMNS]]},
     )
+    _invalidate_rows(USERS_TAB)
 
 
 def list_users() -> list[tuple[int, dict[str, str]]]:
@@ -224,7 +286,7 @@ def delete_study_set(user_id: str, set_id: str) -> bool:
         row_number = next(
             (
                 row_number
-                for row_number, row in _rows(SETS_TAB, SET_COLUMNS)
+                for row_number, row in _rows(SETS_TAB, SET_COLUMNS, use_cache=False)
                 if row["user_id"] == user_id and row["set_id"] == set_id
             ),
             None,
@@ -261,6 +323,7 @@ def delete_study_set(user_id: str, set_id: str) -> bool:
                 ]
             },
         )
+        _invalidate_rows(SETS_TAB)
         _delete_rows_for_set(PROGRESS_TAB, PROGRESS_COLUMNS, user_id, set_id)
         _delete_rows_for_set(REVIEWS_TAB, REVIEW_COLUMNS, user_id, set_id)
         _delete_rows_for_set(SHARES_TAB, SHARE_COLUMNS, user_id, set_id)
