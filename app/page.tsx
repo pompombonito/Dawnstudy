@@ -9,7 +9,7 @@ import {
 
 type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification";
 type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string; source_refs?: string[] };
-type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; created_at: string; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; usage?: { remaining: number; limit: number; resets_at: string } };
+type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; created_at: string; material_fingerprint?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; usage?: { remaining: number; limit: number; resets_at: string } };
 type ReviewItem = { study_set_id: string; study_set_title: string; type: Kind; card: Card; retried?: boolean; intervals: { again: string; hard: string; good: string; easy: string } };
 type Progress = { total_reviews: number; reviewed_today: number; accuracy: number; current_streak: number; best_streak: number; due_count: number; total_cards: number; week: { date: string; reviews: number }[] };
 type Account = { id: string; username: string; email: string; display_name: string };
@@ -45,6 +45,15 @@ function ageLabel(value: string) {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return days === 1 ? "Yesterday" : `${days}d ago`;
+}
+
+function shuffleItems<T>(items: T[]) {
+  const shuffled = [...items];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swap = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[swap]] = [shuffled[swap], shuffled[index]];
+  }
+  return shuffled;
 }
 
 async function responseError(response: Response) {
@@ -194,11 +203,11 @@ export default function Home() {
   }, [authOpen]);
 
   useEffect(() => {
-    if (!practiceActive || practiceComplete) return;
+    if (!practiceActive || practiceComplete || practiceSecondsPerQuestion === 0) return;
     if (practiceTimeLeft <= 0) { setPracticeComplete(true); return; }
     const timeout = window.setTimeout(() => setPracticeTimeLeft((seconds) => seconds - 1), 1000);
     return () => window.clearTimeout(timeout);
-  }, [practiceActive, practiceComplete, practiceTimeLeft]);
+  }, [practiceActive, practiceComplete, practiceTimeLeft, practiceSecondsPerQuestion]);
 
   function acceptLogin(data: LoginResult) {
     localStorage.setItem(TOKEN_KEY, data.token);
@@ -248,12 +257,13 @@ export default function Home() {
         generationNotice = [generationNotice, `${original} ${issue}; ${fallbackModel} helped finish the set.`].filter(Boolean).join(" ");
       }
       if (data.incomplete) generationNotice = [generationNotice, `Only ${data.items.length} of ${data.requested_count} requested questions could be completed by the available models.`].filter(Boolean).join(" ");
+      if (data.previous_question_count) generationNotice = [generationNotice, `Checked ${data.previous_question_count} questions from your earlier sets to avoid repeats.`].filter(Boolean).join(" ");
       if (data.usage) generationNotice = [generationNotice, `${data.usage.remaining} of ${data.usage.limit} generations left today${authToken ? " for your account" : " in this browser"}.`].filter(Boolean).join(" ");
       setResult(studySet); setCurrent(0); setRevealed(false); setSelectedOption(null); setShareUrl(""); setPracticeActive(false);
       const saved = await fetch(`${API_BASE}/api/study-sets`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({ title: studySet.title, type: studySet.type, items: studySet.items, sources: studySet.sources || [] }),
+        body: JSON.stringify({ title: studySet.title, type: studySet.type, items: studySet.items, sources: studySet.sources || [], material_fingerprint: studySet.material_fingerprint }),
       });
       if (!saved.ok) throw new Error(await responseError(saved));
       const savedSet: StudySet = await saved.json();
@@ -288,14 +298,14 @@ export default function Home() {
   }
 
   function openSavedSet(studySet: StudySet) {
-    setReviewActive(false); setPracticeActive(false); setPracticeComplete(false); setShareUrl(""); setResult(studySet); setSelected(studySet.type); setCurrent(0); setRevealed(false); setSelectedOption(null); setError(""); setNotice("");
+    setReviewActive(false); setPracticeActive(false); setPracticeComplete(false); setShareUrl(""); setResult({ ...studySet, items: shuffleItems(studySet.items) }); setSelected(studySet.type); setCurrent(0); setRevealed(false); setSelectedOption(null); setError(""); setNotice("");
     document.querySelector(".result-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function startPractice() {
     if (!result) return;
     setPracticeAnswers(Array.from({ length: result.items.length }, () => null));
-    setPracticeIndex(0); setPracticeTimeLeft(result.items.length * practiceSecondsPerQuestion);
+    setPracticeIndex(0); setPracticeTimeLeft(practiceSecondsPerQuestion === 0 ? 0 : result.items.length * practiceSecondsPerQuestion);
     setPracticeComplete(false); setPracticeActive(true); setError("");
   }
 
@@ -466,9 +476,9 @@ export default function Home() {
           {notice && <div className="notice-box"><Check size={15}/><span>{notice}</span></div>}
           {reviewActive && <section className="review-panel"><div className="result-head"><div><div className="result-kicker"><span/> SPACED REPETITION</div><h2>{reviewQueue.length ? reviewQueue[0].study_set_title : "Review complete"}</h2><p>{reviewQueue.length ? `${reviewQueue.length} cards in this session · ${reviewQueue[0].type.replaceAll("_", " ")}` : "You’re all caught up for now. Nice work showing up."}</p></div><button className="plain-icon" title="Close review" onClick={() => { setReviewActive(false); setReviewQueue([]); setSelectedOption(null); }}><X size={18}/></button></div>{reviewQueue.length ? <div className="study-card"><div className="study-card-top"><span className="flashcard-label">REVIEW {reviewQueue.length} LEFT</span></div>{reviewQueue[0].type === "multiple_choice" && reviewQueue[0].card.options?.length ? renderMultipleChoice(reviewQueue[0].card) : <button className={`study-face ${revealed ? "is-revealed" : ""}`} onClick={() => setRevealed(!revealed)}><span className="face-label">{revealed ? "THE ANSWER" : "YOUR QUESTION"}</span><span className="face-question">{revealed ? reviewQueue[0].card.answer : reviewQueue[0].card.question}</span>{!revealed && <span className="tap-hint">Tap to reveal <span>↗</span></span>}</button>}{revealed && reviewQueue[0].card.explanation && <p className="explanation">{reviewQueue[0].card.explanation}</p>}{revealed && <div className="rating-row"><button disabled={reviewBusy} onClick={() => void gradeCard("again")}><b>Again</b><small>{reviewQueue[0].intervals.again}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("hard")}><b>Hard</b><small>{reviewQueue[0].intervals.hard}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("good")}><b>Good</b><small>{reviewQueue[0].intervals.good}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("easy")}><b>Easy</b><small>{reviewQueue[0].intervals.easy}</small></button></div>}</div> : <button className="review-done" onClick={() => { setReviewActive(false); setReviewQueue([]); }}>Back to study desk <ChevronRight size={15}/></button>}</section>}
           {result && practiceActive && !reviewActive && <section className="practice-panel">
-            <div className="result-head"><div><div className="result-kicker"><span/> TIMED PRACTICE TEST</div><h2>{result.title}</h2><p>{practiceComplete ? "Test results and missed answers" : `${result.items.length} questions · ${practiceSecondsPerQuestion} seconds per question`}</p></div><button className="plain-icon" title="Exit practice test" onClick={() => { setPracticeActive(false); setPracticeComplete(false); }}><X size={18}/></button></div>
+            <div className="result-head"><div><div className="result-kicker"><span/> {practiceSecondsPerQuestion === 0 ? "SELF-PACED PRACTICE" : "TIMED PRACTICE TEST"}</div><h2>{result.title}</h2><p>{practiceComplete ? "Test results and missed answers" : `${result.items.length} questions · ${practiceSecondsPerQuestion === 0 ? "no time limit" : `${practiceSecondsPerQuestion} seconds per question`}`}</p></div><button className="plain-icon" title="Exit practice test" onClick={() => { setPracticeActive(false); setPracticeComplete(false); }}><X size={18}/></button></div>
             {!practiceComplete && practiceCard ? <>
-              <div className="practice-timer"><AlarmClock size={18}/><span>{Math.floor(practiceTimeLeft / 60)}:{String(practiceTimeLeft % 60).padStart(2, "0")} remaining</span><span className="practice-progress">Question {practiceIndex + 1} of {result.items.length}</span></div>
+              <div className="practice-timer"><AlarmClock size={18}/><span>{practiceSecondsPerQuestion === 0 ? "No time limit" : `${Math.floor(practiceTimeLeft / 60)}:${String(practiceTimeLeft % 60).padStart(2, "0")} remaining`}</span><span className="practice-progress">Question {practiceIndex + 1} of {result.items.length}</span></div>
               <div className="practice-question"><span className="face-label">QUESTION {practiceIndex + 1}</span><h3>{practiceCard.question}</h3>
                 {practiceCard.options?.length ? <div className="practice-choices">{practiceCard.options.map((option, index) => {
                   const checkboxMode = result.type === "checkbox";
@@ -486,7 +496,7 @@ export default function Home() {
             </> : null}
           </section>}
           {result && currentCard && !reviewActive && !practiceActive && <section className="result-panel"><div className="result-head"><div><div className="result-kicker"><span/> YOUR STUDY SET</div><h2>{result.title}</h2><p>{result.items.length} {types.find((type) => type.id === result.type)?.title.toLowerCase()} · ready when you are{result.model ? ` · ${modelName(result.model)}` : ""}</p></div><button className="plain-icon" title="Close study set" onClick={() => setResult(null)}><X size={18}/></button></div>
-            <div className="set-action-row"><label>Test pace<select value={practiceSecondsPerQuestion} onChange={(event) => setPracticeSecondsPerQuestion(Number(event.target.value))}><option value={20}>20 sec / question</option><option value={30}>30 sec / question</option><option value={45}>45 sec / question</option></select></label><button className="action-button" onClick={startPractice}><AlarmClock size={15}/> Start timed test</button><button className="action-button" onClick={() => void shareCurrentSet()} disabled={shareBusy}><Share2 size={15}/>{shareBusy ? "Working…" : "Share set"}</button></div>
+            <div className="set-action-row"><label>Test pace<select value={practiceSecondsPerQuestion} onChange={(event) => setPracticeSecondsPerQuestion(Number(event.target.value))}><option value={0}>No timer</option><option value={20}>20 sec / question</option><option value={30}>30 sec / question</option><option value={45}>45 sec / question</option></select></label><button className="action-button" onClick={startPractice}><AlarmClock size={15}/> {practiceSecondsPerQuestion === 0 ? "Start practice" : "Start timed test"}</button><button className="action-button" onClick={() => void shareCurrentSet()} disabled={shareBusy}><Share2 size={15}/>{shareBusy ? "Working…" : "Share set"}</button></div>
             {shareUrl && <div className="share-link-row"><span>Anyone with this link can view this set:</span><a href={shareUrl} target="_blank" rel="noreferrer">{shareUrl}</a><button className="plain-icon" title="Copy share link" onClick={() => { void navigator.clipboard.writeText(shareUrl).then(() => setNotice("Share link copied.")).catch(() => setNotice("Select and copy the share link above.")); }}><Copy size={15}/></button><button className="share-revoke" disabled={shareBusy} onClick={() => void turnOffShareLink()}>Turn off link</button></div>}
             <div className="study-card"><div className="study-card-top"><span className="flashcard-label">{result.type === "flashcards" ? "FLASHCARD" : types.find((type) => type.id === result.type)?.title.toUpperCase()}</span><span className="card-number">{String(current + 1).padStart(2,"0")} <i>/</i> {String(result.items.length).padStart(2,"0")}</span></div>
               {result.type === "multiple_choice" && currentCard.options?.length ? renderMultipleChoice(currentCard) : <button className={`study-face ${revealed ? "is-revealed" : ""}`} onClick={() => setRevealed(!revealed)}><span className="face-label">{revealed ? "THE ANSWER" : "YOUR QUESTION"}</span><span className="face-question">{revealed ? currentCard.answer : currentCard.question}</span>{!revealed && <span className="tap-hint">Tap to reveal <span>↗</span></span>}</button>}

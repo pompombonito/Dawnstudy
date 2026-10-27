@@ -106,6 +106,7 @@ class SavedStudySet(BaseModel):
     type: Literal["flashcards", "multiple_choice", "checkbox", "identification"]
     items: list[dict[str, Any]] = Field(min_length=1, max_length=50)
     sources: list[dict[str, str]] = Field(default_factory=list, max_length=20)
+    material_fingerprint: str | None = Field(default=None, max_length=64)
 
 
 class CardReview(BaseModel):
@@ -246,6 +247,7 @@ def add_study_set(body: SavedStudySet, user: dict[str, str] = Depends(authentica
             for item in body.items
         ],
         "sources": body.sources,
+        "material_fingerprint": body.material_fingerprint or "",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
@@ -281,6 +283,7 @@ def read_shared_study_set(token: str):
         study_set = get_shared_study_set(token)
         if not study_set:
             raise HTTPException(status_code=404, detail="This study set link is invalid or has been turned off.")
+        study_set.pop("material_fingerprint", None)
         return study_set
     except StorageError as exc:
         raise storage_http_error(exc) from exc
@@ -706,14 +709,37 @@ def safe_model_items(items: Any) -> list[dict[str, Any]]:
     return safe
 
 
-def add_unique_items(existing: list[dict[str, Any]], candidates: list[dict[str, Any]], limit: int) -> int:
-    seen = {re.sub(r"\W+", " ", item["question"].casefold()).strip() for item in existing}
+def normalized_question(question: str) -> str:
+    return re.sub(r"\W+", " ", question.casefold()).strip()
+
+
+def repeats_question(question: str, previous_questions: list[str]) -> bool:
+    key = normalized_question(question)
+    if not key:
+        return True
+    for previous in previous_questions:
+        previous_key = normalized_question(previous)
+        if key == previous_key:
+            return True
+        # Catch near-identical questions that only change a few words, while
+        # leaving distinct questions about the same concept available.
+        if len(key) >= 48 and len(previous_key) >= 48:
+            from difflib import SequenceMatcher
+
+            if SequenceMatcher(None, key, previous_key, autojunk=False).ratio() >= 0.92:
+                return True
+    return False
+
+
+def add_unique_items(existing: list[dict[str, Any]], candidates: list[dict[str, Any]], limit: int, excluded_questions: list[str] | None = None) -> int:
+    seen = [str(item.get("question") or "") for item in existing]
+    seen.extend(excluded_questions or [])
     added = 0
     for item in candidates:
-        key = re.sub(r"\W+", " ", item["question"].casefold()).strip()
-        if not key or key in seen or len(existing) >= limit:
+        question = str(item.get("question") or "")
+        if repeats_question(question, seen) or len(existing) >= limit:
             continue
-        seen.add(key)
+        seen.append(question)
         existing.append(item)
         added += 1
     return added
@@ -740,7 +766,7 @@ def diversify_fallback_order(primary, candidates):
     return ordered
 
 
-def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_model: str, question_count: int) -> tuple[dict[str, Any], list[str], dict[str, str] | None, bool]:
+def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_model: str, question_count: int, excluded_questions: list[str] | None = None) -> tuple[dict[str, Any], list[str], dict[str, str] | None, bool]:
     models = configured_ai_models()
     if not models:
         raise HTTPException(status_code=503, detail="No AI provider is configured. Add at least one provider key to the Render API environment.")
@@ -769,6 +795,9 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
         if remaining <= 0:
             break
         model_prompt = prompt_builder(remaining, completed)
+        if excluded_questions:
+            history = json.dumps(excluded_questions[-40:], ensure_ascii=False)
+            model_prompt += f"\n\nAvoid questions already included in this student's earlier study sets for the same material. Create different questions that explore other details. Do not repeat or closely paraphrase these earlier questions: {history}"
         model_schema = json.loads(json.dumps(schema))
         model_schema["properties"]["items"]["maxItems"] = remaining
         max_tokens = min(14_000, max(2_500, 650 + remaining * 220))
@@ -786,7 +815,7 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
             if not candidates and pending_fallback is None:
                 pending_fallback = (model_id, failed_reason)
 
-        added = add_unique_items(completed, candidates, question_count)
+        added = add_unique_items(completed, candidates, question_count, excluded_questions)
         if added:
             if model_id not in used_models:
                 used_models.append(model_id)
@@ -864,9 +893,29 @@ def generate(
     readable_text = re.sub(r"\[SOURCE: [^\]]+\]", "", text)
     if len(re.sub(r"\s+", "", readable_text)) < 80:
         raise HTTPException(status_code=422, detail="There isn't enough readable text in this file. Try clearer photos, or use a text-based PDF, PPTX, DOCX, TXT, or MD file.")
+    normalized_material = re.sub(r"\s+", " ", text).casefold().strip()
+    fingerprint_input = f"{user['user_id']}\0{normalized_material}"
+    material_fingerprint = hashlib.sha256(fingerprint_input.encode("utf-8")).hexdigest()
     text = text[:MAX_TEXT]
     # Do not ask the model to cite pages/slides that were removed by the input cap.
     source_labels = [label for label in source_labels if f"[SOURCE: {label}]" in text]
+
+    try:
+        prior_sets = list_study_sets(user["user_id"])
+    except StorageError as exc:
+        raise storage_http_error(exc) from exc
+    # Sets created before material fingerprints existed are retained as legacy
+    # history, so their questions are still excluded once for this user.
+    matching_sets = [
+        study_set for study_set in prior_sets
+        if not study_set.get("material_fingerprint") or study_set["material_fingerprint"] == material_fingerprint
+    ]
+    excluded_questions = list(dict.fromkeys(
+        str(item.get("question") or "").strip()
+        for study_set in matching_sets
+        for item in study_set.get("items", [])
+        if str(item.get("question") or "").strip()
+    ))
 
     _used_today, daily_limit, usage_reset = reserve_user_generation(user["user_id"])
 
@@ -919,7 +968,7 @@ def generate(
     if model == "auto":
         auto_model, auto_reason = choose_auto_model(configured_ai_models(), len(raw), len(text), question_count)
         selected_model = auto_model
-    payload, used_models, fallback, incomplete = generate_with_fallback(prompt_for_remaining, schema, selected_model, question_count)
+    payload, used_models, fallback, incomplete = generate_with_fallback(prompt_for_remaining, schema, selected_model, question_count, excluded_questions)
     remaining_today = max(0, daily_limit - _used_today)
     return {
         "title": str(payload.get("title") or filename.rsplit(".", 1)[0])[:100],
@@ -936,5 +985,7 @@ def generate(
         "fallback": fallback,
         "incomplete": incomplete,
         "requested_count": question_count,
+        "material_fingerprint": material_fingerprint,
+        "previous_question_count": len(excluded_questions),
         "usage": {"remaining": remaining_today, "limit": daily_limit, "resets_at": usage_reset},
     }

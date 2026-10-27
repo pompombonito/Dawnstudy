@@ -28,7 +28,7 @@ REVIEWS_TAB = "ReviewLogs"
 SHARES_TAB = "StudyShares"
 REPORTS_TAB = "CardReports"
 USER_COLUMNS = ["user_id", "username", "email", "password_hash", "google_sub", "display_name", "created_at"]
-SET_COLUMNS = ["set_id", "user_id", "title", "type", "items_json", "sources_json", "created_at"]
+SET_COLUMNS = ["set_id", "user_id", "title", "type", "items_json", "sources_json", "created_at", "material_fingerprint"]
 USAGE_COLUMNS = ["scope_key", "usage_date", "generation_count"]
 PROGRESS_COLUMNS = ["user_id", "set_id", "card_id", "due_at", "interval_days", "ease_factor", "repetitions", "lapses", "last_reviewed_at", "last_rating"]
 REVIEW_COLUMNS = ["user_id", "set_id", "card_id", "reviewed_at", "rating", "was_correct"]
@@ -114,9 +114,11 @@ def ensure_schema() -> None:
         if missing:
             _api("POST", ":batchUpdate", body={"requests": [{"addSheet": {"properties": {"title": title}}} for title in missing]})
         for tab, columns in ((USERS_TAB, USER_COLUMNS), (SETS_TAB, SET_COLUMNS), (USAGE_TAB, USAGE_COLUMNS), (PROGRESS_TAB, PROGRESS_COLUMNS), (REVIEWS_TAB, REVIEW_COLUMNS), (SHARES_TAB, SHARE_COLUMNS), (REPORTS_TAB, REPORT_COLUMNS)):
-            header_range = quote(f"{tab}!A1", safe="!'")
+            last_column = chr(64 + len(columns))
+            header_range = quote(f"{tab}!A1:{last_column}1", safe="!'")
             values = _api("GET", f"/values/{header_range}").get("values", [])
-            if not values:
+            existing_header = values[0] if values else []
+            if not existing_header or (len(existing_header) < len(columns) and columns[: len(existing_header)] == existing_header):
                 _api(
                     "PUT",
                     f"/values/{header_range}",
@@ -211,6 +213,7 @@ def save_study_set(study_set: dict[str, Any]) -> None:
                 items_json,
                 sources_json,
                 str(study_set["created_at"]),
+                str(study_set.get("material_fingerprint", "")),
             ],
         )
 
@@ -374,6 +377,7 @@ def list_study_sets(user_id: str) -> list[dict[str, Any]]:
             "items": items,
             "sources": sources,
             "created_at": row["created_at"],
+            "material_fingerprint": row.get("material_fingerprint", ""),
         })
     return sorted(result, key=lambda item: item["created_at"], reverse=True)[:100]
 
