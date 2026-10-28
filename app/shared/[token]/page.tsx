@@ -14,6 +14,33 @@ function normalizedAnswer(value: unknown) {
   return String(value ?? "").toLocaleLowerCase().trim().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
+function resolveChoiceAnswers(answer: unknown, options: string[]) {
+  const resolved: string[] = [];
+  for (const part of String(answer ?? "").split("|").map((value) => value.trim()).filter(Boolean)) {
+    const letter = part.match(/^(?:option\s*)?([A-D])(?:[.):\-])?$/i);
+    let match = letter ? options[letter[1].toUpperCase().charCodeAt(0) - 65] : options.find((option) => normalizedAnswer(option) === normalizedAnswer(part));
+    if (!match && part) {
+      const left = Array.from(normalizedAnswer(part));
+      const ranked = options.map((option) => {
+        const right = Array.from(normalizedAnswer(option));
+        let previous = new Uint16Array(right.length + 1);
+        for (const leftChar of left) {
+          const current = new Uint16Array(right.length + 1);
+          for (let index = 1; index <= right.length; index += 1) {
+            current[index] = leftChar === right[index - 1] ? previous[index - 1] + 1 : Math.max(previous[index], current[index - 1]);
+          }
+          previous = current;
+        }
+        return { option, similarity: left.length + right.length ? 2 * previous[right.length] / (left.length + right.length) : 0 };
+      }).sort((a, b) => b.similarity - a.similarity);
+      if (ranked[0]?.similarity >= 0.9 && (!ranked[1] || ranked[0].similarity - ranked[1].similarity >= 0.08)) match = ranked[0].option;
+    }
+    if (!match) return [];
+    if (!resolved.some((option) => normalizedAnswer(option) === normalizedAnswer(match))) resolved.push(match);
+  }
+  return resolved;
+}
+
 export default function SharedStudySetPage() {
   const params = useParams<{ token: string }>();
   const token = params.token;
@@ -68,8 +95,10 @@ export default function SharedStudySetPage() {
 
   const card = studySet?.items[index];
   const response = responses[index] || emptyAnswer();
-  const expectedAnswer = String(card?.correct_answer || card?.answer || "");
-  const expectedAnswers = expectedAnswer.split("|").map(normalizedAnswer).filter(Boolean);
+  const rawExpectedAnswer = String(card?.correct_answer || card?.answer || "");
+  const resolvedExpectedAnswers = resolveChoiceAnswers(rawExpectedAnswer, card?.options || []);
+  const expectedAnswer = resolvedExpectedAnswers.length ? resolvedExpectedAnswers.join(" | ") : rawExpectedAnswer;
+  const expectedAnswers = (resolvedExpectedAnswers.length ? resolvedExpectedAnswers : rawExpectedAnswer.split("|")).map(normalizedAnswer).filter(Boolean);
   const isCorrect = (option: string) => expectedAnswers.includes(normalizedAnswer(option));
   const checkboxMode = studySet?.type === "checkbox";
   const scoreableCount = studySet ? studySet.items.filter((item) => Boolean(item.options?.length)).length : 0;
@@ -77,7 +106,9 @@ export default function SharedStudySetPage() {
   const correctCount = studySet ? studySet.items.reduce((count, item, itemIndex) => {
     const saved = responses[itemIndex];
     if (!item.options?.length || !saved?.revealed) return count;
-    const answers = String(item.correct_answer || item.answer || "").split("|").map(normalizedAnswer).filter(Boolean);
+    const rawAnswers = String(item.correct_answer || item.answer || "");
+    const resolvedAnswers = resolveChoiceAnswers(rawAnswers, item.options || []);
+    const answers = (resolvedAnswers.length ? resolvedAnswers : rawAnswers.split("|")).map(normalizedAnswer).filter(Boolean);
     const correct = item.options.filter((option) => answers.includes(normalizedAnswer(option)));
     const picked = studySet.type === "checkbox" ? saved.selectedMany : saved.selected ? [saved.selected] : [];
     const right = picked.filter((option) => answers.includes(normalizedAnswer(option)));

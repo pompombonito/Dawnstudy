@@ -87,9 +87,44 @@ function normalizedAnswer(value: unknown) {
   return String(value ?? "").toLocaleLowerCase().trim().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
+function choiceAnswerOptions(answer: unknown, options: string[]) {
+  const resolved: string[] = [];
+  for (const part of String(answer ?? "").split("|").map((value) => value.trim()).filter(Boolean)) {
+    const letter = part.match(/^(?:option\s*)?([A-D])(?:[.):\-])?$/i);
+    let match = letter ? options[letter[1].toUpperCase().charCodeAt(0) - 65] : options.find((option) => normalizedAnswer(option) === normalizedAnswer(part));
+    if (!match && part) {
+      const left = Array.from(normalizedAnswer(part));
+      const ranked = options.map((option) => {
+        const right = Array.from(normalizedAnswer(option));
+        let previous = new Uint16Array(right.length + 1);
+        for (const leftChar of left) {
+          const current = new Uint16Array(right.length + 1);
+          for (let index = 1; index <= right.length; index += 1) {
+            current[index] = leftChar === right[index - 1] ? previous[index - 1] + 1 : Math.max(previous[index], current[index - 1]);
+          }
+          previous = current;
+        }
+        return { option, similarity: left.length + right.length ? 2 * previous[right.length] / (left.length + right.length) : 0 };
+      }).sort((a, b) => b.similarity - a.similarity);
+      if (ranked[0]?.similarity >= 0.9 && (!ranked[1] || ranked[0].similarity - ranked[1].similarity >= 0.08)) match = ranked[0].option;
+    }
+    if (!match) return [];
+    if (!resolved.some((option) => normalizedAnswer(option) === normalizedAnswer(match))) resolved.push(match);
+  }
+  return resolved;
+}
+
+function displayCorrectAnswer(card: Card) {
+  const answer = card.correct_answer || card.answer;
+  const resolved = choiceAnswerOptions(answer, card.options || []);
+  return resolved.length ? resolved.join(" | ") : answer;
+}
+
 function isPracticeAnswerCorrect(card: Card, type: Kind, response: PracticeAnswer | undefined) {
   if (response === null || response === undefined) return false;
-  const expected = String(card.correct_answer || card.answer || "").split("|").map(normalizedAnswer).filter(Boolean).sort();
+  const rawExpected = card.correct_answer || card.answer || "";
+  const resolved = choiceAnswerOptions(rawExpected, card.options || []);
+  const expected = (resolved.length ? resolved : String(rawExpected).split("|")).map(normalizedAnswer).filter(Boolean).sort();
   if (type === "checkbox") {
     const actual = (Array.isArray(response) ? response : [response]).map(normalizedAnswer).filter(Boolean).sort();
     return actual.length === expected.length && actual.every((answer, index) => answer === expected[index]);
@@ -107,12 +142,7 @@ function shuffleSavedItems(items: Card[], kind: Kind) {
   return shuffleItems(items).map((card) => {
     const options = [...(card.options || [])];
     if (options.length < 2 || (kind !== "multiple_choice" && kind !== "checkbox")) return card;
-    const correctValues = (card.correct_answer || card.answer || "").split("|").map((value) => value.trim()).filter(Boolean);
-    const correctOptions = correctValues.map((value) => {
-      const letter = value.match(/^(?:option\s*)?([A-D])(?:[.):\-])?$/i);
-      if (letter) return options[letter[1].toUpperCase().charCodeAt(0) - 65];
-      return options.find((option) => normalizedAnswer(option) === normalizedAnswer(value));
-    }).filter((value): value is string => Boolean(value));
+    const correctOptions = choiceAnswerOptions(card.correct_answer || card.answer, options);
     const shuffledOptions = shuffleItems(options);
     if (kind === "multiple_choice" && correctOptions.length === 1) {
       let correctIndex = shuffledOptions.indexOf(correctOptions[0]);
@@ -126,7 +156,7 @@ function shuffleSavedItems(items: Card[], kind: Kind) {
     return {
       ...card,
       options: shuffledOptions,
-      ...(correctOptions.length ? { correct_answer: correctOptions.join(" | ") } : {}),
+      ...(correctOptions.length ? { correct_answer: correctOptions.join(" | "), answer: correctOptions.join(" | ") } : {}),
     };
   });
 }
@@ -835,8 +865,9 @@ export default function Home() {
     ["bad_source", "Source reference is wrong"], ["other", "Other issue"],
   ];
   function renderMultipleChoice(card: Card) {
-    const correctAnswer = normalizedAnswer(card.correct_answer || card.answer);
-    const isCorrect = (option: string) => normalizedAnswer(option) === correctAnswer;
+    const correctOptions = choiceAnswerOptions(card.correct_answer || card.answer, card.options || []);
+    const correctAnswers = correctOptions.length ? correctOptions.map(normalizedAnswer) : [normalizedAnswer(card.correct_answer || card.answer)];
+    const isCorrect = (option: string) => correctAnswers.includes(normalizedAnswer(option));
     const selectedAnswer = selectedOption === null ? undefined : card.options?.[selectedOption];
     const selectedIsCorrect = Boolean(selectedAnswer && isCorrect(selectedAnswer));
     return <div className={`study-face choice-study-face ${revealed ? "is-revealed" : ""}`}>
@@ -924,7 +955,7 @@ export default function Home() {
             </> : practiceComplete ? <>
               <div className="practice-score"><strong>{practiceScore}<span>/{result.items.length}</span></strong><div><b>{practicePercent}%</b><small>{practicePercent >= 80 ? "Great work — keep it up." : "Review the missed answers below."}</small></div></div>
               <h3 className="missed-heading">Review missed answers</h3>
-              {practiceScore === result.items.length ? <p className="all-correct">You answered every question correctly.</p> : <div className="missed-list">{result.items.map((card, index) => isPracticeAnswerCorrect(card, result.type, practiceAnswers[index]) ? null : <article className="missed-card" key={`${card.card_id || card.question}-${index}`}><strong>{index + 1}. {card.question}</strong><p><b>Your answer:</b> {displayPracticeAnswer(practiceAnswers[index])}</p><p><b>Correct answer:</b> {card.correct_answer || card.answer}</p>{card.explanation && <small>{card.explanation}</small>}{card.source_refs?.length ? <small className="missed-source">Source: {card.source_refs.join(", ")}</small> : null}</article>)}</div>}
+              {practiceScore === result.items.length ? <p className="all-correct">You answered every question correctly.</p> : <div className="missed-list">{result.items.map((card, index) => isPracticeAnswerCorrect(card, result.type, practiceAnswers[index]) ? null : <article className="missed-card" key={`${card.card_id || card.question}-${index}`}><strong>{index + 1}. {card.question}</strong><p><b>Your answer:</b> {displayPracticeAnswer(practiceAnswers[index])}</p><p><b>Correct answer:</b> {displayCorrectAnswer(card)}</p>{card.explanation && <small>{card.explanation}</small>}{card.source_refs?.length ? <small className="missed-source">Source: {card.source_refs.join(", ")}</small> : null}</article>)}</div>}
               <button className="finish-test" onClick={() => { setPracticeActive(false); setPracticeComplete(false); }}>Back to study cards</button>
             </> : null}
           </section>}

@@ -1305,17 +1305,64 @@ def safe_model_items(items: Any) -> list[dict[str, Any]]:
 def answer_texts_for_options(answer: str, options: list[str]) -> list[str]:
     """Resolve either answer text or A/B/C/D labels to the displayed option text."""
     resolved = []
-    for part in (piece.strip() for piece in answer.split("|")):
+    parts = [piece.strip() for piece in answer.split("|") if piece.strip()]
+    if not parts:
+        return []
+    for part in parts:
         letter = re.fullmatch(r"(?:option\s*)?([A-D])(?:[.):\-])?", part, re.IGNORECASE)
         if letter:
             index = ord(letter.group(1).upper()) - ord("A")
             if index < len(options):
                 resolved.append(options[index])
-            continue
+                continue
+            return []
         match = next((option for option in options if normalized_question(option) == normalized_question(part)), None)
-        if match:
-            resolved.append(match)
+        if match is None and part:
+            from difflib import SequenceMatcher
+
+            normalized_part = normalized_question(part)
+            ranked = sorted(
+                [
+                    (SequenceMatcher(None, normalized_part, normalized_question(option), autojunk=False).ratio(), option)
+                    for option in options
+                ],
+                key=lambda candidate: candidate[0],
+                reverse=True,
+            )
+            if ranked and ranked[0][0] >= 0.90 and (len(ranked) == 1 or ranked[0][0] - ranked[1][0] >= 0.08):
+                match = ranked[0][1]
+        if not match:
+            return []
+        resolved.append(match)
     return list(dict.fromkeys(resolved))
+
+
+def normalize_choice_item(item: dict[str, Any], study_format: str) -> dict[str, Any] | None:
+    """Require choice answers to map to the displayed options and canonicalize typos."""
+    options = [str(option).strip() for option in item.get("options", []) if str(option).strip()]
+    if len(options) != 4:
+        return None
+    resolved: list[str] = []
+    for answer in (item.get("correct_answer"), item.get("answer")):
+        if answer is None:
+            continue
+        candidate_answers = answer_texts_for_options(str(answer), options)
+        if study_format == "multiple_choice" and len(candidate_answers) == 1:
+            resolved = candidate_answers
+            break
+        if study_format == "checkbox" and candidate_answers:
+            resolved = candidate_answers
+            break
+    if study_format == "multiple_choice" and len(resolved) != 1:
+        return None
+    if study_format == "checkbox" and not resolved:
+        return None
+    normalized = dict(item)
+    canonical_answer = " | ".join(resolved)
+    normalized["answer"] = canonical_answer
+    normalized["correct_answer"] = canonical_answer
+    normalized["options"] = options
+    return normalized
 
 
 def randomize_choice_options(items: list[dict[str, Any]], study_format: str) -> list[dict[str, Any]]:
@@ -1431,6 +1478,7 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
     used_models: list[str] = []
     failures: list[ProviderError] = []
     choice_length_rejections = 0
+    choice_answer_rejections = 0
     title = ""
     fallback: dict[str, str] | None = None
     pending_fallback: tuple[str, str] | None = None
@@ -1486,7 +1534,17 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
                     pending_fallback = (model_id, failed_reason)
 
             rejected_for_length = 0
+            choice_answer_rejections_this_pass = 0
             if study_format in {"multiple_choice", "checkbox"}:
+                valid_candidates = []
+                for item in candidates:
+                    normalized_item = normalize_choice_item(item, study_format)
+                    if normalized_item is None:
+                        choice_answer_rejections += 1
+                    else:
+                        valid_candidates.append(normalized_item)
+                choice_answer_rejections_this_pass = len(candidates) - len(valid_candidates)
+                candidates = valid_candidates
                 rejected_for_length = sum(
                     1 for item in candidates
                     if not choice_options_have_similar_lengths(item.get("options"))
@@ -1512,7 +1570,7 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
             elif len(completed) < question_count:
                 if pending_fallback is None:
                     pending_fallback = (model_id, failed_reason or "incomplete")
-                if rejected_for_length and retryable_response and attempt_round < 2:
+                if (rejected_for_length or choice_answer_rejections_this_pass) and retryable_response and attempt_round < 2:
                     retry_models.append((model_id, provider, model, api_key, _label))
 
     if not completed:
@@ -1522,6 +1580,8 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
             raise HTTPException(status_code=503, detail="All configured models are temporarily unavailable or rate-limited. Please try again shortly.")
         if choice_length_rejections:
             raise HTTPException(status_code=502, detail="The available models could not make all four answer choices similar in length. Try again or choose another model.")
+        if choice_answer_rejections:
+            raise HTTPException(status_code=502, detail="The available models returned answers that did not match their choices. Try again or choose another model.")
         raise HTTPException(status_code=502, detail="No configured model could generate this study set. Check the provider keys and model names in Render.")
 
     return {"title": title, "items": completed}, used_models, fallback, len(completed) < question_count
