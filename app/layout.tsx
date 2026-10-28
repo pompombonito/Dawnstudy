@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import "./globals.css";
 import "./account.css";
 import "./theme.css";
@@ -23,5 +24,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en" data-theme="dark" suppressHydrationWarning><body>{children}</body></html>;
+  return <html lang="en" data-theme="dark" suppressHydrationWarning><body>{children}<Script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-4982782720760429" crossOrigin="anonymous" strategy="afterInteractive" /></body></html>;
 }
