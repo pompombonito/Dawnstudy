@@ -678,8 +678,10 @@ def _fetch_public_material_url(value: str) -> tuple[bytes, str, str]:
                     raise HTTPException(status_code=422, detail="This website redirected too many times. Try its public page URL instead.")
                 current_url = urljoin(current_url, location)
                 continue
-            if response.status_code in {401, 403}:
+            if response.status_code == 401:
                 raise HTTPException(status_code=422, detail="This page requires a login or restricts public access, so Dawnstudy cannot read its contents. Sign in yourself and upload an allowed copy of the material instead.")
+            if response.status_code == 403:
+                raise HTTPException(status_code=422, detail="This website refused Dawnstudy’s request. The page may still be readable in your browser; if so, use the website’s own download or export option and upload the supported file.")
             if response.status_code == 404:
                 raise HTTPException(status_code=422, detail="That webpage or file could not be found.")
             if response.status_code >= 400:
@@ -738,8 +740,18 @@ def extract_public_material_url(value: str) -> tuple[str, list[str], str, str, s
         login_path = bool(re.search(r"/(?:login|log-in|signin|sign-in|sso)(?:/|$)", parsed_url.path, re.IGNORECASE))
         login_title = any(term in page_title.casefold() for term in ("login", "log in", "sign in", "signin", "authentication"))
         short_login_page = login_title and len(re.sub(r"\s+", "", page_text)) < 160
-        has_login_phrase = any(phrase in page_text_lower or phrase in page_source.casefold() for phrase in login_phrases)
-        if has_login_phrase or short_login_page or (has_password_field and (login_path or login_title or "sign in" in page_text_lower or "log in" in page_text_lower)):
+        # Many public sites include a hidden account modal or a sign-in link in
+        # their global navigation. Those are not evidence that the document is
+        # private. Only treat explicit login copy as a wall when the response is
+        # itself a short auth page, and require the password form to agree with
+        # the URL/title rather than generic navigation text.
+        is_login_page = (
+            login_path
+            or short_login_page
+            or (has_password_field and (login_path or login_title))
+            or (len(page_text) < 1200 and any(phrase in page_text_lower for phrase in login_phrases))
+        )
+        if is_login_page:
             raise HTTPException(status_code=422, detail="This page requires a login or restricts public access, so Dawnstudy cannot read its contents. Sign in yourself and upload an allowed copy of the material instead.")
         if len(re.sub(r"\s+", "", page_text)) < 80:
             raise HTTPException(status_code=422, detail="That public webpage does not contain enough readable text. Try another page or upload a supported file.")
