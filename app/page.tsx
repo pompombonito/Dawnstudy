@@ -11,6 +11,7 @@ import {
 type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification";
 type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string; source_refs?: string[] };
 type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; created_at: string; material_fingerprint?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; usage?: { remaining: number | null; limit: number | null; resets_at: string; unlimited?: boolean } };
+type ActiveShare = { set_id: string; title: string; token: string; created_at: string };
 type ReviewItem = { study_set_id: string; study_set_title: string; type: Kind; card: Card; retried?: boolean; intervals: { again: string; hard: string; good: string; easy: string } };
 type Progress = { total_reviews: number; reviewed_today: number; accuracy: number; current_streak: number; best_streak: number; due_count: number; total_cards: number; week: { date: string; reviews: number }[] };
 type Account = { id: string; username: string; email: string; display_name: string };
@@ -140,6 +141,7 @@ export default function Home() {
   const [models, setModels] = useState<ModelOption[]>([]);
   const [theme, setTheme] = useState<Theme>("dark");
   const [busy, setBusy] = useState(false);
+  const [continueBusy, setContinueBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [result, setResult] = useState<StudySet | null>(null);
@@ -171,6 +173,8 @@ export default function Home() {
   const [voiceFallbackNote, setVoiceFallbackNote] = useState("");
   const [shareUrl, setShareUrl] = useState("");
   const [shareBusy, setShareBusy] = useState(false);
+  const [activeShares, setActiveShares] = useState<ActiveShare[]>([]);
+  const [siteOrigin, setSiteOrigin] = useState("");
   const [reportingCard, setReportingCard] = useState(false);
   const [reportReason, setReportReason] = useState("incorrect_answer");
   const [reportNote, setReportNote] = useState("");
@@ -195,17 +199,27 @@ export default function Home() {
   const recordingChunks = useRef<BlobPart[]>([]);
   const recordingTimeout = useRef<number | null>(null);
   const voiceMessagesElement = useRef<HTMLDivElement>(null);
+  const practicePanel = useRef<HTMLElement>(null);
   const voiceSessionId = useRef(0);
 
   async function loadAccountSets(token: string) {
     if (!API_BASE) return;
     try {
       const response = await fetch(`${API_BASE}/api/study-sets`, { headers: { Authorization: `Bearer ${token}` } });
-      if (!response.ok) return;
-      const saved: StudySet[] = await response.json();
-      setSets(saved);
+      if (response.ok) {
+        const saved: StudySet[] = await response.json();
+        setSets(saved);
+      }
     } catch { /* Auth can still be used if study-set sync is briefly unavailable. */ }
     void loadProgress(token);
+    void loadActiveLinks(token);
+  }
+
+  async function loadActiveLinks(token: string) {
+    try {
+      const response = await fetch(`${API_BASE}/api/study-shares`, { headers: { Authorization: `Bearer ${token}` } });
+      if (response.ok) setActiveShares(await response.json());
+    } catch { /* Active links can be refreshed when the account API is available. */ }
   }
 
   async function loadProgress(token: string) {
@@ -216,6 +230,7 @@ export default function Home() {
   }
 
   useEffect(() => {
+    setSiteOrigin(window.location.origin);
     const savedTheme = localStorage.getItem(THEME_KEY);
     const initialTheme: Theme = savedTheme === "light" ? "light" : "dark";
     document.documentElement.dataset.theme = initialTheme;
@@ -238,7 +253,7 @@ export default function Home() {
         setAccount(await response.json());
         void loadAccountSets(token);
       })
-      .catch(() => { localStorage.removeItem(TOKEN_KEY); setAuthToken(""); setAccount(null); });
+      .catch(() => { localStorage.removeItem(TOKEN_KEY); setAuthToken(""); setAccount(null); setActiveShares([]); });
   }, []);
 
   useEffect(() => {
@@ -297,7 +312,7 @@ export default function Home() {
   }, [practiceActive, practiceComplete, practiceTimeLeft, practiceSecondsPerQuestion]);
 
   useEffect(() => {
-    const syncFullscreenState = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    const syncFullscreenState = () => setIsFullscreen(document.fullscreenElement === practicePanel.current);
     document.addEventListener("fullscreenchange", syncFullscreenState);
     return () => document.removeEventListener("fullscreenchange", syncFullscreenState);
   }, []);
@@ -307,29 +322,31 @@ export default function Home() {
   }, [voiceMessages]);
 
   async function toggleExerciseFullscreen() {
-    if (document.fullscreenElement) {
+    if (document.fullscreenElement === practicePanel.current) {
       try { await document.exitFullscreen(); }
       catch { setNotice("Could not exit fullscreen. Press Esc to leave fullscreen mode."); }
       return;
     }
-    if (!document.documentElement.requestFullscreen) {
+    if (!practicePanel.current?.requestFullscreen) {
       setNotice("Fullscreen is not supported in this browser.");
       return;
     }
-    try { await document.documentElement.requestFullscreen(); }
+    try { await practicePanel.current.requestFullscreen(); }
     catch { setNotice("Fullscreen was blocked by the browser. Use the fullscreen button to try again."); }
   }
 
   function acceptLogin(data: LoginResult) {
     localStorage.setItem(TOKEN_KEY, data.token);
-    setAuthToken(data.token); setAccount(data.user); setAuthOpen(false);
+    setAuthToken(data.token); setAccount(data.user); setActiveShares([]); setAuthOpen(false);
     setAuthError(""); setError(""); setNotice(`Welcome, ${data.user.display_name || data.user.username}. Your sets will sync to your account.`);
     void loadAccountSets(data.token);
   }
 
   function selectFile(nextFile?: File) {
     if (!nextFile) return;
-    setFile(nextFile); setError(""); setNotice(""); setResult(null); setSelectedOption(null);
+    setFile(nextFile); setError(""); setNotice("");
+    if (!result?.incomplete) setResult(null);
+    setSelectedOption(null);
   }
 
   function setColorTheme(nextTheme: Theme) {
@@ -376,7 +393,7 @@ export default function Home() {
       const saved = await fetch(`${API_BASE}/api/study-sets`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({ title: studySet.title, type: studySet.type, items: studySet.items, sources: studySet.sources || [], material_fingerprint: studySet.material_fingerprint }),
+        body: JSON.stringify({ title: studySet.title, type: studySet.type, items: studySet.items, sources: studySet.sources || [], material_fingerprint: studySet.material_fingerprint, incomplete: studySet.incomplete || false, requested_count: studySet.requested_count || studySet.items.length }),
       });
       if (!saved.ok) throw new Error(await responseError(saved));
       const savedSet: StudySet = await saved.json();
@@ -390,8 +407,87 @@ export default function Home() {
     } finally { setBusy(false); }
   }
 
+  async function continueGenerating() {
+    if (!result || !result.incomplete || continueBusy) return;
+    if (!file) {
+      setError("Upload the original study material to continue generating this set.");
+      return;
+    }
+    const targetCount = result.requested_count || result.items.length;
+    const remainingCount = targetCount - result.items.length;
+    if (remainingCount <= 0) {
+      setResult({ ...result, incomplete: false });
+      return;
+    }
+    setContinueBusy(true); setError(""); setNotice("");
+    const form = new FormData();
+    form.append("file", file);
+    form.append("format", result.type);
+    form.append("use_web", String(web));
+    form.append("model", modelChoice);
+    form.append("question_count", String(remainingCount));
+    form.append("difficulty", difficulty);
+    form.append("existing_questions", JSON.stringify(result.items.map((item) => item.question)));
+    if (result.material_fingerprint) form.append("expected_material_fingerprint", result.material_fingerprint);
+    try {
+      if (!API_BASE || !authToken) throw new Error("Sign in again to continue generating this study set.");
+      const headers = { Authorization: `Bearer ${authToken}` };
+      const response = await fetch(`${API_BASE}/api/generate`, { method: "POST", headers, body: form });
+      if (!response.ok) throw new Error(await responseError(response));
+      const data = await response.json();
+      const nextItems = [...result.items];
+      const seen = new Set(nextItems.map((item) => normalizedAnswer(item.question)));
+      for (const item of data.items as Card[]) {
+        const key = normalizedAnswer(item.question);
+        if (key && !seen.has(key) && nextItems.length < targetCount) {
+          nextItems.push(item);
+          seen.add(key);
+        }
+      }
+      const generatedSources = Array.isArray(data.sources) ? data.sources as { title: string; url: string }[] : [];
+      const mergedSources = [...new Map([...(result.sources || []), ...generatedSources].map((source) => [source.url, source] as const)).values()];
+      const merged: StudySet = {
+        ...result,
+        items: nextItems,
+        sources: mergedSources,
+        incomplete: nextItems.length < targetCount,
+        requested_count: targetCount,
+        model: data.model || result.model,
+        models_used: [...new Set([...(result.models_used || []), ...(data.models_used || [])])],
+        fallback: data.fallback || result.fallback,
+      };
+      setResult(merged);
+      setSets((old) => old.map((item) => item.id === merged.id ? merged : item));
+      const saveBody = JSON.stringify({ title: merged.title, type: merged.type, items: merged.items, sources: merged.sources || [], material_fingerprint: merged.material_fingerprint, incomplete: merged.incomplete, requested_count: merged.requested_count });
+      let saved = await fetch(`${API_BASE}/api/study-sets/${encodeURIComponent(merged.id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+        body: saveBody,
+      });
+      if (saved.status === 404) {
+        saved = await fetch(`${API_BASE}/api/study-sets`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+          body: saveBody,
+        });
+      }
+      if (!saved.ok) {
+        setError(`Generated ${nextItems.length} of ${targetCount} questions, but the updated set could not sync to your account: ${await responseError(saved)}`);
+        return;
+      }
+      const savedSet: StudySet = await saved.json();
+      setResult(savedSet);
+      setSets((old) => [savedSet, ...old.filter((item) => item.id !== savedSet.id && item.id !== merged.id)].slice(0, 100));
+      setNotice(savedSet.incomplete
+        ? `Generated ${savedSet.items.length} of ${targetCount} questions. Continue when you’re ready.`
+        : `All ${targetCount} questions are ready.`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not continue generating this study set.");
+    } finally { setContinueBusy(false); }
+  }
+
   function signOut() {
-    localStorage.removeItem(TOKEN_KEY); setAuthToken(""); setAccount(null); setSets([]); setResult(null); setProgress(null); setReviewActive(false); setReviewQueue([]);
+    localStorage.removeItem(TOKEN_KEY); setAuthToken(""); setAccount(null); setSets([]); setActiveShares([]); setResult(null); setProgress(null); setReviewActive(false); setReviewQueue([]);
     setNotice("You’re signed out. Sign in with your CEU Google account to continue using Dawnstudy.");
   }
 
@@ -404,6 +500,7 @@ export default function Home() {
       });
       if (!response.ok) throw new Error(await responseError(response));
       setSets((old) => old.filter((item) => item.id !== studySet.id));
+      setActiveShares((old) => old.filter((share) => share.set_id !== studySet.id));
       setResult((old) => old?.id === studySet.id ? null : old);
       void loadProgress(authToken);
       setNotice(`“${studySet.title}” was deleted.`);
@@ -417,9 +514,6 @@ export default function Home() {
 
   function startPractice() {
     if (!result) return;
-    if (practiceSecondsPerQuestion > 0 && !document.fullscreenElement) {
-      void toggleExerciseFullscreen();
-    }
     setPracticeAnswers(Array.from({ length: result.items.length }, () => null));
     setPracticeIndex(0); setPracticeTimeLeft(practiceSecondsPerQuestion === 0 ? 0 : result.items.length * practiceSecondsPerQuestion);
     setPracticeComplete(false); setPracticeActive(true); setError("");
@@ -582,19 +676,22 @@ export default function Home() {
       const data: { token: string } = await response.json();
       const url = `${window.location.origin}/shared/${data.token}`;
       setShareUrl(url);
+      await loadActiveLinks(authToken);
       try { await navigator.clipboard.writeText(url); setNotice("Share link copied. Anyone who has it can view this set until you turn the link off."); }
       catch { setNotice("Share link created. Anyone who has it can view this set until you turn the link off."); }
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not create a share link."); }
     finally { setShareBusy(false); }
   }
 
-  async function turnOffShareLink() {
-    if (!result || !authToken) return;
+  async function turnOffShareLink(setId: string) {
+    if (!authToken) return;
     setShareBusy(true); setError("");
     try {
-      const response = await fetch(`${API_BASE}/api/study-sets/${encodeURIComponent(result.id)}/share`, { method: "DELETE", headers: { Authorization: `Bearer ${authToken}` } });
+      const response = await fetch(`${API_BASE}/api/study-sets/${encodeURIComponent(setId)}/share`, { method: "DELETE", headers: { Authorization: `Bearer ${authToken}` } });
       if (!response.ok) throw new Error(await responseError(response));
-      setShareUrl(""); setNotice("The share link has been turned off.");
+      setActiveShares((old) => old.filter((share) => share.set_id !== setId));
+      if (result?.id === setId) setShareUrl("");
+      setNotice("The share link has been turned off.");
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not turn off the share link."); }
     finally { setShareBusy(false); }
   }
@@ -705,6 +802,7 @@ export default function Home() {
         <button className="nav-item active" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}><span className="nav-icon"><BookOpen size={18}/></span> Study desk</button>
         <button className="nav-item" onClick={() => document.querySelector(".voice-review")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><Mic size={18}/></span> Voice review</button>
         <button className="nav-item" onClick={() => document.querySelector(".recent-section")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><Layers3 size={18}/></span> My study sets <span className="nav-count">{sets.length}</span></button>
+        <button className="nav-item" onClick={() => document.querySelector(".active-links-section")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><Share2 size={18}/></span> Active Links <span className="nav-count">{activeShares.length}</span></button>
         <button className="nav-item" onClick={() => document.querySelector(".progress-panel")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><Clock3 size={18}/></span> Study progress</button>
         <button className="nav-item" onClick={() => document.querySelector(".about-section")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><UserRound size={18}/></span> About the Developer</button>
         <div className="side-separator" />
@@ -727,7 +825,6 @@ export default function Home() {
       <section className="main-area" id="home">
         <header className="topbar"><div className="crumb"><span>Your space</span><ChevronRight size={14}/><b>Study desk</b></div><div className="top-actions"><button className="theme-toggle" onClick={() => setColorTheme(theme === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>{theme === "dark" ? <Sun size={16}/> : <Moon size={16}/>}<span>{theme === "dark" ? "Light mode" : "Dark mode"}</span></button><span className="today-pill"><span className="status-dot"/> YOUR STUDY DESK</span>{!account && <button className="top-signin" onClick={() => setAuthOpen(true)}><UserRound size={14}/> Sign in</button>}<button className="profile-mobile" onClick={() => account ? signOut() : setAuthOpen(true)} title={account ? "Sign out" : "Sign in with Google"}>{account ? <LogOut size={18}/> : <Menu size={20}/>}</button></div></header>
         <div className="content">
-          {result && !reviewActive && <button className={`exercise-fullscreen-toggle ${isFullscreen ? "is-fullscreen" : ""}`} type="button" onClick={() => void toggleExerciseFullscreen()} aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"} aria-pressed={isFullscreen}><FullscreenIcon size={16}/><span>{isFullscreen ? "Exit fullscreen" : "Fullscreen"}</span></button>}
           <div className="access-banner"><GraduationCap size={19}/><span><strong>For Centro Escolar University students, for now.</strong> To conserve AI tokens, Dawnstudy is limited to verified Google accounts ending in <b>@ceu.edu.ph</b>, <b>@mnl.ceu.edu.ph</b>, <b>@mkt.ceu.edu.ph</b>, or <b>@mls.ceu.edu.ph</b>.</span></div>
           <section className="welcome"><div className="welcome-copy"><div className="eyebrow"><span/> A FRESH PAGE, A FRESH START</div><h1>Make today<br/>a little <em>brighter.</em></h1><p>Drop in your notes. We’ll help the important things stick.</p></div><div className="sunrise-art" aria-hidden="true"><div className="sun"/><div className="cloud cloud-one"/><div className="cloud cloud-two"/><div className="horizon h-back"/><div className="horizon h-front"/></div><span className="welcome-note">one page at a time <span>✳</span></span></section>
           <div className="section-intro"><div><div className="section-title-row"><h2>Start a study set</h2></div><p>Choose how you’d like to practice.</p></div><span className="quiet-note">Good things take practice <span>↗</span></span></div>
@@ -743,8 +840,8 @@ export default function Home() {
           {error && <div className="error-box"><CircleHelp size={16}/><span>{error}</span></div>}
           {notice && <div className="notice-box"><Check size={15}/><span>{notice}</span></div>}
           {reviewActive && <section className="review-panel"><div className="result-head"><div><div className="result-kicker"><span/> SPACED REPETITION</div><h2>{reviewQueue.length ? reviewQueue[0].study_set_title : "Review complete"}</h2><p>{reviewQueue.length ? `${reviewQueue.length} cards in this session · ${reviewQueue[0].type.replaceAll("_", " ")}` : "You’re all caught up for now. Nice work showing up."}</p></div><button className="plain-icon" title="Close review" onClick={() => { setReviewActive(false); setReviewQueue([]); setSelectedOption(null); }}><X size={18}/></button></div>{reviewQueue.length ? <div className="study-card"><div className="study-card-top"><span className="flashcard-label">REVIEW {reviewQueue.length} LEFT</span></div>{reviewQueue[0].type === "multiple_choice" && reviewQueue[0].card.options?.length ? renderMultipleChoice(reviewQueue[0].card) : <button className={`study-face ${revealed ? "is-revealed" : ""}`} onClick={() => setRevealed(!revealed)}><span className="face-label">{revealed ? "THE ANSWER" : "YOUR QUESTION"}</span><span className="face-question">{revealed ? reviewQueue[0].card.answer : reviewQueue[0].card.question}</span>{!revealed && <span className="tap-hint">Tap to reveal <span>↗</span></span>}</button>}{revealed && reviewQueue[0].card.explanation && <p className="explanation">{reviewQueue[0].card.explanation}</p>}{revealed && <div className="rating-row"><button disabled={reviewBusy} onClick={() => void gradeCard("again")}><b>Again</b><small>{reviewQueue[0].intervals.again}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("hard")}><b>Hard</b><small>{reviewQueue[0].intervals.hard}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("good")}><b>Good</b><small>{reviewQueue[0].intervals.good}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("easy")}><b>Easy</b><small>{reviewQueue[0].intervals.easy}</small></button></div>}</div> : <button className="review-done" onClick={() => { setReviewActive(false); setReviewQueue([]); }}>Back to study desk <ChevronRight size={15}/></button>}</section>}
-          {result && practiceActive && !reviewActive && <section className="practice-panel">
-            <div className="result-head"><div><div className="result-kicker"><span/> {practiceSecondsPerQuestion === 0 ? "SELF-PACED PRACTICE" : "TIMED PRACTICE TEST"}</div><h2>{result.title}</h2><p>{practiceComplete ? "Test results and missed answers" : `${result.items.length} questions · ${practiceSecondsPerQuestion === 0 ? "no time limit" : `${practiceSecondsPerQuestion} seconds per question`}`}</p></div><button className="plain-icon" title="Exit practice test" onClick={() => { setPracticeActive(false); setPracticeComplete(false); }}><X size={18}/></button></div>
+          {result && practiceActive && !reviewActive && <section ref={practicePanel} className="practice-panel">
+            <div className="result-head"><div><div className="result-kicker"><span/> {practiceSecondsPerQuestion === 0 ? "SELF-PACED PRACTICE" : "TIMED PRACTICE TEST"}</div><h2>{result.title}</h2><p>{practiceComplete ? "Test results and missed answers" : `${result.items.length} questions · ${practiceSecondsPerQuestion === 0 ? "no time limit" : `${practiceSecondsPerQuestion} seconds per question`}`}</p></div><div className="practice-head-actions"><button className={`quiz-fullscreen-button ${isFullscreen ? "is-fullscreen" : ""}`} type="button" onClick={() => void toggleExerciseFullscreen()} aria-label={isFullscreen ? "Exit quiz fullscreen" : "Show quiz fullscreen"} aria-pressed={isFullscreen}><FullscreenIcon size={19}/><span>{isFullscreen ? "Exit fullscreen" : "Quiz fullscreen"}</span></button><button className="plain-icon" title="Exit practice test" onClick={() => { setPracticeActive(false); setPracticeComplete(false); }}><X size={18}/></button></div></div>
             {!practiceComplete && practiceCard ? <>
               <div className="practice-timer"><AlarmClock size={18}/><span>{practiceSecondsPerQuestion === 0 ? "No time limit" : `${Math.floor(practiceTimeLeft / 60)}:${String(practiceTimeLeft % 60).padStart(2, "0")} remaining`}</span><span className="practice-progress">Question {practiceIndex + 1} of {result.items.length}</span></div>
               <div className="practice-question"><span className="face-label">QUESTION {practiceIndex + 1}</span><h3>{practiceCard.question}</h3>
@@ -765,7 +862,8 @@ export default function Home() {
           </section>}
           {result && currentCard && !reviewActive && !practiceActive && <section className="result-panel"><div className="result-head"><div><div className="result-kicker"><span/> YOUR STUDY SET</div><h2>{result.title}</h2><p>{result.items.length} {types.find((type) => type.id === result.type)?.title.toLowerCase()} · ready when you are{result.model ? ` · ${modelName(result.model)}` : ""}</p></div><button className="plain-icon" title="Close study set" onClick={() => setResult(null)}><X size={18}/></button></div>
             <div className="set-action-row"><label>Test pace<select value={practiceSecondsPerQuestion} onChange={(event) => setPracticeSecondsPerQuestion(Number(event.target.value))}><option value={0}>No timer</option><option value={20}>20 sec / question</option><option value={30}>30 sec / question</option><option value={45}>45 sec / question</option></select></label><button className="action-button" onClick={startPractice}><AlarmClock size={15}/> {practiceSecondsPerQuestion === 0 ? "Start practice" : "Start timed test"}</button><button className="action-button" onClick={() => void shareCurrentSet()} disabled={shareBusy}><Share2 size={15}/>{shareBusy ? "Working…" : "Share set"}</button></div>
-            {shareUrl && <div className="share-link-row"><span>Anyone with this link can view this set:</span><a href={shareUrl} target="_blank" rel="noreferrer">{shareUrl}</a><button className="plain-icon" title="Copy share link" onClick={() => { void navigator.clipboard.writeText(shareUrl).then(() => setNotice("Share link copied.")).catch(() => setNotice("Select and copy the share link above.")); }}><Copy size={15}/></button><button className="share-revoke" disabled={shareBusy} onClick={() => void turnOffShareLink()}>Turn off link</button></div>}
+            {result.incomplete && <div className="incomplete-generation"><div><strong>{result.items.length} of {result.requested_count || result.items.length} questions generated</strong><span>{file ? "Your generated questions are held. Continue for the remaining questions when ready." : "Upload the original material to continue this set."}</span></div><button className="continue-generation-button" disabled={continueBusy || busy || !file} onClick={() => void continueGenerating()}>{continueBusy ? <><span className="spinner"/> Continuing…</> : <><Sparkles size={17}/> Continue generating</>}</button></div>}
+            {shareUrl && <div className="share-link-row"><span>Anyone with this link can view this set:</span><a href={shareUrl} target="_blank" rel="noreferrer">{shareUrl}</a><button className="plain-icon" title="Copy share link" onClick={() => { void navigator.clipboard.writeText(shareUrl).then(() => setNotice("Share link copied.")).catch(() => setNotice("Select and copy the share link above.")); }}><Copy size={15}/></button><button className="share-revoke" disabled={shareBusy} onClick={() => void turnOffShareLink(result.id)}>Turn off link</button></div>}
             <div className="study-card"><div className="study-card-top"><span className="flashcard-label">{result.type === "flashcards" ? "FLASHCARD" : types.find((type) => type.id === result.type)?.title.toUpperCase()}</span><span className="card-number">{String(current + 1).padStart(2,"0")} <i>/</i> {String(result.items.length).padStart(2,"0")}</span></div>
               {result.type === "multiple_choice" && currentCard.options?.length ? renderMultipleChoice(currentCard) : <button className={`study-face ${revealed ? "is-revealed" : ""}`} onClick={() => setRevealed(!revealed)}><span className="face-label">{revealed ? "THE ANSWER" : "YOUR QUESTION"}</span><span className="face-question">{revealed ? currentCard.answer : currentCard.question}</span>{!revealed && <span className="tap-hint">Tap to reveal <span>↗</span></span>}</button>}
               {currentCard.source_refs?.length ? <div className="material-citations"><strong>From your material</strong>{currentCard.source_refs.map((source) => <span key={source}>{source}</span>)}</div> : null}
@@ -775,6 +873,12 @@ export default function Home() {
               <div className="study-controls"><button className="control-button" onClick={() => { setCurrent((current - 1 + result.items.length) % result.items.length); setRevealed(false); setSelectedOption(null); }}><ChevronLeft size={16}/> Previous</button><span className="dots">{result.items.slice(0, Math.min(result.items.length, 7)).map((_, index) => <i key={index} className={index === current ? "dot-active" : ""}/>)}</span><button className="control-button next" onClick={() => { setCurrent((current + 1) % result.items.length); setRevealed(false); setSelectedOption(null); }}>Next <ChevronRight size={16}/></button></div>
               {result.sources?.length ? <div className="source-links"><Globe2 size={14}/><span>Sources:</span>{result.sources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer">{source.title}</a>)}</div> : null}
             </div></section>}
+          <section className="active-links-section" id="active-links"><div className="recent-head"><div><div className="section-title-row"><h2>Active Links</h2><span className="recent-count">{activeShares.length}</span></div><p>Share links that are currently enabled for your study sets.</p></div></div>
+            {activeShares.length ? <div className="active-links-list">{activeShares.map((share) => {
+              const url = `${siteOrigin}/shared/${share.token}`;
+              return <article className="active-link-card" key={share.set_id}><div className="active-link-info"><span className="active-link-status"><i/> ACTIVE</span><strong>{share.title}</strong><a href={url} target="_blank" rel="noreferrer">{url}</a><small>Created {ageLabel(share.created_at)}</small></div><div className="active-link-actions"><button className="active-link-copy" type="button" onClick={() => { void navigator.clipboard.writeText(url).then(() => setNotice("Share link copied.")).catch(() => setNotice("Could not copy the share link. Select its address to copy.")); }}><Copy size={14}/> Copy</button><button className="share-revoke" disabled={shareBusy} onClick={() => void turnOffShareLink(share.set_id)}>{shareBusy ? "Working…" : "Turn off link"}</button></div></article>;
+            })}</div> : <div className="active-links-empty"><Share2 size={18}/><span>{account ? "You have no active share links. Share a study set and it will appear here." : "Sign in to manage links you have shared."}</span></div>}
+          </section>
           <section className="recent-section" id="recent-sets"><div className="recent-head"><div><div className="section-title-row"><h2>Your recent sets</h2><span className="recent-count">{sets.length}</span></div><p>{account ? "Synced to your account." : "Sign in with your CEU Google account to view your sets."}</p></div>{sets.length > 3 && <button className="see-all" onClick={() => setShowAll(!showAll)}>{showAll ? "Show less" : "See all"} <ChevronRight size={15}/></button>}</div>
             {sets.length ? <div className="recent-grid">{sets.slice(0, showAll ? sets.length : 3).map((studySet, index) => <div className="recent-card-wrap" key={studySet.id}><button className="recent-card" onClick={() => openSavedSet(studySet)}><span className={`recent-art art-${["aqua", "coral", "gold"][index % 3]}`}><BookOpen size={18}/><span className="art-orbit"/></span><span className="recent-info"><span className="subject-label">{types.find((type) => type.id === studySet.type)?.title.toUpperCase()}</span><strong>{studySet.title}</strong><small>{studySet.items.length} cards <i>·</i> {ageLabel(studySet.created_at)}</small></span><ChevronRight size={16} className="recent-arrow"/></button><button className="recent-delete" title={`Delete ${studySet.title}`} aria-label={`Delete ${studySet.title}`} onClick={() => void removeStudySet(studySet)}><Trash2 size={15}/></button></div>)}</div> : <div className="empty-sets"><Layers3 size={20}/><span>{account ? "Your study sets will appear here after you make one." : "Sign in with your CEU Google account to access Dawnstudy."}</span></div>}
             <div className="bottom-note"><span>✳</span> Little by little, a little becomes a lot. <i>— A study reminder</i></div>
@@ -811,6 +915,7 @@ export default function Home() {
       <nav className="mobile-bottom-nav" aria-label="Main navigation">
         <button type="button" onClick={() => document.getElementById("home")?.scrollIntoView({ behavior: "smooth" })}><BookOpen size={18}/><span>Study</span></button>
         <button type="button" onClick={() => document.getElementById("recent-sets")?.scrollIntoView({ behavior: "smooth" })}><Layers3 size={18}/><span>Sets</span></button>
+        <button type="button" onClick={() => document.getElementById("active-links")?.scrollIntoView({ behavior: "smooth" })}><Share2 size={18}/><span>Links</span></button>
         <button type="button" onClick={() => document.getElementById("voice-review")?.scrollIntoView({ behavior: "smooth" })}><Mic size={18}/><span>Voice</span></button>
         <button type="button" onClick={() => document.getElementById("about")?.scrollIntoView({ behavior: "smooth" })}><UserRound size={18}/><span>About</span></button>
       </nav>

@@ -29,7 +29,7 @@ REVIEWS_TAB = "ReviewLogs"
 SHARES_TAB = "StudyShares"
 REPORTS_TAB = "CardReports"
 USER_COLUMNS = ["user_id", "username", "email", "password_hash", "google_sub", "display_name", "created_at"]
-SET_COLUMNS = ["set_id", "user_id", "title", "type", "items_json", "sources_json", "created_at", "material_fingerprint"]
+SET_COLUMNS = ["set_id", "user_id", "title", "type", "items_json", "sources_json", "created_at", "material_fingerprint", "incomplete", "requested_count"]
 USAGE_COLUMNS = ["scope_key", "usage_date", "generation_count"]
 PROGRESS_COLUMNS = ["user_id", "set_id", "card_id", "due_at", "interval_days", "ease_factor", "repetitions", "lapses", "last_reviewed_at", "last_rating"]
 REVIEW_COLUMNS = ["user_id", "set_id", "card_id", "reviewed_at", "rating", "was_correct"]
@@ -276,8 +276,46 @@ def save_study_set(study_set: dict[str, Any]) -> None:
                 sources_json,
                 str(study_set["created_at"]),
                 str(study_set.get("material_fingerprint", "")),
+                str(bool(study_set.get("incomplete", False))).lower(),
+                str(study_set.get("requested_count", len(study_set["items"]))),
             ],
         )
+
+
+def update_study_set(user_id: str, set_id: str, study_set: dict[str, Any]) -> bool:
+    items_json = json.dumps(study_set["items"], ensure_ascii=False, separators=(",", ":"))
+    sources_json = json.dumps(study_set.get("sources", []), ensure_ascii=False, separators=(",", ":"))
+    if len(items_json) + len(sources_json) > 40_000:
+        raise StorageError("This study set is too large to save in a Google Sheets cell.")
+    with _set_write_lock:
+        match = next(
+            ((row_number, row) for row_number, row in _rows(SETS_TAB, SET_COLUMNS, use_cache=False)
+             if row["user_id"] == user_id and row["set_id"] == set_id),
+            None,
+        )
+        if not match:
+            return False
+        row_number, existing = match
+        range_name = quote(f"{SETS_TAB}!A{row_number}:J{row_number}", safe="!:")
+        _api(
+            "PUT",
+            f"/values/{range_name}",
+            params={"valueInputOption": "RAW"},
+            body={"values": [[
+                set_id,
+                user_id,
+                str(study_set["title"])[:150],
+                str(study_set["type"]),
+                items_json,
+                sources_json,
+                existing["created_at"],
+                str(study_set.get("material_fingerprint", existing.get("material_fingerprint", ""))),
+                str(bool(study_set.get("incomplete", False))).lower(),
+                str(study_set.get("requested_count", len(study_set["items"]))),
+            ]]},
+        )
+        _invalidate_rows(SETS_TAB)
+        return True
 
 
 def delete_study_set(user_id: str, set_id: str) -> bool:
@@ -348,6 +386,10 @@ def get_or_create_study_share(user_id: str, set_id: str) -> str:
         token = secrets.token_urlsafe(32)
         _append(SHARES_TAB, [token, user_id, set_id, datetime.now(timezone.utc).isoformat()])
         return token
+
+
+def list_study_shares(user_id: str) -> list[dict[str, str]]:
+    return [row for _, row in _rows(SHARES_TAB, SHARE_COLUMNS) if row["user_id"] == user_id]
 
 
 def revoke_study_share(user_id: str, set_id: str) -> bool:
@@ -433,6 +475,10 @@ def list_study_sets(user_id: str) -> list[dict[str, Any]]:
             {**item, "card_id": item.get("card_id") or hashlib.sha256(f"{set_id}:{index}:{item.get('question', '')}".encode()).hexdigest()[:24]}
             for index, item in enumerate(items)
         ]
+        try:
+            requested_count = int(row.get("requested_count") or len(items))
+        except ValueError:
+            requested_count = len(items)
         result.append({
             "id": set_id,
             "title": row["title"],
@@ -441,6 +487,8 @@ def list_study_sets(user_id: str) -> list[dict[str, Any]]:
             "sources": sources,
             "created_at": row["created_at"],
             "material_fingerprint": row.get("material_fingerprint", ""),
+            "incomplete": row.get("incomplete", "").casefold() == "true",
+            "requested_count": max(len(items), requested_count),
         })
     return sorted(result, key=lambda item: item["created_at"], reverse=True)[:100]
 

@@ -35,6 +35,7 @@ from accounts import (
     get_or_create_study_share,
     get_shared_study_set,
     list_study_sets,
+    list_study_shares,
     list_users,
     reserve_daily_generation,
     review_data,
@@ -43,6 +44,7 @@ from accounts import (
     save_study_set,
     revoke_study_share,
     update_user,
+    update_study_set,
     verify_google_credential,
     verify_session,
 )
@@ -60,7 +62,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
 
@@ -116,6 +118,8 @@ class SavedStudySet(BaseModel):
     items: list[dict[str, Any]] = Field(min_length=1, max_length=50)
     sources: list[dict[str, str]] = Field(default_factory=list, max_length=20)
     material_fingerprint: str | None = Field(default=None, max_length=64)
+    incomplete: bool = False
+    requested_count: int | None = Field(default=None, ge=1, le=50)
 
 
 class CardReview(BaseModel):
@@ -265,11 +269,52 @@ def add_study_set(body: SavedStudySet, user: dict[str, str] = Depends(authentica
         ],
         "sources": body.sources,
         "material_fingerprint": body.material_fingerprint or "",
+        "incomplete": body.incomplete,
+        "requested_count": body.requested_count or len(body.items),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
         save_study_set(study_set)
         return study_set
+    except StorageError as exc:
+        raise storage_http_error(exc) from exc
+
+
+@app.put("/api/study-sets/{set_id}")
+def extend_study_set(set_id: str, body: SavedStudySet, user: dict[str, str] = Depends(authenticated_user)):
+    study_set = {
+        "title": body.title.strip(),
+        "type": body.type,
+        "items": [
+            {**(item.model_dump(exclude_none=True) if isinstance(item, BaseModel) else item), "card_id": (item.get("card_id") if isinstance(item, dict) else None) or str(uuid4())}
+            for item in body.items
+        ],
+        "sources": body.sources,
+        "material_fingerprint": body.material_fingerprint or "",
+        "incomplete": body.incomplete,
+        "requested_count": body.requested_count or len(body.items),
+    }
+    try:
+        if not update_study_set(user["user_id"], set_id, study_set):
+            raise HTTPException(status_code=404, detail="Study set not found.")
+        updated = next((item for item in list_study_sets(user["user_id"]) if item["id"] == set_id), None)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Study set not found.")
+        return updated
+    except HTTPException:
+        raise
+    except StorageError as exc:
+        raise storage_http_error(exc) from exc
+
+
+@app.get("/api/study-shares")
+def get_active_study_shares(user: dict[str, str] = Depends(authenticated_user)):
+    try:
+        sets_by_id = {item["id"]: item for item in list_study_sets(user["user_id"])}
+        return [
+            {"set_id": share["set_id"], "title": sets_by_id.get(share["set_id"], {}).get("title", "Study set"), "token": share["token"], "created_at": share["created_at"]}
+            for share in list_study_shares(user["user_id"])
+        ]
     except StorageError as exc:
         raise storage_http_error(exc) from exc
 
@@ -1195,18 +1240,7 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
             raise HTTPException(status_code=502, detail="The available models could not make all four answer choices similar in length. Try again or choose another model.")
         raise HTTPException(status_code=502, detail="No configured model could generate this study set. Check the provider keys and model names in Render.")
 
-    if len(completed) < question_count:
-        if choice_length_rejections:
-            raise HTTPException(
-                status_code=503,
-                detail=f"The available models generated only {len(completed)} of {question_count} requested questions with similar-length choices. Try another model or request fewer questions.",
-            )
-        raise HTTPException(
-            status_code=503,
-            detail=f"The available models generated only {len(completed)} of {question_count} requested questions after fallback and continuation attempts. No partial set was saved; try again shortly or request fewer questions.",
-        )
-
-    return {"title": title, "items": completed}, used_models, fallback, False
+    return {"title": title, "items": completed}, used_models, fallback, len(completed) < question_count
 
 
 def generate_voice_reply(provider: str, model: str, api_key: str, system_prompt: str, history: list[dict[str, str]], message: str) -> str:
@@ -1458,6 +1492,8 @@ def generate(
     model: str = Form("auto"),
     question_count: int = Form(10),
     difficulty: Literal["easy", "medium", "hard"] = Form("medium"),
+    existing_questions: str = Form(""),
+    expected_material_fingerprint: str = Form(""),
     user: dict[str, str] = Depends(authenticated_user),
 ):
     if format not in FORMATS:
@@ -1481,6 +1517,8 @@ def generate(
     normalized_material = re.sub(r"\s+", " ", text).casefold().strip()
     fingerprint_input = f"{user['user_id']}\0{normalized_material}"
     material_fingerprint = hashlib.sha256(fingerprint_input.encode("utf-8")).hexdigest()
+    if expected_material_fingerprint and expected_material_fingerprint != material_fingerprint:
+        raise HTTPException(status_code=422, detail="This is not the original material for the incomplete set. Upload the original file to continue generating.")
     text = text[:MAX_TEXT]
     # Do not ask the model to cite pages/slides that were removed by the input cap.
     source_labels = [label for label in source_labels if f"[SOURCE: {label}]" in text]
@@ -1501,6 +1539,15 @@ def generate(
         for item in study_set.get("items", [])
         if str(item.get("question") or "").strip()
     ))
+    if existing_questions:
+        try:
+            parsed_existing = json.loads(existing_questions)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="Existing questions must be a JSON array of question text.") from exc
+        if not isinstance(parsed_existing, list) or any(not isinstance(question, str) for question in parsed_existing):
+            raise HTTPException(status_code=422, detail="Existing questions must be a JSON array of question text.")
+        excluded_questions.extend(question.strip()[:1000] for question in parsed_existing[:50] if question.strip())
+        excluded_questions = list(dict.fromkeys(excluded_questions))
 
     _used_today, daily_limit, usage_reset = reserve_user_generation(user["user_id"], user["email"])
 

@@ -2,11 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { BookOpen, Check, ChevronLeft, ChevronRight, CircleHelp, Sparkles } from "lucide-react";
+import { BookOpen, Check, ChevronLeft, ChevronRight, CircleHelp, RotateCcw, Sparkles } from "lucide-react";
 
 type SharedCard = { question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string; source_refs?: string[] };
 type SharedSet = { title: string; type: string; items: SharedCard[]; sources?: { title: string; url: string }[] };
+type AnswerState = { selected: string | null; selectedMany: string[]; revealed: boolean };
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
+const emptyAnswer = (): AnswerState => ({ selected: null, selectedMany: [], revealed: false });
+
+function normalizedAnswer(value: unknown) {
+  return String(value ?? "").toLocaleLowerCase().trim().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
 
 export default function SharedStudySetPage() {
   const params = useParams<{ token: string }>();
@@ -14,55 +20,102 @@ export default function SharedStudySetPage() {
   const [studySet, setStudySet] = useState<SharedSet | null>(null);
   const [error, setError] = useState("");
   const [index, setIndex] = useState(0);
-  const [revealed, setRevealed] = useState(false);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [selectedMany, setSelectedMany] = useState<string[]>([]);
+  const [responses, setResponses] = useState<AnswerState[]>([]);
 
   useEffect(() => {
+    setStudySet(null); setError(""); setIndex(0); setResponses([]);
     if (!token || !API_BASE) { setError("This share link is unavailable."); return; }
     fetch(`${API_BASE}/api/shared/${encodeURIComponent(token)}`)
       .then(async (response) => {
         if (!response.ok) throw new Error(response.status === 404 ? "This link is invalid or the owner turned it off." : "The shared set could not be loaded. Please try again.");
-        setStudySet(await response.json());
+        const data: SharedSet = await response.json();
+        const defaults = Array.from({ length: data.items.length }, emptyAnswer);
+        try {
+          const saved = JSON.parse(sessionStorage.getItem(`dawnstudy_shared_progress_v1:${token}`) || "null");
+          if (Array.isArray(saved)) {
+            for (let item = 0; item < Math.min(saved.length, defaults.length); item += 1) {
+              const responseState = saved[item];
+              if (responseState && typeof responseState === "object") {
+                defaults[item] = {
+                  selected: typeof responseState.selected === "string" ? responseState.selected : null,
+                  selectedMany: Array.isArray(responseState.selectedMany) ? responseState.selectedMany.filter((answer: unknown) => typeof answer === "string") : [],
+                  revealed: Boolean(responseState.revealed),
+                };
+              }
+            }
+          }
+        } catch { /* A damaged saved session starts a fresh quiz. */ }
+        setResponses(defaults);
+        setStudySet(data);
       })
       .catch((caught) => setError(caught instanceof Error ? caught.message : "The shared set could not be loaded."));
   }, [token]);
 
-  function move(nextIndex: number) {
+  function updateCurrentResponse(next: AnswerState) {
+    const updated = responses.map((response, responseIndex) => responseIndex === index ? next : response);
+    setResponses(updated);
+    try { sessionStorage.setItem(`dawnstudy_shared_progress_v1:${token}`, JSON.stringify(updated)); }
+    catch { /* The quiz still works when browser storage is unavailable. */ }
+  }
+
+  function restartQuiz() {
     if (!studySet) return;
-    setIndex((nextIndex + studySet.items.length) % studySet.items.length);
-    setRevealed(false); setSelected(null); setSelectedMany([]);
+    setIndex(0);
+    setResponses(Array.from({ length: studySet.items.length }, emptyAnswer));
+    try { sessionStorage.removeItem(`dawnstudy_shared_progress_v1:${token}`); }
+    catch { /* Restarting the visible quiz does not depend on browser storage. */ }
   }
 
   const card = studySet?.items[index];
+  const response = responses[index] || emptyAnswer();
   const expectedAnswer = String(card?.correct_answer || card?.answer || "");
-  const expectedAnswers = expectedAnswer.split("|").map((answer) => String(answer ?? "").trim().toLocaleLowerCase());
-  const isCorrect = (option: string) => expectedAnswers.includes(String(option ?? "").trim().toLocaleLowerCase());
+  const expectedAnswers = expectedAnswer.split("|").map(normalizedAnswer).filter(Boolean);
+  const isCorrect = (option: string) => expectedAnswers.includes(normalizedAnswer(option));
   const checkboxMode = studySet?.type === "checkbox";
+  const scoreableCount = studySet ? studySet.items.filter((item) => Boolean(item.options?.length)).length : 0;
+  const answeredCount = studySet ? studySet.items.reduce((count, item, itemIndex) => count + (item.options?.length && responses[itemIndex]?.revealed ? 1 : 0), 0) : 0;
+  const correctCount = studySet ? studySet.items.reduce((count, item, itemIndex) => {
+    const saved = responses[itemIndex];
+    if (!item.options?.length || !saved?.revealed) return count;
+    const answers = String(item.correct_answer || item.answer || "").split("|").map(normalizedAnswer).filter(Boolean);
+    const correct = item.options.filter((option) => answers.includes(normalizedAnswer(option)));
+    const picked = studySet.type === "checkbox" ? saved.selectedMany : saved.selected ? [saved.selected] : [];
+    const right = picked.filter((option) => answers.includes(normalizedAnswer(option)));
+    const isAnswerCorrect = studySet.type === "checkbox"
+      ? right.length === correct.length && picked.length === correct.length
+      : picked.length === 1 && right.length === 1;
+    return count + (isAnswerCorrect ? 1 : 0);
+  }, 0) : 0;
+
+  function move(nextIndex: number) {
+    if (!studySet) return;
+    setIndex(Math.max(0, Math.min(studySet.items.length - 1, nextIndex)));
+  }
 
   return <main className="shared-shell">
     <header className="shared-brand"><a href="/"><span className="brand-icon"><Sparkles size={18}/></span><span>dawn<span>study</span><small>shared study set</small></span></a><span className="shared-readonly">VIEW ONLY</span></header>
     {error ? <section className="shared-message"><CircleHelp size={23}/><h1>Can't open this set</h1><p>{error}</p><a href="/">Go to Dawnstudy</a></section> : !studySet || !card ? <section className="shared-message"><span className="spinner"/><p>Loading shared study set…</p></section> : <section className="shared-content">
       <div className="result-kicker"><span/> SHARED BY A CLASSMATE</div><h1>{studySet.title}</h1><p className="shared-subtitle">{studySet.items.length} questions · {studySet.type.replaceAll("_", " ")}</p>
+      <div className="shared-quiz-summary"><span>{scoreableCount ? `Score ${correctCount}/${answeredCount} answered · ${answeredCount} of ${scoreableCount} scored questions` : `${responses.filter((item) => item.revealed).length} cards reviewed`}</span><button type="button" onClick={restartQuiz}><RotateCcw size={14}/> Restart quiz</button></div>
       <article className="shared-card"><div className="shared-card-top"><span>QUESTION {index + 1}</span><span>{String(index + 1).padStart(2, "0")} / {String(studySet.items.length).padStart(2, "0")}</span></div><h2>{card.question}</h2>
         {card.options?.length && checkboxMode ? <><div className="choice-options">{card.options.map((option, optionIndex) => {
           const correct = isCorrect(option);
-          const wrong = selectedMany.includes(option) && !correct;
-          const status = !revealed ? "" : correct ? "choice-correct" : wrong ? "choice-wrong" : "";
-          return <button type="button" key={`${optionIndex}-${option}`} className={`choice-option ${status}`} disabled={revealed} aria-pressed={selectedMany.includes(option)} onClick={() => setSelectedMany((old) => old.includes(option) ? old.filter((item) => item !== option) : [...old, option])}><i>{selectedMany.includes(option) ? "✓" : String.fromCharCode(65 + optionIndex)}</i><span>{option}</span>{revealed && correct && <Check size={16}/>}</button>;
-        })}</div>{!revealed && <button className="action-button" onClick={() => setRevealed(true)}>Check answers</button>}</> : card.options?.length ? <div className="choice-options">{card.options.map((option, optionIndex) => {
+          const wrong = response.selectedMany.includes(option) && !correct;
+          const status = !response.revealed ? "" : correct ? "choice-correct" : wrong ? "choice-wrong" : "";
+          return <button type="button" key={`${optionIndex}-${option}`} className={`choice-option ${status}`} disabled={response.revealed} aria-pressed={response.selectedMany.includes(option)} onClick={() => updateCurrentResponse({ ...response, selectedMany: response.selectedMany.includes(option) ? response.selectedMany.filter((item) => item !== option) : [...response.selectedMany, option] })}><i>{response.selectedMany.includes(option) ? "✓" : String.fromCharCode(65 + optionIndex)}</i><span>{option}</span>{response.revealed && correct && <Check size={16}/>}</button>;
+        })}</div>{!response.revealed && <button className="action-button" onClick={() => updateCurrentResponse({ ...response, revealed: true })}>Check answers</button>}</> : card.options?.length ? <div className="choice-options">{card.options.map((option, optionIndex) => {
           const correct = isCorrect(option);
-          const wrong = selected === option && !correct;
-          const status = !revealed ? "" : correct ? "choice-correct" : wrong ? "choice-wrong" : "";
-          return <button type="button" key={`${optionIndex}-${option}`} className={`choice-option ${status}`} disabled={revealed} onClick={() => { setSelected(option); setRevealed(true); }}><i>{String.fromCharCode(65 + optionIndex)}</i><span>{option}</span>{revealed && correct && <Check size={16}/>}</button>;
-        })}</div> : <button className={`shared-answer ${revealed ? "is-revealed" : ""}`} onClick={() => setRevealed(!revealed)}>{revealed ? card.answer : "Tap to reveal the answer"}</button>}
-        {revealed && card.options?.length && <p className={`shared-feedback ${checkboxMode ? expectedAnswers.length === selectedMany.filter((option) => isCorrect(option)).length && selectedMany.every(isCorrect) ? "correct" : "wrong" : isCorrect(selected || "") ? "correct" : "wrong"}`}>{checkboxMode ? expectedAnswers.length === selectedMany.filter((option) => isCorrect(option)).length && selectedMany.every(isCorrect) ? "Correct!" : `Correct answers: ${expectedAnswer}` : isCorrect(selected || "") ? "Correct!" : `Correct answer: ${expectedAnswer}`}</p>}
-        {revealed && card.explanation && <p className="explanation">{card.explanation}</p>}
+          const wrong = response.selected === option && !correct;
+          const status = !response.revealed ? "" : correct ? "choice-correct" : wrong ? "choice-wrong" : "";
+          return <button type="button" key={`${optionIndex}-${option}`} className={`choice-option ${status}`} disabled={response.revealed} aria-pressed={response.selected === option} onClick={() => updateCurrentResponse({ ...response, selected: option, revealed: true })}><i>{String.fromCharCode(65 + optionIndex)}</i><span>{option}</span>{response.revealed && correct && <Check size={16}/>}</button>;
+        })}</div> : <button className={`shared-answer ${response.revealed ? "is-revealed" : ""}`} onClick={() => updateCurrentResponse({ ...response, revealed: !response.revealed })}>{response.revealed ? card.answer : "Tap to reveal the answer"}</button>}
+        {response.revealed && card.options?.length && <p className={`shared-feedback ${checkboxMode ? expectedAnswers.length === response.selectedMany.filter((option) => isCorrect(option)).length && response.selectedMany.every(isCorrect) ? "correct" : "wrong" : isCorrect(response.selected || "") ? "correct" : "wrong"}`}>{checkboxMode ? expectedAnswers.length === response.selectedMany.filter((option) => isCorrect(option)).length && response.selectedMany.every(isCorrect) ? "Correct!" : `Correct answers: ${expectedAnswer}` : isCorrect(response.selected || "") ? "Correct!" : `Correct answer: ${expectedAnswer}`}</p>}
+        {response.revealed && card.explanation && <p className="explanation">{card.explanation}</p>}
         {card.source_refs?.length ? <div className="material-citations"><strong>From the uploaded material</strong>{card.source_refs.map((source) => <span key={source}>{source}</span>)}</div> : null}
-        <div className="study-controls"><button className="control-button" onClick={() => move(index - 1)}><ChevronLeft size={15}/> Previous</button><button className="control-button next" onClick={() => move(index + 1)}>Next <ChevronRight size={15}/></button></div>
+        <div className="study-controls"><button className="control-button" disabled={index === 0} onClick={() => move(index - 1)}><ChevronLeft size={15}/> Previous</button><button className="control-button next" disabled={index >= studySet.items.length - 1} onClick={() => move(index + 1)}>Next <ChevronRight size={15}/></button></div>
       </article>
       {studySet.sources?.length ? <div className="shared-sources"><strong>Web sources</strong>{studySet.sources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer">{source.title}</a>)}</div> : null}
-      <p className="shared-footer"><BookOpen size={14}/> Shared link access. The owner can turn this link off at any time.</p>
+      <p className="shared-footer"><BookOpen size={14}/> Your answers and score stay on this device for this quiz session. The owner can turn this link off at any time.</p>
     </section>}
   </main>;
 }
