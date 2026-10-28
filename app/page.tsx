@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import {
   AlarmClock, BookOpen, Check, CheckSquare, ChevronLeft, ChevronRight, CircleHelp, Clock3,
-  CloudUpload, Copy, Cpu, FileText, Flag, Globe2, GraduationCap, Layers3, LogOut, Menu, Mic,
+  CloudUpload, Copy, Cpu, ExternalLink, FileText, Flag, Globe2, GraduationCap, Layers3, LogOut, Menu, Mic,
   MicOff, Moon, Maximize2, Minimize2, Plus, Send, Share2, Sparkles, Sun, Trash2, UserRound,
-  Volume2, X,
+  Search, Volume2, X,
 } from "lucide-react";
 
 type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification";
@@ -17,6 +17,7 @@ type Progress = { total_reviews: number; reviewed_today: number; accuracy: numbe
 type Account = { id: string; username: string; email: string; display_name: string };
 type LoginResult = { token: string; user: Account };
 type ModelOption = { id: string; provider: string; name: string };
+type MaterialSearchResult = { title: string; url: string; snippet: string; file_type: string };
 type Theme = "dark" | "light";
 type PracticeAnswer = string | string[] | null;
 type VoiceMode = "multiple_choice" | "identification" | "open_ended" | "enumeration";
@@ -133,6 +134,14 @@ function shuffleSavedItems(items: Card[], kind: Kind) {
 export default function Home() {
   const [selected, setSelected] = useState<Kind>("flashcards");
   const [file, setFile] = useState<File | null>(null);
+  const [finderTopic, setFinderTopic] = useState("");
+  const [finderSubject, setFinderSubject] = useState("");
+  const [finderTitle, setFinderTitle] = useState("");
+  const [finderTags, setFinderTags] = useState("");
+  const [finderResults, setFinderResults] = useState<MaterialSearchResult[]>([]);
+  const [finderBusy, setFinderBusy] = useState(false);
+  const [finderError, setFinderError] = useState("");
+  const [finderSearched, setFinderSearched] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [web, setWeb] = useState(false);
   const [modelChoice, setModelChoice] = useState("auto");
@@ -338,7 +347,7 @@ export default function Home() {
   function acceptLogin(data: LoginResult) {
     localStorage.setItem(TOKEN_KEY, data.token);
     setAuthToken(data.token); setAccount(data.user); setActiveShares([]); setAuthOpen(false);
-    setAuthError(""); setError(""); setNotice(`Welcome, ${data.user.display_name || data.user.username}. Your sets will sync to your account.`);
+    setAuthError(""); setError(""); setFinderError(""); setNotice(`Welcome, ${data.user.display_name || data.user.username}. Your sets will sync to your account.`);
     void loadAccountSets(data.token);
   }
 
@@ -405,6 +414,44 @@ export default function Home() {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Something went wrong. Please try again.");
     } finally { setBusy(false); }
+  }
+
+  async function searchMaterials(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setFinderError("");
+    setFinderSearched(false);
+    setFinderResults([]);
+    if (!authToken || !account) {
+      setFinderError("Sign in with your CEU Google account to search for learning materials.");
+      setAuthOpen(true);
+      return;
+    }
+    if (![finderTopic, finderSubject, finderTitle, finderTags].some((value) => value.trim())) {
+      setFinderError("Enter a topic, subject, title, or tag to search.");
+      return;
+    }
+    if (!API_BASE) {
+      setFinderError("The API address is not configured for this site.");
+      return;
+    }
+
+    setFinderBusy(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/material-search`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ topic: finderTopic, subject: finderSubject, title: finderTitle, tags: finderTags }),
+      });
+      if (!response.ok) throw new Error(await responseError(response));
+      const data = await response.json();
+      setFinderResults(Array.isArray(data.results) ? data.results : []);
+      setFinderSearched(true);
+    } catch (caught) {
+      setFinderResults([]);
+      setFinderError(caught instanceof Error ? caught.message : "Search is temporarily unavailable. Please try again.");
+    } finally {
+      setFinderBusy(false);
+    }
   }
 
   async function continueGenerating() {
@@ -800,6 +847,7 @@ export default function Home() {
         <a className="brand" href="#home"><span className="brand-icon"><Sparkles size={19} strokeWidth={2.2} /></span><span className="brand-copy"><span>dawn<span className="brand-light">study</span></span><small>by Devon</small></span></a>
         <div className="side-kicker">YOUR SPACE</div>
         <button className="nav-item active" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}><span className="nav-icon"><BookOpen size={18}/></span> Study desk</button>
+        <button className="nav-item" onClick={() => document.getElementById("pdf-finder")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><Search size={18}/></span> PDF Finder</button>
         <button className="nav-item" onClick={() => document.querySelector(".voice-review")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><Mic size={18}/></span> Voice review</button>
         <button className="nav-item" onClick={() => document.querySelector(".recent-section")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><Layers3 size={18}/></span> My study sets <span className="nav-count">{sets.length}</span></button>
         <button className="nav-item" onClick={() => document.querySelector(".active-links-section")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><Share2 size={18}/></span> Active Links <span className="nav-count">{activeShares.length}</span></button>
@@ -825,7 +873,7 @@ export default function Home() {
       <section className="main-area" id="home">
         <header className="topbar"><div className="crumb"><span>Your space</span><ChevronRight size={14}/><b>Study desk</b></div><div className="top-actions"><button className="theme-toggle" onClick={() => setColorTheme(theme === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>{theme === "dark" ? <Sun size={16}/> : <Moon size={16}/>}<span>{theme === "dark" ? "Light mode" : "Dark mode"}</span></button><span className="today-pill"><span className="status-dot"/> YOUR STUDY DESK</span>{!account && <button className="top-signin" onClick={() => setAuthOpen(true)}><UserRound size={14}/> Sign in</button>}<button className="profile-mobile" onClick={() => account ? signOut() : setAuthOpen(true)} title={account ? "Sign out" : "Sign in with Google"}>{account ? <LogOut size={18}/> : <Menu size={20}/>}</button></div></header>
         <div className="content">
-          <div className="access-banner"><GraduationCap size={19}/><span><strong>For Centro Escolar University students, for now.</strong> To conserve AI tokens, Dawnstudy is limited to verified Google accounts ending in <b>@ceu.edu.ph</b>, <b>@mnl.ceu.edu.ph</b>, <b>@mkt.ceu.edu.ph</b>, or <b>@mls.ceu.edu.ph</b>.</span></div>
+          <div className="access-banner"><GraduationCap size={19}/><span><strong>For CEU students.</strong> Sign in with a verified school Google account to use Dawnstudy.</span></div>
           <section className="welcome"><div className="welcome-copy"><div className="eyebrow"><span/> A FRESH PAGE, A FRESH START</div><h1>Make today<br/>a little <em>brighter.</em></h1><p>Drop in your notes. We’ll help the important things stick.</p></div><div className="sunrise-art" aria-hidden="true"><div className="sun"/><div className="cloud cloud-one"/><div className="cloud cloud-two"/><div className="horizon h-back"/><div className="horizon h-front"/></div><span className="welcome-note">one page at a time <span>✳</span></span></section>
           <div className="section-intro"><div><div className="section-title-row"><h2>Start a study set</h2></div><p>Choose how you’d like to practice.</p></div><span className="quiet-note">Good things take practice <span>↗</span></span></div>
           {account && progress && <section className="progress-panel"><div className="progress-copy"><div className="result-kicker"><span/> YOUR STUDY PROGRESS</div><h2>Small steps add up.</h2><p>Review a little each day to keep ideas fresh.</p><div className="progress-stats"><div><strong>{progress.reviewed_today}</strong><span>today</span></div><div><strong>{progress.accuracy}%</strong><span>accuracy</span></div><div><strong>{progress.current_streak} <small>days</small></strong><span>current streak</span></div><div><strong>{progress.best_streak} <small>days</small></strong><span>best streak</span></div></div><div className="week-bars" aria-label="Reviews during the past seven days">{progress.week.map((day) => <div key={day.date} title={`${day.reviews} reviews`}><i style={{ height: `${Math.max(8, Math.min(100, day.reviews * 18))}%` }}/><small>{new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: "narrow" })}</small></div>)}</div></div><button className="review-start" onClick={() => void startReview()}><Clock3 size={17}/><span>Review due</span><b>{progress.due_count}</b><ChevronRight size={16}/></button></section>}
@@ -834,7 +882,7 @@ export default function Home() {
             <input ref={input} type="file" accept=".pdf,.pptx,.docx,.txt,.md,.png,.jpg,.jpeg,.webp" hidden onChange={(event) => selectFile(event.target.files?.[0])}/>
             <span className="upload-icon">{file ? <FileText size={22}/> : <CloudUpload size={23}/>}</span><span className="upload-copy">{file ? <><strong>{file.name}</strong><small>{(file.size / 1024 / 1024).toFixed(2)} MB · ready to study</small></> : <><strong>Drop your study material here</strong><small>or <span className="browse-link">browse your files</span></small></>}</span>{file ? <button className="remove-file" title="Remove file" onClick={(event) => { event.stopPropagation(); setFile(null); }}><X size={18}/></button> : <span className="format-hint">PDF, PPTX, DOCX, TXT, MD, or image <i>·</i> Max 15 MB</span>}
           </section>
-          <div className="model-row"><label htmlFor="model-choice"><Cpu size={16}/> AI model</label><select id="model-choice" value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}><option value="auto">Auto choose · switch when busy or limited</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select><label className="count-label" htmlFor="question-count">Questions</label><select id="question-count" value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{[10, 20, 30, 40, 50].map((count) => <option key={count} value={count}>{count} questions</option>)}</select><label htmlFor="question-difficulty">Difficulty</label><select id="question-difficulty" value={difficulty} onChange={(event) => setDifficulty(event.target.value as "easy" | "medium" | "hard")}><option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option></select><span className="model-help">Difficulty adjusts question depth. Choice options are checked for similar lengths at every level. {modelChoice === "auto" ? "Auto uses file size, extracted text, and question count to choose a compact model for smaller jobs and a stronger one for larger jobs." : "Your choice is tried first. Another configured model can help if it fails or returns a partial set."} Up to 50 questions per request. {hasUnlimitedGenerations ? "No Dawnstudy daily generation cap applies to your account." : "Each submitted request uses one of 5 daily generations, even if fallback models are tried; your allowance resets at midnight Manila time."} Provider free quotas are shared and may still be busy or exhausted. Auto and fallback can use Mistral models, which may use paid credits; check that provider account’s pricing.</span></div>
+          <div className="model-row"><label htmlFor="model-choice"><Cpu size={16}/> AI model</label><select id="model-choice" value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}><option value="auto">Auto choose · switch when busy or limited</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select><label className="count-label" htmlFor="question-count">Questions</label><select id="question-count" value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{[10, 20, 30, 40, 50].map((count) => <option key={count} value={count}>{count} questions</option>)}</select><label htmlFor="question-difficulty">Difficulty</label><select id="question-difficulty" value={difficulty} onChange={(event) => setDifficulty(event.target.value as "easy" | "medium" | "hard")}><option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option></select><details className="model-help-details"><summary>Model and generation details</summary><p className="model-help">Difficulty adjusts question depth. Choice options are checked for similar lengths at every level. {modelChoice === "auto" ? "Auto uses file size, extracted text, and question count to choose a compact model for smaller jobs and a stronger one for larger jobs." : "Your choice is tried first. Another configured model can help if it fails or returns a partial set."} Up to 50 questions per request. {hasUnlimitedGenerations ? "No Dawnstudy daily generation cap applies to your account." : "Each submitted request uses one of 5 daily generations, even if fallback models are tried; your allowance resets at midnight Manila time."} Provider free quotas are shared and may still be busy or exhausted. Auto and fallback can use Mistral models, which may use paid credits; check that provider account’s pricing.</p></details></div>
           <div className="options-row"><button className={`web-toggle ${web ? "on" : ""}`} onClick={() => setWeb(!web)}><span className="toggle-track"><span/></span><Globe2 size={16}/><span>Enrich with the web</span><span className="optional-tag">OPTIONAL</span></button><button className="web-info" title="Searches the web for relevant context and includes source links with your results."><CircleHelp size={15}/></button></div>
           <div className="generate-row"><span className="privacy-note"><span className="privacy-dot"/> Sent to your selected AI provider; sets sync to your account.</span><button className="generate-button" onClick={generate} disabled={busy}>{busy ? <><span className="spinner"/> Trying available models…</> : <><Sparkles size={16}/> Make my study set <ChevronRight size={16}/></>}</button></div>
           {error && <div className="error-box"><CircleHelp size={16}/><span>{error}</span></div>}
@@ -873,6 +921,20 @@ export default function Home() {
               <div className="study-controls"><button className="control-button" onClick={() => { setCurrent((current - 1 + result.items.length) % result.items.length); setRevealed(false); setSelectedOption(null); }}><ChevronLeft size={16}/> Previous</button><span className="dots">{result.items.slice(0, Math.min(result.items.length, 7)).map((_, index) => <i key={index} className={index === current ? "dot-active" : ""}/>)}</span><button className="control-button next" onClick={() => { setCurrent((current + 1) % result.items.length); setRevealed(false); setSelectedOption(null); }}>Next <ChevronRight size={16}/></button></div>
               {result.sources?.length ? <div className="source-links"><Globe2 size={14}/><span>Sources:</span>{result.sources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer">{source.title}</a>)}</div> : null}
             </div></section>}
+          <section className="pdf-finder-section" id="pdf-finder">
+            <div className="pdf-finder-heading"><div><div className="result-kicker"><span/> PDF FINDER</div><h2>Find material to study</h2><p>Search the web for PDFs, slides, documents, and other files Dawnstudy can read.</p></div><span className="finder-heading-icon"><Search size={20}/></span></div>
+            <form className="finder-form" onSubmit={(event) => void searchMaterials(event)}>
+              <label>Topic<input value={finderTopic} onChange={(event) => setFinderTopic(event.target.value)} maxLength={180} placeholder="e.g. cellular respiration"/></label>
+              <label>Subject<input value={finderSubject} onChange={(event) => setFinderSubject(event.target.value)} maxLength={120} placeholder="e.g. biology"/></label>
+              <label>Book or article title<input value={finderTitle} onChange={(event) => setFinderTitle(event.target.value)} maxLength={200} placeholder="Title or author, if known"/></label>
+              <label>Tags<input value={finderTags} onChange={(event) => setFinderTags(event.target.value)} maxLength={300} placeholder="e.g. lecture notes, review, anatomy"/></label>
+              <div className="finder-form-footer"><span>Open a result, download a compatible file, then upload it above. Check the source’s reuse terms.</span><button className="finder-search-button" type="submit" disabled={finderBusy}>{finderBusy ? <><span className="spinner"/> Searching…</> : <><Search size={16}/> Search materials</>}</button></div>
+            </form>
+            {finderError && <div className="finder-error" role="alert"><CircleHelp size={15}/><span>{finderError}</span></div>}
+            {finderSearched && <div className="finder-results-heading"><strong>{finderResults.length ? `${finderResults.length} learning resources` : "No resources found"}</strong><span>Search results from the web</span></div>}
+            {finderSearched && finderResults.length > 0 && <div className="finder-results">{finderResults.map((resource) => <article className="finder-result-card" key={resource.url}><span className="finder-file-type"><FileText size={14}/>{resource.file_type}</span><div className="finder-result-copy"><strong>{resource.title}</strong>{resource.snippet && <p>{resource.snippet}</p>}<small>{resource.url}</small></div><a className="finder-open-link" href={resource.url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${resource.title}`}><span>Open</span><ExternalLink size={15}/></a></article>)}</div>}
+            {finderSearched && finderResults.length === 0 && !finderError && <p className="finder-empty">Try a broader topic, a different title, or fewer tags.</p>}
+          </section>
           <section className="active-links-section" id="active-links"><div className="recent-head"><div><div className="section-title-row"><h2>Active Links</h2><span className="recent-count">{activeShares.length}</span></div><p>Share links that are currently enabled for your study sets.</p></div></div>
             {activeShares.length ? <div className="active-links-list">{activeShares.map((share) => {
               const url = `${siteOrigin}/shared/${share.token}`;
@@ -914,6 +976,7 @@ export default function Home() {
 
       <nav className="mobile-bottom-nav" aria-label="Main navigation">
         <button type="button" onClick={() => document.getElementById("home")?.scrollIntoView({ behavior: "smooth" })}><BookOpen size={18}/><span>Study</span></button>
+        <button type="button" onClick={() => document.getElementById("pdf-finder")?.scrollIntoView({ behavior: "smooth" })}><Search size={18}/><span>Finder</span></button>
         <button type="button" onClick={() => document.getElementById("recent-sets")?.scrollIntoView({ behavior: "smooth" })}><Layers3 size={18}/><span>Sets</span></button>
         <button type="button" onClick={() => document.getElementById("active-links")?.scrollIntoView({ behavior: "smooth" })}><Share2 size={18}/><span>Links</span></button>
         <button type="button" onClick={() => document.getElementById("voice-review")?.scrollIntoView({ behavior: "smooth" })}><Mic size={18}/><span>Voice</span></button>

@@ -8,6 +8,7 @@ import base64
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import requests
@@ -141,6 +142,13 @@ class VoiceChatRequest(BaseModel):
     history: list[dict[str, str]] = Field(default_factory=list, max_length=12)
     model: str = Field(default="auto", max_length=120)
     mode: Literal["multiple_choice", "identification", "open_ended", "enumeration"] = "open_ended"
+
+
+class MaterialSearchRequest(BaseModel):
+    topic: str = Field(default="", max_length=180)
+    subject: str = Field(default="", max_length=120)
+    title: str = Field(default="", max_length=200)
+    tags: str = Field(default="", max_length=300)
 
 
 def public_user(user: dict[str, str]) -> dict[str, str]:
@@ -579,6 +587,72 @@ def search_web(query: str) -> tuple[str, list[dict[str, str]]]:
     sources = [{"title": item.get("title", "Web source"), "url": item.get("url", "")} for item in results if item.get("url")]
     excerpts = "\n\n".join(f"{item.get('title', '')}: {item.get('content', '')[:900]}" for item in results)
     return excerpts, sources
+
+
+@app.post("/api/material-search")
+def search_learning_materials(body: MaterialSearchRequest, user: dict[str, str] = Depends(authenticated_user)):
+    fields = [
+        ("topic", body.topic),
+        ("subject", body.subject),
+        ("book or article title", body.title),
+        ("tags", body.tags),
+    ]
+    search_terms = [f"{label}: {value.strip()}" for label, value in fields if value.strip()]
+    if not search_terms:
+        raise HTTPException(status_code=422, detail="Enter a topic, subject, title, or tag to search.")
+
+    api_key = os.getenv("TAVILY_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="PDF Finder is unavailable because web search is not configured on the API.")
+
+    query = (
+        "Find relevant downloadable learning materials in PDF, PPTX, DOCX, TXT, Markdown, or image formats. "
+        + "; ".join(search_terms)
+    )
+    try:
+        response = requests.post(
+            "https://api.tavily.com/search",
+            json={
+                "api_key": api_key,
+                "query": query[:400],
+                "search_depth": "basic",
+                "max_results": 10,
+                "include_answer": False,
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        raw_results = response.json().get("results", [])
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail="PDF Finder could not reach web search. Please try again.") from exc
+
+    file_types = {
+        ".pdf": "PDF",
+        ".pptx": "PPTX",
+        ".docx": "DOCX",
+        ".txt": "TXT",
+        ".md": "Markdown",
+        ".png": "PNG image",
+        ".jpg": "JPEG image",
+        ".jpeg": "JPEG image",
+        ".webp": "WEBP image",
+    }
+    results = []
+    for item in raw_results:
+        url = str(item.get("url", "")).strip()
+        parsed_url = urlparse(url)
+        if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+            continue
+        suffix = next((extension for extension in file_types if parsed_url.path.lower().endswith(extension)), "")
+        results.append({
+            "title": str(item.get("title") or "Learning resource")[:240],
+            "url": url,
+            "snippet": str(item.get("content") or "")[:600],
+            "file_type": file_types.get(suffix, "Resource page"),
+        })
+
+    results.sort(key=lambda item: item["file_type"] == "Resource page")
+    return {"results": results}
 
 
 def configured_ai_models() -> list[tuple[str, str, str, str, str]]:
