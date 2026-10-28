@@ -29,7 +29,7 @@ REVIEWS_TAB = "ReviewLogs"
 SHARES_TAB = "StudyShares"
 REPORTS_TAB = "CardReports"
 USER_COLUMNS = ["user_id", "username", "email", "password_hash", "google_sub", "display_name", "created_at"]
-SET_COLUMNS = ["set_id", "user_id", "title", "type", "items_json", "sources_json", "created_at", "material_fingerprint", "incomplete", "requested_count"]
+SET_COLUMNS = ["set_id", "user_id", "title", "type", "items_json", "sources_json", "created_at", "material_fingerprint", "incomplete", "requested_count", "source_url"]
 USAGE_COLUMNS = ["scope_key", "usage_date", "generation_count"]
 PROGRESS_COLUMNS = ["user_id", "set_id", "card_id", "due_at", "interval_days", "ease_factor", "repetitions", "lapses", "last_reviewed_at", "last_rating"]
 REVIEW_COLUMNS = ["user_id", "set_id", "card_id", "reviewed_at", "rating", "was_correct"]
@@ -278,6 +278,7 @@ def save_study_set(study_set: dict[str, Any]) -> None:
                 str(study_set.get("material_fingerprint", "")),
                 str(bool(study_set.get("incomplete", False))).lower(),
                 str(study_set.get("requested_count", len(study_set["items"]))),
+                str(study_set.get("source_url", ""))[:2048],
             ],
         )
 
@@ -296,7 +297,7 @@ def update_study_set(user_id: str, set_id: str, study_set: dict[str, Any]) -> bo
         if not match:
             return False
         row_number, existing = match
-        range_name = quote(f"{SETS_TAB}!A{row_number}:J{row_number}", safe="!:")
+        range_name = quote(f"{SETS_TAB}!A{row_number}:K{row_number}", safe="!:")
         _api(
             "PUT",
             f"/values/{range_name}",
@@ -312,6 +313,7 @@ def update_study_set(user_id: str, set_id: str, study_set: dict[str, Any]) -> bo
                 str(study_set.get("material_fingerprint", existing.get("material_fingerprint", ""))),
                 str(bool(study_set.get("incomplete", False))).lower(),
                 str(study_set.get("requested_count", len(study_set["items"]))),
+                str(study_set.get("source_url", existing.get("source_url", "")))[:2048],
             ]]},
         )
         _invalidate_rows(SETS_TAB)
@@ -487,6 +489,7 @@ def list_study_sets(user_id: str) -> list[dict[str, Any]]:
             "sources": sources,
             "created_at": row["created_at"],
             "material_fingerprint": row.get("material_fingerprint", ""),
+            "source_url": row.get("source_url", ""),
             "incomplete": row.get("incomplete", "").casefold() == "true",
             "requested_count": max(len(items), requested_count),
         })

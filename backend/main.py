@@ -5,10 +5,13 @@ import re
 import threading
 import hashlib
 import base64
+import ipaddress
+import socket
+from html.parser import HTMLParser
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import unquote, urljoin, urlparse
 from uuid import uuid4
 
 import requests
@@ -68,6 +71,7 @@ app.add_middleware(
 )
 
 MAX_BYTES = 15 * 1024 * 1024
+MAX_WEBPAGE_BYTES = 3 * 1024 * 1024
 MAX_TEXT = 22_000
 MAX_QUESTIONS_PER_GENERATION = 50
 ACCOUNT_DAILY_GENERATIONS = 5
@@ -119,6 +123,7 @@ class SavedStudySet(BaseModel):
     items: list[dict[str, Any]] = Field(min_length=1, max_length=50)
     sources: list[dict[str, str]] = Field(default_factory=list, max_length=20)
     material_fingerprint: str | None = Field(default=None, max_length=64)
+    source_url: str | None = Field(default=None, max_length=2048)
     incomplete: bool = False
     requested_count: int | None = Field(default=None, ge=1, le=50)
 
@@ -277,6 +282,7 @@ def add_study_set(body: SavedStudySet, user: dict[str, str] = Depends(authentica
         ],
         "sources": body.sources,
         "material_fingerprint": body.material_fingerprint or "",
+        "source_url": body.source_url or "",
         "incomplete": body.incomplete,
         "requested_count": body.requested_count or len(body.items),
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -299,6 +305,7 @@ def extend_study_set(set_id: str, body: SavedStudySet, user: dict[str, str] = De
         ],
         "sources": body.sources,
         "material_fingerprint": body.material_fingerprint or "",
+        "source_url": body.source_url or "",
         "incomplete": body.incomplete,
         "requested_count": body.requested_count or len(body.items),
     }
@@ -568,6 +575,197 @@ def extract_material(filename: str, raw: bytes) -> tuple[str, list[str]]:
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"We couldn't read this file. Check that it isn't damaged or password-protected. ({exc.__class__.__name__})") from exc
     raise HTTPException(status_code=415, detail="Choose a PDF, PPTX, DOCX, TXT, MD, PNG, JPG, JPEG, or WEBP file.")
+
+
+class _PublicPageParser(HTMLParser):
+    ignored_tags = {"script", "style", "noscript", "svg", "nav", "header", "footer", "aside", "form"}
+    void_tags = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+    block_tags = {"address", "article", "blockquote", "br", "dd", "div", "dl", "dt", "h1", "h2", "h3", "h4", "h5", "h6", "li", "ol", "p", "section", "table", "td", "th", "tr", "ul"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self._ignored_stack: list[str] = []
+        self._in_title = False
+        self.title_parts: list[str] = []
+        self.text_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self._ignored_stack:
+            if tag not in self.void_tags:
+                self._ignored_stack.append(tag)
+            return
+        if tag in self.ignored_tags:
+            self._ignored_stack.append(tag)
+            return
+        if tag == "title":
+            self._in_title = True
+        if tag in self.block_tags:
+            self.text_parts.append("\n")
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if not self._ignored_stack and tag in self.block_tags:
+            self.text_parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._ignored_stack:
+            if tag in self._ignored_stack:
+                while self._ignored_stack:
+                    if self._ignored_stack.pop() == tag:
+                        break
+            return
+        if tag == "title":
+            self._in_title = False
+        if tag in self.block_tags:
+            self.text_parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if self._ignored_stack:
+            return
+        if self._in_title:
+            self.title_parts.append(data)
+        else:
+            self.text_parts.append(data)
+
+
+def _validate_public_material_url(value: str) -> str:
+    if len(value) > 2048:
+        raise HTTPException(status_code=422, detail="That website link is too long.")
+    parsed = urlparse(value.strip())
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname or parsed.username is not None or parsed.password is not None:
+        raise HTTPException(status_code=422, detail="Enter a full public webpage link that starts with http:// or https://.")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="That website link has an invalid port.") from exc
+    expected_port = 443 if parsed.scheme.lower() == "https" else 80
+    if port is not None and port != expected_port:
+        raise HTTPException(status_code=422, detail="Only public websites on the standard HTTP or HTTPS ports can be opened.")
+
+    hostname = parsed.hostname.rstrip(".").casefold()
+    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith((".localhost", ".local", ".internal")):
+        raise HTTPException(status_code=422, detail="Dawnstudy can only open public websites.")
+    try:
+        addresses = [ipaddress.ip_address(hostname)]
+    except ValueError:
+        try:
+            resolved = socket.getaddrinfo(hostname, port or expected_port, type=socket.SOCK_STREAM)
+            addresses = [ipaddress.ip_address(entry[4][0].split("%", 1)[0]) for entry in resolved]
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="Dawnstudy could not find that public website.") from exc
+    if not addresses or any(not address.is_global for address in addresses):
+        raise HTTPException(status_code=422, detail="Dawnstudy can only open public websites.")
+    return parsed.geturl()
+
+
+def _fetch_public_material_url(value: str) -> tuple[bytes, str, str]:
+    current_url = value.strip()
+    for redirect_count in range(6):
+        current_url = _validate_public_material_url(current_url)
+        response = None
+        try:
+            response = requests.get(
+                current_url,
+                headers={"User-Agent": "DawnstudyStudyMaterialFetcher/1.0", "Accept": "text/html,application/xhtml+xml,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,image/*"},
+                allow_redirects=False,
+                stream=True,
+                timeout=(5, 15),
+            )
+            if response.is_redirect:
+                location = response.headers.get("Location")
+                response.close()
+                response = None
+                if not location or redirect_count == 5:
+                    raise HTTPException(status_code=422, detail="This website redirected too many times. Try its public page URL instead.")
+                current_url = urljoin(current_url, location)
+                continue
+            if response.status_code in {401, 403}:
+                raise HTTPException(status_code=422, detail="This page requires a login or restricts public access, so Dawnstudy cannot read its contents. Sign in yourself and upload an allowed copy of the material instead.")
+            if response.status_code == 404:
+                raise HTTPException(status_code=422, detail="That webpage or file could not be found.")
+            if response.status_code >= 400:
+                raise HTTPException(status_code=502, detail="The website could not provide this page. Please try again or upload the material directly.")
+
+            content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+            max_response_bytes = MAX_WEBPAGE_BYTES if content_type in {"text/html", "application/xhtml+xml"} else MAX_BYTES
+            try:
+                content_length = int(response.headers.get("Content-Length", "0"))
+            except ValueError:
+                content_length = 0
+            if content_length > max_response_bytes:
+                raise HTTPException(status_code=413, detail="That webpage or file is too large for Dawnstudy to read.")
+            raw = bytearray()
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                raw.extend(chunk)
+                if len(raw) > max_response_bytes:
+                    raise HTTPException(status_code=413, detail="That webpage or file is too large for Dawnstudy to read.")
+            if not raw:
+                raise HTTPException(status_code=422, detail="That webpage or file is empty.")
+            return bytes(raw), current_url, content_type
+        except requests.RequestException as exc:
+            raise HTTPException(status_code=502, detail="Dawnstudy could not reach that website. Check the link and try again.") from exc
+        finally:
+            if response is not None:
+                response.close()
+    raise HTTPException(status_code=422, detail="This website redirected too many times. Try its public page URL instead.")
+
+
+def extract_public_material_url(value: str) -> tuple[str, list[str], str, str, str, bytes]:
+    raw, final_url, content_type = _fetch_public_material_url(value)
+    parsed_url = urlparse(final_url)
+    path_name = unquote(parsed_url.path.rsplit("/", 1)[-1])
+    suffix = os.path.splitext(path_name)[1].lower()
+    html_types = {"text/html", "application/xhtml+xml"}
+
+    if content_type in html_types:
+        page_source = raw.decode("utf-8", errors="replace")
+        parser = _PublicPageParser()
+        try:
+            parser.feed(page_source)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail="Dawnstudy could not read the text on that webpage.") from exc
+        page_title = re.sub(r"\s+", " ", " ".join(parser.title_parts)).strip()[:180]
+        page_text = re.sub(r"\s+", " ", " ".join(parser.text_parts)).strip()
+        page_text_lower = f"{page_title} {page_text}".casefold()
+        login_phrases = (
+            "sign in to continue", "log in to continue", "please sign in", "please log in",
+            "you need to sign in", "you must be logged in", "login required",
+            "authentication required", "sign in to view", "log in to view",
+            "access requires an account", "institutional login",
+        )
+        has_password_field = bool(re.search(r"<input\b[^>]*\btype\s*=\s*['\"]?password\b", page_source, re.IGNORECASE))
+        login_path = bool(re.search(r"/(?:login|log-in|signin|sign-in|sso)(?:/|$)", parsed_url.path, re.IGNORECASE))
+        login_title = any(term in page_title.casefold() for term in ("login", "log in", "sign in", "signin", "authentication"))
+        short_login_page = login_title and len(re.sub(r"\s+", "", page_text)) < 160
+        has_login_phrase = any(phrase in page_text_lower or phrase in page_source.casefold() for phrase in login_phrases)
+        if has_login_phrase or short_login_page or (has_password_field and (login_path or login_title or "sign in" in page_text_lower or "log in" in page_text_lower)):
+            raise HTTPException(status_code=422, detail="This page requires a login or restricts public access, so Dawnstudy cannot read its contents. Sign in yourself and upload an allowed copy of the material instead.")
+        if len(re.sub(r"\s+", "", page_text)) < 80:
+            raise HTTPException(status_code=422, detail="That public webpage does not contain enough readable text. Try another page or upload a supported file.")
+        filename = f"{page_title or parsed_url.hostname}.txt"
+        text = f"[SOURCE: Website]\n{page_text}"
+        return text, ["Website"], page_title or parsed_url.hostname or "Webpage", final_url, filename, raw
+
+    mime_suffixes = {
+        "application/pdf": ".pdf",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+        "text/plain": ".txt",
+        "text/markdown": ".md",
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/webp": ".webp",
+    }
+    supported_suffixes = {".pdf", ".pptx", ".docx", ".txt", ".md", ".png", ".jpg", ".jpeg", ".webp"}
+    if suffix not in supported_suffixes:
+        suffix = mime_suffixes.get(content_type, "")
+    if suffix not in supported_suffixes:
+        raise HTTPException(status_code=415, detail="Paste a public webpage or a direct link to a PDF, PPTX, DOCX, TXT, MD, PNG, JPG, JPEG, or WEBP file.")
+    filename = path_name if os.path.splitext(path_name)[1].lower() in supported_suffixes else f"material{suffix}"
+    text, source_labels = extract_material(filename, raw)
+    title = os.path.splitext(path_name)[0] or os.path.basename(parsed_url.hostname or "Web material")
+    return text, source_labels, title[:180], final_url, filename, raw
 
 
 def search_web(query: str) -> tuple[str, list[dict[str, str]]]:
@@ -1560,7 +1758,8 @@ def reserve_user_generation(user_id: str, email: str) -> tuple[int, int | None, 
 
 @app.post("/api/generate")
 def generate(
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(None),
+    source_url: str = Form("", max_length=2048),
     format: str = Form(...),
     use_web: bool = Form(False),
     model: str = Form("auto"),
@@ -1577,22 +1776,35 @@ def generate(
     # This endpoint performs blocking PDF/DOCX parsing and HTTP calls to
     # AI providers/Tavily. Keep the work in FastAPI's worker thread so health checks
     # can still be served while generation is in progress.
-    raw = file.file.read(MAX_BYTES + 1)
-    if not raw:
-        raise HTTPException(status_code=422, detail="This file is empty.")
-    if len(raw) > MAX_BYTES:
-        raise HTTPException(status_code=413, detail="Files must be 15 MB or smaller.")
-    filename = file.filename or "study-material.txt"
-    text, source_labels = extract_material(filename, raw)
+    source_url = source_url.strip()
+    has_file = file is not None and bool(file.filename)
+    if has_file == bool(source_url):
+        raise HTTPException(status_code=422, detail="Choose one study material: upload a file or paste a website link.")
+    page_title = ""
+    final_source_url = ""
+    if has_file and file:
+        raw = file.file.read(MAX_BYTES + 1)
+        if not raw:
+            raise HTTPException(status_code=422, detail="This file is empty.")
+        if len(raw) > MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Files must be 15 MB or smaller.")
+        filename = file.filename or "study-material.txt"
+        text, source_labels = extract_material(filename, raw)
+    elif source_url:
+        text, source_labels, page_title, final_source_url, filename, raw = extract_public_material_url(source_url)
+    else:
+        raise HTTPException(status_code=422, detail="Upload a study material or paste a public website link first.")
     text = text.strip()
     readable_text = re.sub(r"\[SOURCE: [^\]]+\]", "", text)
     if len(re.sub(r"\s+", "", readable_text)) < 80:
-        raise HTTPException(status_code=422, detail="There isn't enough readable text in this file. Try clearer photos, or use a text-based PDF, PPTX, DOCX, TXT, or MD file.")
+        detail = "This webpage does not contain enough readable text. Try another public page or upload a supported file." if final_source_url else "There isn't enough readable text in this file. Try clearer photos, or use a text-based PDF, PPTX, DOCX, TXT, or MD file."
+        raise HTTPException(status_code=422, detail=detail)
     normalized_material = re.sub(r"\s+", " ", text).casefold().strip()
     fingerprint_input = f"{user['user_id']}\0{normalized_material}"
     material_fingerprint = hashlib.sha256(fingerprint_input.encode("utf-8")).hexdigest()
     if expected_material_fingerprint and expected_material_fingerprint != material_fingerprint:
-        raise HTTPException(status_code=422, detail="This is not the original material for the incomplete set. Upload the original file to continue generating.")
+        detail = "The webpage has changed since this incomplete set was created. Use the same public link or upload the original material to continue." if final_source_url else "This is not the original material for the incomplete set. Upload the original file to continue generating."
+        raise HTTPException(status_code=422, detail=detail)
     text = text[:MAX_TEXT]
     # Do not ask the model to cite pages/slides that were removed by the input cap.
     source_labels = [label for label in source_labels if f"[SOURCE: {label}]" in text]
@@ -1626,10 +1838,11 @@ def generate(
     _used_today, daily_limit, usage_reset = reserve_user_generation(user["user_id"], user["email"])
 
     web_context = ""
-    sources: list[dict[str, str]] = []
+    sources: list[dict[str, str]] = ([{"title": page_title or "Website material", "url": final_source_url}] if final_source_url else [])
     if use_web:
         query = "Study guide key concepts: " + re.sub(r"\s+", " ", text[:700])
-        web_context, sources = search_web(query)
+        web_context, web_sources = search_web(query)
+        sources.extend(source for source in web_sources if source["url"] not in {item["url"] for item in sources})
 
     type_instructions = {
         "flashcards": "Create concise flashcards. Each item has a question and a clear answer.",
@@ -1704,6 +1917,7 @@ def generate(
         "incomplete": incomplete,
         "requested_count": question_count,
         "material_fingerprint": material_fingerprint,
+        "source_url": final_source_url,
         "previous_question_count": len(excluded_questions),
         "usage": {"remaining": remaining_today, "limit": daily_limit, "resets_at": usage_reset, "unlimited": daily_limit is None},
     }

@@ -10,7 +10,7 @@ import {
 
 type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification";
 type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string; source_refs?: string[] };
-type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; created_at: string; material_fingerprint?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; usage?: { remaining: number | null; limit: number | null; resets_at: string; unlimited?: boolean } };
+type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; source_url?: string; created_at: string; material_fingerprint?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; usage?: { remaining: number | null; limit: number | null; resets_at: string; unlimited?: boolean } };
 type ActiveShare = { set_id: string; title: string; token: string; created_at: string };
 type ReviewItem = { study_set_id: string; study_set_title: string; type: Kind; card: Card; retried?: boolean; intervals: { again: string; hard: string; good: string; easy: string } };
 type Progress = { total_reviews: number; reviewed_today: number; accuracy: number; current_streak: number; best_streak: number; due_count: number; total_cards: number; week: { date: string; reviews: number }[] };
@@ -134,6 +134,8 @@ function shuffleSavedItems(items: Card[], kind: Kind) {
 export default function Home() {
   const [selected, setSelected] = useState<Kind>("flashcards");
   const [file, setFile] = useState<File | null>(null);
+  const [sourceMode, setSourceMode] = useState<"file" | "website">("file");
+  const [websiteUrl, setWebsiteUrl] = useState("");
   const [finderTopic, setFinderTopic] = useState("");
   const [finderSubject, setFinderSubject] = useState("");
   const [finderTitle, setFinderTitle] = useState("");
@@ -353,6 +355,7 @@ export default function Home() {
 
   function selectFile(nextFile?: File) {
     if (!nextFile) return;
+    setSourceMode("file");
     setFile(nextFile); setError(""); setNotice("");
     if (!result?.incomplete) setResult(null);
     setSelectedOption(null);
@@ -370,10 +373,13 @@ export default function Home() {
       setError("Sign in with your verified CEU Google account (@ceu.edu.ph, @mnl.ceu.edu.ph, @mkt.ceu.edu.ph, or @mls.ceu.edu.ph) to make a study set.");
       return;
     }
-    if (!file) { setError("Choose a study material first."); return; }
+    if (sourceMode === "file" && !file) { setError("Choose a study material first."); return; }
+    if (sourceMode === "website" && !websiteUrl.trim()) { setError("Paste a public website link first."); return; }
     setBusy(true); setError(""); setNotice("");
     const form = new FormData();
-    form.append("file", file); form.append("format", selected); form.append("use_web", String(web));
+    if (sourceMode === "file" && file) form.append("file", file);
+    else form.append("source_url", websiteUrl.trim());
+    form.append("format", selected); form.append("use_web", String(web));
     form.append("model", modelChoice);
     form.append("question_count", String(questionCount));
     form.append("difficulty", difficulty);
@@ -384,6 +390,7 @@ export default function Home() {
       if (!response.ok) throw new Error(await responseError(response));
       const data = await response.json();
       let studySet: StudySet = { ...data, id: crypto.randomUUID(), created_at: new Date().toISOString() };
+      if (data.source_url) { setWebsiteUrl(data.source_url); setSourceMode("website"); }
       let generationNotice = "";
       if (data.auto_model) {
         generationNotice = `Auto chose ${modelName(data.auto_model)} for this material (${data.auto_reason}).`;
@@ -402,7 +409,7 @@ export default function Home() {
       const saved = await fetch(`${API_BASE}/api/study-sets`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({ title: studySet.title, type: studySet.type, items: studySet.items, sources: studySet.sources || [], material_fingerprint: studySet.material_fingerprint, incomplete: studySet.incomplete || false, requested_count: studySet.requested_count || studySet.items.length }),
+        body: JSON.stringify({ title: studySet.title, type: studySet.type, items: studySet.items, sources: studySet.sources || [], source_url: studySet.source_url || "", material_fingerprint: studySet.material_fingerprint, incomplete: studySet.incomplete || false, requested_count: studySet.requested_count || studySet.items.length }),
       });
       if (!saved.ok) throw new Error(await responseError(saved));
       const savedSet: StudySet = await saved.json();
@@ -454,9 +461,16 @@ export default function Home() {
     }
   }
 
+  function useFinderMaterial(resource: MaterialSearchResult) {
+    setSourceMode("website");
+    setWebsiteUrl(resource.url);
+    setError("");
+    document.getElementById("study-source-toggle")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
   async function continueGenerating() {
     if (!result || !result.incomplete || continueBusy) return;
-    if (!file) {
+    if (!file && !result.source_url) {
       setError("Upload the original study material to continue generating this set.");
       return;
     }
@@ -468,7 +482,8 @@ export default function Home() {
     }
     setContinueBusy(true); setError(""); setNotice("");
     const form = new FormData();
-    form.append("file", file);
+    if (result.source_url) form.append("source_url", result.source_url);
+    else if (file) form.append("file", file);
     form.append("format", result.type);
     form.append("use_web", String(web));
     form.append("model", modelChoice);
@@ -505,7 +520,7 @@ export default function Home() {
       };
       setResult(merged);
       setSets((old) => old.map((item) => item.id === merged.id ? merged : item));
-      const saveBody = JSON.stringify({ title: merged.title, type: merged.type, items: merged.items, sources: merged.sources || [], material_fingerprint: merged.material_fingerprint, incomplete: merged.incomplete, requested_count: merged.requested_count });
+      const saveBody = JSON.stringify({ title: merged.title, type: merged.type, items: merged.items, sources: merged.sources || [], source_url: merged.source_url || "", material_fingerprint: merged.material_fingerprint, incomplete: merged.incomplete, requested_count: merged.requested_count });
       let saved = await fetch(`${API_BASE}/api/study-sets/${encodeURIComponent(merged.id)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
@@ -878,10 +893,15 @@ export default function Home() {
           <div className="section-intro"><div><div className="section-title-row"><h2>Start a study set</h2></div><p>Choose how you’d like to practice.</p></div><span className="quiet-note">Good things take practice <span>↗</span></span></div>
           {account && progress && <section className="progress-panel"><div className="progress-copy"><div className="result-kicker"><span/> YOUR STUDY PROGRESS</div><h2>Small steps add up.</h2><p>Review a little each day to keep ideas fresh.</p><div className="progress-stats"><div><strong>{progress.reviewed_today}</strong><span>today</span></div><div><strong>{progress.accuracy}%</strong><span>accuracy</span></div><div><strong>{progress.current_streak} <small>days</small></strong><span>current streak</span></div><div><strong>{progress.best_streak} <small>days</small></strong><span>best streak</span></div></div><div className="week-bars" aria-label="Reviews during the past seven days">{progress.week.map((day) => <div key={day.date} title={`${day.reviews} reviews`}><i style={{ height: `${Math.max(8, Math.min(100, day.reviews * 18))}%` }}/><small>{new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: "narrow" })}</small></div>)}</div></div><button className="review-start" onClick={() => void startReview()}><Clock3 size={17}/><span>Review due</span><b>{progress.due_count}</b><ChevronRight size={16}/></button></section>}
           <div className="type-grid">{types.map(({ id, title, detail, icon: Icon }) => <button key={id} className={`type-card ${selected === id ? "chosen" : ""}`} onClick={() => { setSelected(id); setResult(null); setCurrent(0); setRevealed(false); setError(""); }}><span className="type-icon"><Icon size={19}/></span><span className="type-text"><strong>{title}</strong><small>{detail}</small></span>{selected === id && <span className="check-icon"><Check size={13} strokeWidth={3}/></span>}</button>)}</div>
-          <section className={`upload-zone ${dragging ? "dragging" : ""} ${file ? "has-file" : ""}`} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); selectFile(event.dataTransfer.files[0]); }} onClick={() => !file && input.current?.click()} role="button" tabIndex={0} onKeyDown={(event) => event.key === "Enter" && input.current?.click()}>
+          <div className="source-mode-toggle" id="study-source-toggle" role="group" aria-label="Choose a study material source">
+            <button type="button" className={sourceMode === "file" ? "source-mode-choice chosen" : "source-mode-choice"} aria-pressed={sourceMode === "file"} onClick={() => { setSourceMode("file"); setError(""); }}><CloudUpload size={16}/> Upload a file</button>
+            <button type="button" className={sourceMode === "website" ? "source-mode-choice chosen" : "source-mode-choice"} aria-pressed={sourceMode === "website"} onClick={() => { setSourceMode("website"); setError(""); }}><Globe2 size={16}/> Paste a website</button>
+          </div>
+          {sourceMode === "file" ? <section className={`upload-zone ${dragging ? "dragging" : ""} ${file ? "has-file" : ""}`} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); selectFile(event.dataTransfer.files[0]); }} onClick={() => !file && input.current?.click()} role="button" tabIndex={0} onKeyDown={(event) => event.key === "Enter" && input.current?.click()}>
             <input ref={input} type="file" accept=".pdf,.pptx,.docx,.txt,.md,.png,.jpg,.jpeg,.webp" hidden onChange={(event) => selectFile(event.target.files?.[0])}/>
             <span className="upload-icon">{file ? <FileText size={22}/> : <CloudUpload size={23}/>}</span><span className="upload-copy">{file ? <><strong>{file.name}</strong><small>{(file.size / 1024 / 1024).toFixed(2)} MB · ready to study</small></> : <><strong>Drop your study material here</strong><small>or <span className="browse-link">browse your files</span></small></>}</span>{file ? <button className="remove-file" title="Remove file" onClick={(event) => { event.stopPropagation(); setFile(null); }}><X size={18}/></button> : <span className="format-hint">PDF, PPTX, DOCX, TXT, MD, or image <i>·</i> Max 15 MB</span>}
-          </section>
+          </section> : <section className="website-source-zone"><label htmlFor="website-source-url">Public website link</label><div className="website-source-input"><Globe2 size={17}/><input id="website-source-url" type="url" inputMode="url" value={websiteUrl} onChange={(event) => setWebsiteUrl(event.target.value)} maxLength={2048} placeholder="https://example.edu/biology/cell-division"/><button type="button" onClick={() => setWebsiteUrl("")} disabled={!websiteUrl} aria-label="Clear website link"><X size={16}/></button></div><small>Public pages only. Pages requiring sign-in will show a specific access message.</small></section>}
+          <button type="button" className="finder-shortcut" onClick={() => document.getElementById("pdf-finder")?.scrollIntoView({ behavior: "smooth", block: "center" })}><Search size={15}/><span>No materials to upload? <b>Find some with PDF Finder</b></span><ChevronRight size={15}/></button>
           <div className="model-row"><label htmlFor="model-choice"><Cpu size={16}/> AI model</label><select id="model-choice" value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}><option value="auto">Auto choose · switch when busy or limited</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select><label className="count-label" htmlFor="question-count">Questions</label><select id="question-count" value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{[10, 20, 30, 40, 50].map((count) => <option key={count} value={count}>{count} questions</option>)}</select><label htmlFor="question-difficulty">Difficulty</label><select id="question-difficulty" value={difficulty} onChange={(event) => setDifficulty(event.target.value as "easy" | "medium" | "hard")}><option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option></select><details className="model-help-details"><summary>Model and generation details</summary><p className="model-help">Difficulty adjusts question depth. Choice options are checked for similar lengths at every level. {modelChoice === "auto" ? "Auto uses file size, extracted text, and question count to choose a compact model for smaller jobs and a stronger one for larger jobs." : "Your choice is tried first. Another configured model can help if it fails or returns a partial set."} Up to 50 questions per request. {hasUnlimitedGenerations ? "No Dawnstudy daily generation cap applies to your account." : "Each submitted request uses one of 5 daily generations, even if fallback models are tried; your allowance resets at midnight Manila time."} Provider free quotas are shared and may still be busy or exhausted. Auto and fallback can use Mistral models, which may use paid credits; check that provider account’s pricing.</p></details></div>
           <div className="options-row"><button className={`web-toggle ${web ? "on" : ""}`} onClick={() => setWeb(!web)}><span className="toggle-track"><span/></span><Globe2 size={16}/><span>Enrich with the web</span><span className="optional-tag">OPTIONAL</span></button><button className="web-info" title="Searches the web for relevant context and includes source links with your results."><CircleHelp size={15}/></button></div>
           <div className="generate-row"><span className="privacy-note"><span className="privacy-dot"/> Sent to your selected AI provider; sets sync to your account.</span><button className="generate-button" onClick={generate} disabled={busy}>{busy ? <><span className="spinner"/> Trying available models…</> : <><Sparkles size={16}/> Make my study set <ChevronRight size={16}/></>}</button></div>
@@ -910,7 +930,7 @@ export default function Home() {
           </section>}
           {result && currentCard && !reviewActive && !practiceActive && <section className="result-panel"><div className="result-head"><div><div className="result-kicker"><span/> YOUR STUDY SET</div><h2>{result.title}</h2><p>{result.items.length} {types.find((type) => type.id === result.type)?.title.toLowerCase()} · ready when you are{result.model ? ` · ${modelName(result.model)}` : ""}</p></div><button className="plain-icon" title="Close study set" onClick={() => setResult(null)}><X size={18}/></button></div>
             <div className="set-action-row"><label>Test pace<select value={practiceSecondsPerQuestion} onChange={(event) => setPracticeSecondsPerQuestion(Number(event.target.value))}><option value={0}>No timer</option><option value={20}>20 sec / question</option><option value={30}>30 sec / question</option><option value={45}>45 sec / question</option></select></label><button className="action-button" onClick={startPractice}><AlarmClock size={15}/> {practiceSecondsPerQuestion === 0 ? "Start practice" : "Start timed test"}</button><button className="action-button" onClick={() => void shareCurrentSet()} disabled={shareBusy}><Share2 size={15}/>{shareBusy ? "Working…" : "Share set"}</button></div>
-            {result.incomplete && <div className="incomplete-generation"><div><strong>{result.items.length} of {result.requested_count || result.items.length} questions generated</strong><span>{file ? "Your generated questions are held. Continue for the remaining questions when ready." : "Upload the original material to continue this set."}</span></div><button className="continue-generation-button" disabled={continueBusy || busy || !file} onClick={() => void continueGenerating()}>{continueBusy ? <><span className="spinner"/> Continuing…</> : <><Sparkles size={17}/> Continue generating</>}</button></div>}
+            {result.incomplete && <div className="incomplete-generation"><div><strong>{result.items.length} of {result.requested_count || result.items.length} questions generated</strong><span>{result.source_url ? "Your generated questions are held. Continue from the same public webpage when ready." : file ? "Your generated questions are held. Continue for the remaining questions when ready." : "Upload the original material to continue this set."}</span></div><button className="continue-generation-button" disabled={continueBusy || busy || (!file && !result.source_url)} onClick={() => void continueGenerating()}>{continueBusy ? <><span className="spinner"/> Continuing…</> : <><Sparkles size={17}/> Continue generating</>}</button></div>}
             {shareUrl && <div className="share-link-row"><span>Anyone with this link can view this set:</span><a href={shareUrl} target="_blank" rel="noreferrer">{shareUrl}</a><button className="plain-icon" title="Copy share link" onClick={() => { void navigator.clipboard.writeText(shareUrl).then(() => setNotice("Share link copied.")).catch(() => setNotice("Select and copy the share link above.")); }}><Copy size={15}/></button><button className="share-revoke" disabled={shareBusy} onClick={() => void turnOffShareLink(result.id)}>Turn off link</button></div>}
             <div className="study-card"><div className="study-card-top"><span className="flashcard-label">{result.type === "flashcards" ? "FLASHCARD" : types.find((type) => type.id === result.type)?.title.toUpperCase()}</span><span className="card-number">{String(current + 1).padStart(2,"0")} <i>/</i> {String(result.items.length).padStart(2,"0")}</span></div>
               {result.type === "multiple_choice" && currentCard.options?.length ? renderMultipleChoice(currentCard) : <button className={`study-face ${revealed ? "is-revealed" : ""}`} onClick={() => setRevealed(!revealed)}><span className="face-label">{revealed ? "THE ANSWER" : "YOUR QUESTION"}</span><span className="face-question">{revealed ? currentCard.answer : currentCard.question}</span>{!revealed && <span className="tap-hint">Tap to reveal <span>↗</span></span>}</button>}
@@ -928,11 +948,11 @@ export default function Home() {
               <label>Subject<input value={finderSubject} onChange={(event) => setFinderSubject(event.target.value)} maxLength={120} placeholder="e.g. biology"/></label>
               <label>Book or article title<input value={finderTitle} onChange={(event) => setFinderTitle(event.target.value)} maxLength={200} placeholder="Title or author, if known"/></label>
               <label>Tags<input value={finderTags} onChange={(event) => setFinderTags(event.target.value)} maxLength={300} placeholder="e.g. lecture notes, review, anatomy"/></label>
-              <div className="finder-form-footer"><span>Open a result, download a compatible file, then upload it above. Check the source’s reuse terms.</span><button className="finder-search-button" type="submit" disabled={finderBusy}>{finderBusy ? <><span className="spinner"/> Searching…</> : <><Search size={16}/> Search materials</>}</button></div>
+              <div className="finder-form-footer"><span>Choose a result to load its link into the study set form, or open it first. Check the source’s reuse terms.</span><button className="finder-search-button" type="submit" disabled={finderBusy}>{finderBusy ? <><span className="spinner"/> Searching…</> : <><Search size={16}/> Search materials</>}</button></div>
             </form>
             {finderError && <div className="finder-error" role="alert"><CircleHelp size={15}/><span>{finderError}</span></div>}
             {finderSearched && <div className="finder-results-heading"><strong>{finderResults.length ? `${finderResults.length} learning resources` : "No resources found"}</strong><span>Search results from the web</span></div>}
-            {finderSearched && finderResults.length > 0 && <div className="finder-results">{finderResults.map((resource) => <article className="finder-result-card" key={resource.url}><span className="finder-file-type"><FileText size={14}/>{resource.file_type}</span><div className="finder-result-copy"><strong>{resource.title}</strong>{resource.snippet && <p>{resource.snippet}</p>}<small>{resource.url}</small></div><a className="finder-open-link" href={resource.url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${resource.title}`}><span>Open</span><ExternalLink size={15}/></a></article>)}</div>}
+            {finderSearched && finderResults.length > 0 && <div className="finder-results">{finderResults.map((resource) => <article className="finder-result-card" key={resource.url}><span className="finder-file-type"><FileText size={14}/>{resource.file_type}</span><div className="finder-result-copy"><strong>{resource.title}</strong>{resource.snippet && <p>{resource.snippet}</p>}<small>{resource.url}</small></div><div className="finder-result-actions"><button className="finder-use-link" type="button" onClick={() => useFinderMaterial(resource)}><Plus size={14}/><span>Use for study set</span></button><a className="finder-open-link" href={resource.url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${resource.title}`}><span>Open</span><ExternalLink size={15}/></a></div></article>)}</div>}
             {finderSearched && finderResults.length === 0 && !finderError && <p className="finder-empty">Try a broader topic, a different title, or fewer tags.</p>}
           </section>
           <section className="active-links-section" id="active-links"><div className="recent-head"><div><div className="section-title-row"><h2>Active Links</h2><span className="recent-count">{activeShares.length}</span></div><p>Share links that are currently enabled for your study sets.</p></div></div>
