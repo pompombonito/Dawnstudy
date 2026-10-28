@@ -6,6 +6,9 @@ import "./theme.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://dawnstudy.vercel.app"),
+  other: {
+    "google-adsense-account": "ca-pub-4982782720760429",
+  },
   title: "Dawnstudy — make learning stick",
   description: "Turn your class notes into a smarter way to study.",
   applicationName: "Dawnstudy",
