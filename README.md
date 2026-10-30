@@ -54,6 +54,8 @@ Import the repository into Vercel and deploy the Next.js project from the reposi
 
 ## API
 
+Profiles, three themes, companion chat, friends, encrypted direct messages, live quizzes, YouTube materials and the agreement flow are documented in [Community features and operations](docs/community.md), including setup, encryption boundaries and regression checks.
+
 - `GET /api/health` reports API availability and the configured model fallback order; `GET /api/models` lists choices for manual selection.
 - `POST /api/material-search` searches for relevant learning resources using a topic, subject, book/article title, or tags. Results identify direct links to supported file formats when possible. It requires the same Tavily key as web enrichment and a bearer session token from an allowed Google account.
 - `POST /api/generate` accepts either a multipart `file` or public `source_url`, plus `format` (`flashcards`, `multiple_choice`, `checkbox`, `identification`), `use_web` (`true`/`false`), `model` (`auto` or a configured model ID), and optional `question_count` (1–50). It requires a bearer session token from an allowed Google account.

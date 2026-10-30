@@ -35,6 +35,13 @@ PROGRESS_COLUMNS = ["user_id", "set_id", "card_id", "due_at", "interval_days", "
 REVIEW_COLUMNS = ["user_id", "set_id", "card_id", "reviewed_at", "rating", "was_correct"]
 SHARE_COLUMNS = ["token", "user_id", "set_id", "created_at"]
 REPORT_COLUMNS = ["report_id", "user_id", "set_id", "card_id", "reason", "note", "created_at"]
+SOCIAL_TABLES = {
+    "Profiles": ["user_id", "nickname", "avatar_id", "gender", "theme", "discoverable", "companion_id", "companion_name", "onboarding_version", "terms_version", "terms_accepted_at", "created_at", "updated_at", "public_key_json", "key_fingerprint"],
+    "Friendships": ["relationship_id", "sender_id", "recipient_id", "status", "created_at", "updated_at"],
+    "UserBlocks": ["block_id", "user_id", "blocked_id", "active", "created_at"],
+    "EncryptedMessages": ["message_id", "sender_id", "recipient_id", "envelope_json", "created_at", "client_id"],
+    "GameResults": ["game_id", "user_id", "set_title", "points", "correct", "total", "rank", "finished_at"],
+}
 _schema_ready = False
 _schema_lock = threading.Lock()
 _user_write_lock = threading.Lock()
@@ -45,7 +52,7 @@ _row_cache_lock = threading.Lock()
 _row_cache: dict[tuple[str, tuple[str, ...]], tuple[float, list[tuple[int, dict[str, str]]]]] = {}
 _row_cache_ttl = 2.0
 _row_cache_max_characters = 2_000_000
-_cached_row_tabs = {USERS_TAB, SETS_TAB}
+_cached_row_tabs = {USERS_TAB, SETS_TAB, *SOCIAL_TABLES}
 _sheets_retry_count = 4
 
 
@@ -156,10 +163,11 @@ def ensure_schema() -> None:
             return
         metadata = _api("GET", "")
         titles = {sheet.get("properties", {}).get("title") for sheet in metadata.get("sheets", [])}
-        missing = [title for title in (USERS_TAB, SETS_TAB, USAGE_TAB, PROGRESS_TAB, REVIEWS_TAB, SHARES_TAB, REPORTS_TAB) if title not in titles]
+        tables = [(USERS_TAB, USER_COLUMNS), (SETS_TAB, SET_COLUMNS), (USAGE_TAB, USAGE_COLUMNS), (PROGRESS_TAB, PROGRESS_COLUMNS), (REVIEWS_TAB, REVIEW_COLUMNS), (SHARES_TAB, SHARE_COLUMNS), (REPORTS_TAB, REPORT_COLUMNS), *SOCIAL_TABLES.items()]
+        missing = [title for title, _ in tables if title not in titles]
         if missing:
             _api("POST", ":batchUpdate", body={"requests": [{"addSheet": {"properties": {"title": title}}} for title in missing]})
-        for tab, columns in ((USERS_TAB, USER_COLUMNS), (SETS_TAB, SET_COLUMNS), (USAGE_TAB, USAGE_COLUMNS), (PROGRESS_TAB, PROGRESS_COLUMNS), (REVIEWS_TAB, REVIEW_COLUMNS), (SHARES_TAB, SHARE_COLUMNS), (REPORTS_TAB, REPORT_COLUMNS)):
+        for tab, columns in tables:
             last_column = chr(64 + len(columns))
             header_range = quote(f"{tab}!A1:{last_column}1", safe="!'")
             values = _api("GET", f"/values/{header_range}").get("values", [])
@@ -188,7 +196,8 @@ def _rows(tab: str, columns: list[str], *, use_cache: bool = True) -> list[tuple
     # Keep the lock through cache fills to collapse simultaneous requests into one Sheets read.
     with _row_cache_lock:
         cached = _row_cache.get(cache_key)
-        if cached and time.monotonic() - cached[0] < _row_cache_ttl:
+        ttl = 30.0 if tab in {USERS_TAB, "Profiles", "Friendships", "UserBlocks"} else (5.0 if tab == "EncryptedMessages" else _row_cache_ttl)
+        if cached and time.monotonic() - cached[0] < ttl:
             return [(number, dict(row)) for number, row in cached[1]]
         results = read_rows()
         cache_characters = sum(len(key) + len(value) for _, row in results for key, value in row.items())

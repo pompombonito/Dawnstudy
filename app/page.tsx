@@ -1,14 +1,23 @@
 "use client";
 
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import StudyMascot from "./components/StudyMascot";
+import Avatar from "./components/Avatar";
+import { useCommunity } from "./community/useCommunity";
+import { communityApi } from "./community/api";
+import type { Theme } from "./community/types";
+import Onboarding from "./community/Onboarding";
+import ProfilePage from "./community/ProfilePage";
+import FriendsPage from "./community/FriendsPage";
+import GameRoom from "./community/GameRoom";
+import CompanionDock from "./community/CompanionDock";
+import Agreement from "./community/Agreement";
 import { DawnArtwork, DawnMark } from "./components/DawnArtwork";
 import { findGenerationJob, GenerationJobError, pollGenerationJob, startGenerationJob, type GenerationJob, type GenerationStatus } from "./generation-jobs";
 import {
   AlarmClock, BookOpen, Check, CheckSquare, ChevronLeft, ChevronRight, CircleHelp, Clock3,
   CloudUpload, Copy, Cpu, ExternalLink, FileText, Flag, Globe2, GraduationCap, Layers3, LogOut, Menu, Mic,
   MicOff, Moon, Maximize2, Minimize2, Plus, Send, Share2, Sparkles, Sun, Trash2, UserRound,
-  Search, Volume2, X, ArrowUpRight, ArrowRight, FolderOpen, ChevronDown, Leaf,
+  Search, Volume2, X, ArrowUpRight, ArrowRight, FolderOpen, ChevronDown, Leaf, Users, Gamepad2, ShieldCheck, Youtube,
 } from "lucide-react";
 
 type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification";
@@ -21,12 +30,10 @@ type Account = { id: string; username: string; email: string; display_name: stri
 type LoginResult = { token: string; user: Account };
 type ModelOption = { id: string; provider: string; name: string };
 type MaterialSearchResult = { title: string; url: string; snippet: string; file_type: string };
-type Theme = "dark" | "light";
 type PracticeAnswer = string | string[] | null;
-type WorkspaceView = "study" | "library" | "finder" | "voice" | "about";
+type WorkspaceView = "study" | "library" | "finder" | "voice" | "about" | "friends" | "games" | "profile" | "agreement";
 type GenerationResult = StudySet & { auto_model?: string; auto_reason?: string; persistence_error?: string; continued_set_id?: string };
 type PendingGeneration = { job_id: string; base?: StudySet };
-type CompanionId = "cat" | "fox" | "bunny" | "bear";
 type VoiceMode = "multiple_choice" | "identification" | "open_ended" | "enumeration";
 type VoicePersona = "warm_tutor" | "calm_mentor" | "energetic_coach" | "clear_lecturer";
 
@@ -50,7 +57,6 @@ const TOKEN_KEY = "dawnstudy_session_v1";
 const THEME_KEY = "dawnstudy_theme_v1";
 const VOICE_PERSONA_KEY = "dawnstudy_voice_persona_v1";
 const VOICE_DEVICE_KEY = "dawnstudy_device_voice_v1";
-const COMPANION_KEY = "dawnstudy_companion_v1";
 const GENERATION_KEY = "dawnstudy_generation_v1:";
 
 function pendingGeneration(userId: string): PendingGeneration | null {
@@ -69,18 +75,6 @@ function rememberGeneration(userId: string, pending: PendingGeneration | null) {
     else localStorage.removeItem(GENERATION_KEY + userId);
   } catch { /* Account job discovery also works when device storage is unavailable. */ }
 }
-const companionChoices: { id: CompanionId; label: string }[] = [
-  { id: "cat", label: "Cat" },
-  { id: "fox", label: "Fox" },
-  { id: "bunny", label: "Bunny" },
-  { id: "bear", label: "Bear" },
-];
-const companionLines = [
-  "One small study session still counts.",
-  "You’ve got this. Take it one question at a time.",
-  "A quick review now can make tomorrow easier.",
-  "Need a tiny break before the next question?",
-];
 const supportedFiles = new Set(["pdf", "pptx", "docx", "txt", "md", "png", "jpg", "jpeg", "webp"]);
 const maxFileBytes = 15 * 1024 * 1024;
 const maxCombinedFileBytes = 30 * 1024 * 1024;
@@ -208,7 +202,7 @@ export default function Home() {
   const [pageRanges, setPageRanges] = useState<Record<string, string>>({});
   const [websitePageRange, setWebsitePageRange] = useState("");
   const [focusTopic, setFocusTopic] = useState("");
-  const [sourceMode, setSourceMode] = useState<"file" | "website">("file");
+  const [sourceMode, setSourceMode] = useState<"file" | "website" | "youtube">("file");
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [finderTopic, setFinderTopic] = useState("");
   const [finderSubject, setFinderSubject] = useState("");
@@ -227,11 +221,9 @@ export default function Home() {
   const [theme, setTheme] = useState<Theme>("dark");
   const [activeView, setActiveView] = useState<WorkspaceView>("study");
   const [composerStep, setComposerStep] = useState(0);
-  const [companionId, setCompanionId] = useState<CompanionId>("cat");
-  const [companionName, setCompanionName] = useState("Miso");
-  const [companionOpen, setCompanionOpen] = useState(false);
-  const [companionLine, setCompanionLine] = useState("");
-  const [companionTalking, setCompanionTalking] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [friendToOpen, setFriendToOpen] = useState("");
+  const [gameSet, setGameSet] = useState("");
   const [busy, setBusy] = useState(false);
   const [continueBusy, setContinueBusy] = useState(false);
   const [generationStatus, setGenerationStatus] = useState<GenerationStatus | null>(null);
@@ -286,6 +278,7 @@ export default function Home() {
   const [showAll, setShowAll] = useState(false);
   const [account, setAccount] = useState<Account | null>(null);
   const [authToken, setAuthToken] = useState("");
+  const community = useCommunity(authToken, account?.id);
   const hasUnlimitedGenerations = account ? UNLIMITED_GENERATION_EMAILS.has(account.email.trim().toLowerCase()) : false;
   const [authOpen, setAuthOpen] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
@@ -332,16 +325,11 @@ export default function Home() {
   useEffect(() => {
     setSiteOrigin(window.location.origin);
     const savedTheme = localStorage.getItem(THEME_KEY);
-    const initialTheme: Theme = savedTheme === "light" ? "light" : "dark";
+    const initialTheme: Theme = savedTheme === "light" || savedTheme === "rose" ? savedTheme : "dark";
     document.documentElement.dataset.theme = initialTheme;
     setTheme(initialTheme);
     const savedPersona = localStorage.getItem(VOICE_PERSONA_KEY) as VoicePersona | null;
     if (savedPersona && voicePersonas.some((persona) => persona.id === savedPersona)) setVoicePersona(savedPersona);
-    try {
-      const savedCompanion = JSON.parse(localStorage.getItem(COMPANION_KEY) || "null") as { id?: CompanionId; name?: string } | null;
-      if (savedCompanion?.id && companionChoices.some((choice) => choice.id === savedCompanion.id)) setCompanionId(savedCompanion.id);
-      if (savedCompanion?.name?.trim()) setCompanionName(savedCompanion.name.trim().slice(0, 24));
-    } catch { localStorage.removeItem(COMPANION_KEY); }
     setDeviceVoiceURI(localStorage.getItem(VOICE_DEVICE_KEY) || "");
     setSets([]);
     if (API_BASE) {
@@ -382,20 +370,6 @@ export default function Home() {
     return () => window.speechSynthesis.removeEventListener("voiceschanged", refreshDeviceVoices);
   }, []);
 
-  useEffect(() => {
-    let hideMessage: number | undefined;
-    const interval = window.setInterval(() => {
-      const line = companionLines[Math.floor(Math.random() * companionLines.length)];
-      setCompanionLine(line);
-      setCompanionTalking(true);
-      if (hideMessage !== undefined) window.clearTimeout(hideMessage);
-      hideMessage = window.setTimeout(() => setCompanionTalking(false), 8000);
-    }, 75_000);
-    return () => {
-      window.clearInterval(interval);
-      if (hideMessage !== undefined) window.clearTimeout(hideMessage);
-    };
-  }, []);
 
   useEffect(() => {
     if (!authOpen || !GOOGLE_CLIENT_ID || !googleButton.current) return;
@@ -538,6 +512,14 @@ export default function Home() {
     setError("");
   }
 
+  useEffect(() => {
+    if (community.data?.profile?.theme) setColorTheme(community.data.profile.theme);
+  }, [community.data?.profile?.theme]);
+
+  useEffect(() => {
+    if (authToken && community.data?.profile?.onboarded) void loadAccountSets(authToken);
+  }, [authToken, community.data?.profile?.onboarded]);
+
   function setColorTheme(nextTheme: Theme) {
     setTheme(nextTheme);
     document.documentElement.dataset.theme = nextTheme;
@@ -545,6 +527,7 @@ export default function Home() {
   }
 
   function navigateTo(view: WorkspaceView) {
+    setMoreOpen(false);
     setActiveView(view);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -574,11 +557,6 @@ export default function Home() {
     navigateTo("study");
   }
 
-  function updateCompanion(id: CompanionId, name: string) {
-    setCompanionId(id);
-    setCompanionName(name);
-    localStorage.setItem(COMPANION_KEY, JSON.stringify({ id, name }));
-  }
 
   function resetStudyAnswer() {
     setRevealed(false);
@@ -763,7 +741,7 @@ export default function Home() {
       return;
     }
     if (sourceMode === "file" && !files.length) { setComposerStep(0); setError("Choose at least one study material first."); return; }
-    if (sourceMode === "website" && !websiteUrl.trim()) { setComposerStep(0); setError("Paste a public website link first."); return; }
+    if (sourceMode !== "file" && !websiteUrl.trim()) { setComposerStep(0); setError("Paste a public website link first."); return; }
     setBusy(true); setError(""); setNotice("");
     setGenerationStatus({ status: "queued", stage: "queued", message: "Joining the study queue…", completed: 0, requested: questionCount });
     const form = new FormData();
@@ -863,6 +841,8 @@ export default function Home() {
   }
 
   function signOut() {
+    if (authToken && community.data?.profile?.onboarded) void communityApi(authToken, "/presence", undefined, "DELETE").catch(() => {});
+    setActiveView("study");
     generationController.current?.abort(); generationController.current = null;
     setBusy(false); setContinueBusy(false); setGenerationStatus(null); setGenerationNeedsReconnect(false);
     localStorage.removeItem(TOKEN_KEY); setAuthToken(""); setAccount(null); setSets([]); setActiveShares([]); setResult(null); setProgress(null); setReviewActive(false); setReviewQueue([]);
@@ -888,7 +868,7 @@ export default function Home() {
   function openSavedSet(studySet: StudySet) {
     setActiveView("study");
     if (studySet.incomplete && !studySet.source_url) setFiles([]);
-    setSourceMode(studySet.source_url ? "website" : "file");
+    setSourceMode(studySet.source_url ? /(?:youtube\.com|youtu\.be)/i.test(studySet.source_url) ? "youtube" : "website" : "file");
     if (studySet.source_url) setWebsiteUrl(studySet.source_url);
     setReviewActive(false); setPracticeActive(false); setPracticeComplete(false); setShareUrl(""); setResult({ ...studySet, items: shuffleSavedItems(studySet.items, studySet.type) }); setSelected(studySet.type); setCurrent(0); resetStudyAnswer(); resetReviewAnswer(); setPageRanges(studySet.source_url ? {} : studySet.page_ranges || {}); setWebsitePageRange(studySet.source_url ? studySet.page_ranges?.["0"] || "" : ""); setFocusTopic(studySet.focus_topic || ""); setError(""); setNotice("");
     window.requestAnimationFrame(() => document.querySelector(".result-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }));
@@ -1226,7 +1206,7 @@ export default function Home() {
   }
 
   const FullscreenIcon = isFullscreen ? Minimize2 : Maximize2;
-  const viewTitle: Record<WorkspaceView, string> = { study: "Study desk", library: "My Library", finder: "PDF Finder", voice: "Voice review", about: "About Dawnstudy" };
+  const viewTitle: Record<WorkspaceView, string> = { study: "Study desk", library: "My Library", finder: "PDF Finder", voice: "Voice review", about: "About Dawnstudy", friends: "Friends", games: "Play together", profile: "My profile", agreement: "Agreement & privacy" };
 
   return (
     <main className="shell studio-shell">
@@ -1240,18 +1220,28 @@ export default function Home() {
           <button className={`nav-item ${activeView === "library" ? "active" : ""}`} title="My Library" aria-current={activeView === "library" ? "page" : undefined} onClick={() => navigateTo("library")}><span className="nav-icon"><FolderOpen size={20}/></span><span className="nav-label">My Library</span><span className="nav-count">{sets.length}</span></button>
           <button className={`nav-item ${activeView === "finder" ? "active" : ""}`} title="PDF Finder" aria-current={activeView === "finder" ? "page" : undefined} onClick={() => navigateTo("finder")}><span className="nav-icon"><Search size={20}/></span><span className="nav-label">PDF Finder</span><ArrowUpRight className="nav-outward" size={15}/></button>
           <button className={`nav-item ${activeView === "voice" ? "active" : ""}`} title="Voice review" aria-current={activeView === "voice" ? "page" : undefined} onClick={() => navigateTo("voice")}><span className="nav-icon"><Mic size={20}/></span><span className="nav-label">Voice review</span></button>
+          <button className={`nav-item ${activeView === "friends" ? "active" : ""}`} title="Friends" onClick={() => navigateTo("friends")}><span className="nav-icon"><Users size={20}/></span><span className="nav-label">Friends</span>{!!community.data?.incoming.length && <span className="nav-count">{community.data.incoming.length}</span>}</button>
+          <button className={`nav-item ${activeView === "games" ? "active" : ""}`} title="Play together" onClick={() => navigateTo("games")}><span className="nav-icon"><Gamepad2 size={20}/></span><span className="nav-label">Play together</span></button>
+          <button className={`nav-item ${activeView === "profile" ? "active" : ""}`} title="My profile" onClick={() => navigateTo("profile")}><span className="nav-icon"><UserRound size={20}/></span><span className="nav-label">My profile</span></button>
+          <button className={`nav-item ${activeView === "agreement" ? "active" : ""}`} title="Agreement & privacy" onClick={() => navigateTo("agreement")}><span className="nav-icon"><ShieldCheck size={20}/></span><span className="nav-label">Agreement & privacy</span></button>
         </nav>
         <div className="sidebar-bottom">
           <div className="sidebar-note"><DawnMark/><p>Built for class notes.<br/><strong>Made for your next exam.</strong></p><span>DAWNSTUDY BY DEVON</span></div>
           <button className={`nav-item about-nav ${activeView === "about" ? "active" : ""}`} title="About Dawnstudy" aria-current={activeView === "about" ? "page" : undefined} onClick={() => navigateTo("about")}><span className="nav-icon"><CircleHelp size={20}/></span><span className="nav-label">About Dawnstudy</span></button>
-          <div className="profile"><span className="avatar">{(account?.display_name || "D").slice(0, 1).toUpperCase()}</span><span className="profile-name">{account?.display_name || "Your study space"}<small>{account ? "CEU workspace" : "Sign in to get started"}</small></span><button className="profile-menu" title={account ? "Sign out" : "Sign in"} aria-label={account ? "Sign out" : "Sign in"} onClick={() => account ? signOut() : setAuthOpen(true)}>{account ? <LogOut size={17}/> : <ArrowUpRight size={18}/>}</button></div>
+          <div className="profile"><button className="profile-avatar-button" onClick={() => account ? navigateTo("profile") : setAuthOpen(true)} aria-label="Open profile"><Avatar id={community.data?.profile?.avatar_id || "cat"}/></button><span className="profile-name">{community.data?.profile?.nickname || account?.display_name || "Your study space"}<small>{account ? "CEU workspace" : "Sign in to get started"}</small></span><button className="profile-menu" title={account ? "Sign out" : "Sign in"} aria-label={account ? "Sign out" : "Sign in"} onClick={() => account ? signOut() : setAuthOpen(true)}>{account ? <LogOut size={17}/> : <ArrowUpRight size={18}/>}</button></div>
         </div>
       </aside>
       <section className="main-area" id="home">
-        <header className="topbar"><div className="topbar-left"><button className="mobile-brand" type="button" aria-label="Dawnstudy home" onClick={() => navigateTo("study")}><DawnMark/></button><div className="crumb"><span>YOUR SPACE</span><b>{viewTitle[activeView]}</b></div></div><div className="top-actions">{generationStatus && <button className="activity-pill" onClick={() => navigateTo("study")}><span/>{generationNeedsReconnect ? "Reconnect" : "Generating"}</button>}<button className="theme-toggle" onClick={() => setColorTheme(theme === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>{theme === "dark" ? <Sun size={18}/> : <Moon size={18}/>}<span>{theme === "dark" ? "Light" : "Dark"}</span></button><span className="workspace-label"><span/> CEU WORKSPACE</span><button className="top-account" onClick={() => account ? signOut() : setAuthOpen(true)} title={account ? "Sign out" : "Sign in"}>{account ? <LogOut size={18}/> : <UserRound size={18}/>}<span>{account ? "Sign out" : "Sign in"}</span></button></div></header>
+        <header className="topbar"><div className="topbar-left"><button className="mobile-brand" type="button" aria-label="Dawnstudy home" onClick={() => navigateTo("study")}><DawnMark/></button><div className="crumb"><span>YOUR SPACE</span><b>{viewTitle[activeView]}</b></div></div><div className="top-actions">{account && <button className="online-friends" title="Recently online friends" onClick={() => navigateTo("friends")} aria-label={`${community.data?.friends.filter(p => p.online).length || 0} friends online`}><span className="online-friend-faces">{community.data?.friends.filter(p => p.online).slice(0, 3).map(p => <Avatar key={p.id} id={p.avatar_id}/>)}</span><Users size={16}/><span>{community.data?.friends.filter(p => p.online).length || 0} online</span></button>}{generationStatus && <button className="activity-pill" onClick={() => navigateTo("study")}><span/>{generationNeedsReconnect ? "Reconnect" : "Generating"}</button>}<button className="theme-toggle" onClick={() => { const next: Theme = theme === "dark" ? "light" : theme === "light" ? "rose" : "dark"; setColorTheme(next); if (community.data?.profile?.onboarded) void community.saveProfile({ ...community.data.profile, theme: next }).catch(e => setError(e.message)); }} aria-label="Cycle theme: Light, Rose Dawn, Dark" title="Cycle theme: Light, Rose Dawn, Dark">{theme === "dark" ? <Sun size={18}/> : <Moon size={18}/>}<span>{theme === "dark" ? "Midnight" : theme === "light" ? "Morning" : "Rose Dawn"}</span></button><span className="workspace-label"><span/> CEU WORKSPACE</span><button className="top-account" onClick={() => account ? signOut() : setAuthOpen(true)} title={account ? "Sign out" : "Sign in"}>{account ? <LogOut size={18}/> : <UserRound size={18}/>}<span>{account ? "Sign out" : "Sign in"}</span></button></div></header>
         <div className="content">
           {(error || notice) && <div className="workspace-feedback" aria-live="polite">{error && <div className="error-box"><CircleHelp size={18}/><span>{error}</span><button className="plain-icon" aria-label="Dismiss error" onClick={() => setError("")}><X size={16}/></button></div>}{notice && <div className="notice-box"><Check size={18}/><span>{notice}</span><button className="plain-icon" aria-label="Dismiss message" onClick={() => setNotice("")}><X size={16}/></button></div>}</div>}
           {generationStatus && <div className="generation-status" role="status" aria-live="polite"><span className="generation-status-pulse"/><div className="generation-status-copy"><strong>{generationStatus.message || "Preparing your study set…"}</strong><small>{generationStatus.model ? modelName(generationStatus.model) : generationStatus.stage === "queued" ? "Waiting for an available model" : "Dawnstudy generation service"}{generationStatus.requested > 0 && ` · ${generationStatus.completed} of ${generationStatus.requested} ready`}</small></div>{generationStatus.requested > 0 && <div className="generation-progress-track" aria-label={`${generationStatus.completed} of ${generationStatus.requested} questions ready`}><i style={{ width: `${Math.min(100, generationStatus.completed / generationStatus.requested * 100)}%` }}/></div>}{generationNeedsReconnect && account && <button type="button" className="generation-reconnect" disabled={busy || continueBusy} onClick={() => void restoreGeneration(authToken, account.id)}>Reconnect</button>}</div>}
+          {community.error && account && <div className="social-error" role="alert">{community.error} <button className="text-button" onClick={() => void community.refresh()}>Retry profile connection</button></div>}
+          {activeView === "agreement" && <div className="workspace-view social-card agreement-page"><Agreement/></div>}
+          {(["friends", "games", "profile"] as WorkspaceView[]).includes(activeView) && !community.data?.profile?.onboarded && <div className="social-card social-empty"><h2>{account ? "Getting your space ready…" : "A little better together."}</h2><p>{account ? "Complete your profile to join the community." : "Sign in with your CEU account to meet friends and play together."}</p><button className="social-button primary" onClick={() => account ? void community.refresh() : setAuthOpen(true)}>{account ? "Retry" : "Sign in"}</button></div>}
+          {community.data?.profile?.onboarded && activeView === "friends" && <FriendsPage community={community} initialPerson={friendToOpen} profile={() => navigateTo("profile")}/>}
+          {community.data?.profile?.onboarded && activeView === "games" && <GameRoom community={community} sets={sets} initialSet={gameSet} friends={() => navigateTo("friends")}/>}
+          {community.data?.profile?.onboarded && activeView === "profile" && <ProfilePage community={community} setTheme={setColorTheme} agreement={() => navigateTo("agreement")}/>}
           {activeView === "study" && <div className="workspace-view study-view" key="study">
           {!result && !reviewActive ? <>
             <section className="studio-intro"><div className="studio-intro-copy"><div className="eyebrow"><span/> A FRESH START TO LEARNING</div><h1>Make room for<br/><em>your next idea.</em></h1><p>Bring your notes. Find your rhythm.<br className="desktop-break"/> Make a little progress, every day.</p></div><DawnArtwork variant="study" className="studio-art"/></section>
@@ -1264,6 +1254,7 @@ export default function Home() {
           <div className="source-mode-toggle" id="study-source-toggle" role="group" aria-label="Choose a study material source">
             <button type="button" className={sourceMode === "file" ? "source-mode-choice chosen" : "source-mode-choice"} aria-pressed={sourceMode === "file"} onClick={() => { setSourceMode("file"); setError(""); }}><CloudUpload size={16}/> Upload materials</button>
             <button type="button" className={sourceMode === "website" ? "source-mode-choice chosen" : "source-mode-choice"} aria-pressed={sourceMode === "website"} onClick={() => { setSourceMode("website"); setError(""); }}><Globe2 size={16}/> Public website</button>
+            <button type="button" className={sourceMode === "youtube" ? "source-mode-choice chosen" : "source-mode-choice"} aria-pressed={sourceMode === "youtube"} onClick={() => { setSourceMode("youtube"); setError(""); }}><Youtube size={16}/> YouTube</button>
           </div>
           {sourceMode === "file" ? <section className="materials-uploader">
             <div className={"upload-zone " + (dragging ? "dragging" : "")} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); selectFiles(event.dataTransfer.files); }}>
@@ -1280,7 +1271,7 @@ export default function Home() {
                 {pageSelectable && <label className="file-page-range">{extension === "pdf" ? "PDF pages" : "PowerPoint slides"} <span>(optional)</span><input value={pageRanges[String(index)] || ""} onChange={(event) => setPageRanges((old) => ({ ...old, [String(index)]: event.target.value }))} maxLength={120} placeholder="All pages, or 1-5, 8, 12-15"/></label>}
               </article>;
             })}</div>}
-          </section> : <section className="website-source-zone"><label htmlFor="website-source-url">Public website link</label><div className="website-source-input"><Globe2 size={17}/><input id="website-source-url" type="url" inputMode="url" value={websiteUrl} onChange={(event) => setWebsiteUrl(event.target.value)} maxLength={2048} placeholder="https://example.edu/biology/cell-division"/><button type="button" onClick={() => setWebsiteUrl("")} disabled={!websiteUrl} aria-label="Clear website link"><X size={16}/></button></div><small>Public pages only. Pages requiring sign-in will show a specific access message.</small><label className="file-page-range website-page-range">Pages <span>(optional, for direct PDF links)</span><input value={websitePageRange} onChange={(event) => setWebsitePageRange(event.target.value)} maxLength={120} placeholder="All pages, or 1-5, 8, 12-15"/></label></section>}
+          </section> : <section className="website-source-zone"><label htmlFor="website-source-url">{sourceMode === "youtube" ? "Public YouTube video" : "Public website link"}</label><div className="website-source-input"><Globe2 size={17}/><input id="website-source-url" type="url" inputMode="url" value={websiteUrl} onChange={(event) => setWebsiteUrl(event.target.value)} maxLength={2048} placeholder={sourceMode === "youtube" ? "https://www.youtube.com/watch?v=…" : "https://example.edu/biology/cell-division"}/><button type="button" onClick={() => setWebsiteUrl("")} disabled={!websiteUrl} aria-label="Clear website link"><X size={16}/></button></div><small>{sourceMode === "youtube" ? "Captions first, then video understanding if available. Public videos only; some videos cannot be read. Use the topic field to focus your quiz." : "Public pages only. Pages requiring sign-in will show a specific access message."}</small>{sourceMode !== "youtube" && <label className="file-page-range website-page-range">Pages <span>(optional, for direct PDF links)</span><input value={websitePageRange} onChange={(event) => setWebsitePageRange(event.target.value)} maxLength={120} placeholder="All pages, or 1-5, 8, 12-15"/></label>}</section>}
                     <details className="scope-details"><summary><span><FileText size={17}/> Focus on a topic or chapter <small>OPTIONAL</small></span><ChevronDown size={16}/></summary><label className="focus-topic-field"><span>Topic or chapter</span><input value={focusTopic} onChange={(event) => setFocusTopic(event.target.value)} maxLength={300} placeholder="e.g. Chapter 4: cellular respiration"/><small>Leave blank to use all the selected material.</small></label></details>
                     <button type="button" className="finder-shortcut" onClick={() => navigateTo("finder")}><Search size={17}/><span>No material yet? <b>Find something to study</b></span><ArrowUpRight size={17}/></button>
                   </div>}
@@ -1288,7 +1279,7 @@ export default function Home() {
           <div className="type-grid">{types.map(({ id, title, detail, icon: Icon }) => <button key={id} className={`type-card ${selected === id ? "chosen" : ""}`} onClick={() => { setSelected(id); setResult(null); setCurrent(0); resetStudyAnswer(); resetReviewAnswer(); setError(""); }}><span className="type-icon"><Icon size={19}/></span><span className="type-text"><strong>{title}</strong><small>{detail}</small></span>{selected === id && <span className="check-icon"><Check size={13} strokeWidth={3}/></span>}</button>)}</div>
                     <div className="session-options"><label htmlFor="question-count">Questions<select id="question-count" value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{[10,20,30,40,50].map((count) => <option key={count} value={count}>{count} questions</option>)}</select></label><fieldset className="difficulty-choice"><legend>Difficulty</legend><div>{["easy", "medium", "hard"].map((level) => <button type="button" key={level} aria-pressed={difficulty === level} className={difficulty === level ? "selected" : ""} onClick={() => setDifficulty(level as "easy" | "medium" | "hard")}>{level}</button>)}</div></fieldset></div>
                   </div>}
-                  {composerStep === 2 && <div className="creator-ready"><div className="creator-prompt"><h3>Your next session, ready to go.</h3><p>A quick look before we bring your material to life.</p></div><div className="session-summary"><span className="summary-icon"><BookOpen size={25}/></span><div><strong>{types.find((type) => type.id === selected)?.title}</strong><span>{questionCount} questions <i/> {difficulty} difficulty</span><small>{sourceMode === "file" ? files.length ? `${files.length} material${files.length === 1 ? "" : "s"} selected` : "Add your material in step 1" : websiteUrl.trim() ? "Public website selected" : "Add a website in step 1"}{focusTopic ? ` · ${focusTopic}` : ""}</small></div><button type="button" className="plain-icon" aria-label="Edit practice choices" onClick={() => setComposerStep(1)}><ArrowUpRight size={18}/></button></div><label className="model-choice-field" htmlFor="model-choice"><span><Cpu size={18}/> AI model</span><select id="model-choice" value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}><option value="auto">Auto choose the best available model</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select></label><div className="options-row"><button type="button" className={`web-toggle ${web ? "on" : ""}`} aria-pressed={web} onClick={() => setWeb(!web)}><span className="toggle-track"><span/></span><span><b>Enrich with the web</b><small>Add relevant context and source links.</small></span><Globe2 size={19}/></button></div><details className="model-help-details"><summary>About generation and your allowance <ChevronDown size={14}/></summary><p className="model-help">{hasUnlimitedGenerations ? "Your account has no Dawnstudy daily generation cap." : "Your account includes 5 generations per day, resetting at midnight in Manila."} If a model is busy, another available model can help. Completed questions are saved, and partial sets can be continued.</p></details></div>}
+                  {composerStep === 2 && <div className="creator-ready"><div className="creator-prompt"><h3>Your next session, ready to go.</h3><p>A quick look before we bring your material to life.</p></div><div className="session-summary"><span className="summary-icon"><BookOpen size={25}/></span><div><strong>{types.find((type) => type.id === selected)?.title}</strong><span>{questionCount} questions <i/> {difficulty} difficulty</span><small>{sourceMode === "file" ? files.length ? `${files.length} material${files.length === 1 ? "" : "s"} selected` : "Add your material in step 1" : websiteUrl.trim() ? sourceMode === "youtube" ? "YouTube video selected" : "Public website selected" : "Add a link in step 1"}{focusTopic ? ` · ${focusTopic}` : ""}</small></div><button type="button" className="plain-icon" aria-label="Edit practice choices" onClick={() => setComposerStep(1)}><ArrowUpRight size={18}/></button></div><label className="model-choice-field" htmlFor="model-choice"><span><Cpu size={18}/> AI model</span><select id="model-choice" value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}><option value="auto">Auto choose the best available model</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select></label><div className="options-row"><button type="button" className={`web-toggle ${web ? "on" : ""}`} aria-pressed={web} onClick={() => setWeb(!web)}><span className="toggle-track"><span/></span><span><b>Enrich with the web</b><small>Add relevant context and source links.</small></span><Globe2 size={19}/></button></div><details className="model-help-details"><summary>About generation and your allowance <ChevronDown size={14}/></summary><p className="model-help">{hasUnlimitedGenerations ? "Your account has no Dawnstudy daily generation cap." : "Your account includes 5 generations per day, resetting at midnight in Manila."} If a model is busy, another available model can help. Completed questions are saved, and partial sets can be continued.</p></details></div>}
                 </div>
                 <div className="creator-footer"><span className="creator-footer-note">{composerStep === 0 ? <><Leaf size={15}/> One small step starts it.</> : <button type="button" className="creator-back" onClick={() => setComposerStep((step) => Math.max(0, step - 1))}><ChevronLeft size={16}/> Back</button>}</span>{composerStep < 2 ? <button className="creator-next" type="button" onClick={() => setComposerStep((step) => step + 1)}>{composerStep === 0 ? "Choose practice" : "Review & create"}<ArrowRight size={18}/></button> : <button className="generate-button" onClick={generate} disabled={busy || continueBusy || generationNeedsReconnect}>{busy ? <><span className="spinner"/> Generating...</> : <>Create study set <ArrowRight size={18}/></>}</button>}</div>
               </section>
@@ -1321,7 +1312,7 @@ export default function Home() {
             </> : null}
           </section>}
           {result && currentCard && !reviewActive && !practiceActive && <section className="result-panel"><div className="result-head"><div><div className="result-kicker"><span/> YOUR STUDY SET</div><h2>{result.title}</h2><p>{result.items.length} {types.find((type) => type.id === result.type)?.title.toLowerCase()} · ready when you are{result.model ? ` · ${modelName(result.model)}` : ""}</p></div><button className="plain-icon" title="Close study set" onClick={() => setResult(null)}><X size={18}/></button></div>
-            <div className="set-action-row"><label>Test pace<select value={practiceSecondsPerQuestion} onChange={(event) => setPracticeSecondsPerQuestion(Number(event.target.value))}><option value={0}>No timer</option><option value={20}>20 sec / question</option><option value={30}>30 sec / question</option><option value={45}>45 sec / question</option></select></label><button className="action-button" onClick={startPractice}><AlarmClock size={15}/> {practiceSecondsPerQuestion === 0 ? "Start practice" : "Start timed test"}</button><button className="action-button" onClick={() => void shareCurrentSet()} disabled={shareBusy}><Share2 size={15}/>{shareBusy ? "Working…" : "Share set"}</button></div>
+            <div className="set-action-row"><label>Test pace<select value={practiceSecondsPerQuestion} onChange={(event) => setPracticeSecondsPerQuestion(Number(event.target.value))}><option value={0}>No timer</option><option value={20}>20 sec / question</option><option value={30}>30 sec / question</option><option value={45}>45 sec / question</option></select></label>{result.type !== "flashcards" && <button className="action-button" onClick={() => { if (result) setGameSet(result.id); navigateTo("games"); }}><Gamepad2 size={15}/> Play with friends</button>}<button className="action-button" onClick={startPractice}><AlarmClock size={15}/> {practiceSecondsPerQuestion === 0 ? "Start practice" : "Start timed test"}</button><button className="action-button" onClick={() => void shareCurrentSet()} disabled={shareBusy}><Share2 size={15}/>{shareBusy ? "Working…" : "Share set"}</button></div>
             {result.incomplete && <div className="incomplete-generation"><div><strong>{result.items.length} of {result.requested_count || result.items.length} questions generated</strong><span>{result.source_url ? "Your generated questions are held. Continue from the same public webpage when ready." : files.length ? "Your generated questions are held. Continue with the selected original files when ready." : "Re-select the original files to continue this set."}</span>{!result.source_url && files.length > 0 && <button type="button" className="resume-source-button" onClick={pickOriginalFiles}>Replace original files ({files.length} selected)</button>}</div><button className="continue-generation-button" disabled={continueBusy || busy || generationNeedsReconnect} onClick={() => { if (!files.length && !result.source_url) pickOriginalFiles(); else void continueGenerating(); }}>{continueBusy ? <><span className="spinner"/> Continuing…</> : <><Sparkles size={17}/> {!files.length && !result.source_url ? "Select original files" : "Continue generating"}</>}</button></div>}
             {shareUrl && <div className="share-link-row"><span>Anyone with this link can view this set:</span><a href={shareUrl} target="_blank" rel="noreferrer">{shareUrl}</a><button className="plain-icon" title="Copy share link" onClick={() => { void navigator.clipboard.writeText(shareUrl).then(() => setNotice("Share link copied.")).catch(() => setNotice("Select and copy the share link above.")); }}><Copy size={15}/></button><button className="share-revoke" disabled={shareBusy} onClick={() => void turnOffShareLink(result.id)}>Turn off link</button></div>}
             <div className="study-card"><div className="study-card-top"><span className="flashcard-label">{result.type === "flashcards" ? "FLASHCARD" : types.find((type) => type.id === result.type)?.title.toUpperCase()}</span><span className="card-number">{String(current + 1).padStart(2,"0")} <i>/</i> {String(result.items.length).padStart(2,"0")}</span></div>
@@ -1401,18 +1392,15 @@ export default function Home() {
       </section>
 
       <nav className="mobile-bottom-nav" aria-label="Main navigation">
-        <button type="button" aria-current={activeView === "study" ? "page" : undefined} onClick={() => navigateTo("study")}><BookOpen size={18}/><span>Study</span></button>
-        <button type="button" aria-current={activeView === "finder" ? "page" : undefined} onClick={() => navigateTo("finder")}><Search size={18}/><span>Finder</span></button>
-        <button type="button" aria-current={activeView === "library" ? "page" : undefined} onClick={() => navigateTo("library")}><Layers3 size={18}/><span>Library</span></button>
-        <button type="button" aria-current={activeView === "voice" ? "page" : undefined} onClick={() => navigateTo("voice")}><Mic size={18}/><span>Voice</span></button>
-        <button type="button" aria-current={activeView === "about" ? "page" : undefined} onClick={() => navigateTo("about")}><UserRound size={18}/><span>About</span></button>
+        <button aria-current={activeView === "study" ? "page" : undefined} onClick={() => navigateTo("study")}><BookOpen size={18}/><span>Study</span></button>
+        <button aria-current={activeView === "library" ? "page" : undefined} onClick={() => navigateTo("library")}><Layers3 size={18}/><span>Library</span></button>
+        <button aria-current={activeView === "friends" ? "page" : undefined} onClick={() => navigateTo("friends")}><Users size={18}/><span>Friends{community.data?.incoming.length ? ` (${community.data.incoming.length})` : ""}</span></button>
+        <button aria-current={activeView === "games" ? "page" : undefined} onClick={() => navigateTo("games")}><Gamepad2 size={18}/><span>Play</span></button>
+        <button aria-expanded={moreOpen} onClick={() => setMoreOpen(v => !v)}><Menu size={18}/><span>More</span></button>
       </nav>
-
-      <aside className={`study-companion ${companionOpen ? "is-open" : ""}`} aria-label="Your study companion">
-        {companionTalking && !companionOpen && companionLine && <div className="companion-bubble" role="status" aria-live="polite"><strong>{companionName || "Miso"}</strong><span>{companionLine}</span></div>}
-        {companionOpen && <div className="companion-panel"><div className="companion-panel-head"><div><strong>Make it yours</strong><small>Your little study buddy</small></div><button type="button" className="plain-icon" onClick={() => setCompanionOpen(false)} aria-label="Close companion settings"><X size={16}/></button></div><label className="companion-name-field">Name<input value={companionName} maxLength={24} onChange={(event) => updateCompanion(companionId, event.target.value)}/></label><span className="companion-choice-label">Choose an animal</span><div className="companion-choices">{companionChoices.map((choice) => <button type="button" key={choice.id} className={companionId === choice.id ? "chosen" : ""} aria-pressed={companionId === choice.id} onClick={() => updateCompanion(choice.id, companionName)}><StudyMascot animal={choice.id}/><small>{choice.label}</small></button>)}</div></div>}
-        <button type="button" className="companion-avatar" aria-expanded={companionOpen} aria-label={`${companionName || "Miso"}, open companion settings`} title={`${companionName || "Miso"} · customize study companion`} onClick={() => { setCompanionOpen((open) => !open); setCompanionLine(companionLines[Math.floor(Math.random() * companionLines.length)]); setCompanionTalking(true); }}><StudyMascot animal={companionId}/><i/></button>
-      </aside>
+      {moreOpen && <div className="more-menu-backdrop" onClick={() => setMoreOpen(false)}><nav className="more-menu" aria-label="More pages" onClick={e => e.stopPropagation()}><div><strong>Find your way</strong><button className="plain-icon" onClick={() => setMoreOpen(false)} aria-label="Close more pages"><X size={19}/></button></div>{([ ["finder", "PDF Finder"], ["voice", "Voice review"], ["profile", "My profile"], ["agreement", "Agreement & privacy"], ["about", "About Dawnstudy"] ] as [WorkspaceView, string][]).map(([id, title]) => <button key={id} onClick={() => navigateTo(id)}>{title}<ArrowRight size={16}/></button>)}</nav></div>}
+      <CompanionDock key={`buddy-${account?.id || "guest"}`} community={community} friends={() => navigateTo("friends")} signIn={() => setAuthOpen(true)}/>
+      {account && community.data && !community.data.profile?.onboarded && <Onboarding key={`setup-${account.id}`} community={community} setTheme={setColorTheme} signOut={signOut}/>}
 
       {authOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) { setAuthOpen(false); setAuthError(""); } }}>
         <section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title">

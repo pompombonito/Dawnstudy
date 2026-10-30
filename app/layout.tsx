@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./dawn-ui.css";
+import "./community/community.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://dawnstudy.vercel.app"),
