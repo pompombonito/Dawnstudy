@@ -23,6 +23,20 @@ class CompanionSafetyTests(unittest.TestCase):
         self.assertEqual(response("violent_intent")["reply"], REFUSAL)
         self.assertTrue(response("violent_intent")["safety"]["emergency"])
 
+    def test_ordinary_loneliness_offers_friends_without_clinical_disclaimers_or_contacts(self):
+        result = response(classify("I'm feeling lonely"))
+        self.assertTrue(result["suggest_friends"])
+        self.assertEqual(result["safety"]["contacts"], [])
+        self.assertFalse(result["safety"]["emergency"])
+        for phrase in ("counselling", "therapist", "hotline", "crisis", "gcd"):
+            self.assertNotIn(phrase, result["reply"].lower())
+
+    def test_more_severe_distress_retains_real_world_support_contacts(self):
+        result = response(classify("I feel hopeless"))
+        self.assertEqual(result["safety"]["category"], "distress")
+        self.assertIn("ceu", result["safety"]["contacts"])
+        self.assertFalse(result["safety"]["emergency"])
+
     def test_emergency_contacts_take_priority_over_study_friend_suggestions(self):
         for category in ("self_harm", "violent_intent", "medical_emergency", "immediate_danger"):
             result = response(category)

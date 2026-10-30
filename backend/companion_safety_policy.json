@@ -1,5 +1,5 @@
 {
-  "version": "2026-10-30-safety-1",
+  "version": "2026-10-30-safety-2",
   "contacts_verified_at": "2026-10-30",
   "contacts": {
     "emergency": {
@@ -56,10 +56,16 @@
       "suggest_friends": false
     },
     "support": {
-      "reply": "I'm an AI study companion, so I can't provide counselling. If you'd like some company, you can meet a study friend here. For personal support, you can contact CEU GCD or the NCMH Crisis Hotline below.",
-      "contacts": ["ncmh", "ceu"],
+      "reply": "Want some company? Let's find a study friend you can chat or study with.",
+      "contacts": [],
       "emergency": false,
       "suggest_friends": true
+    },
+    "distress": {
+      "reply": "That sounds like a lot to carry. You can reach out to someone you trust or CEU GCD for personal support. The NCMH Crisis Hotline is also available below if you'd like to talk to someone.",
+      "contacts": ["ncmh", "ceu"],
+      "emergency": false,
+      "suggest_friends": false
     },
     "clinical_boundary": {
       "reply": "I'm an AI study companion and can't diagnose, prescribe medication or provide therapy. You can contact CEU GCD or a qualified healthcare professional for personal care.",
@@ -147,8 +153,12 @@
       "\\b(?:binubully ako|inaabuso ako|hina-harass ako|pinagbabantaan ako)\\b"
     ],
     "support": [
-      "\\b(?:i (?:feel|am|am feeling)|i'm|im) (?:so |very |really |feeling )?(?:lonely|alone|isolated|sad|depressed|anxious|overwhelmed|hopeless|worthless|bullied)\\b",
+      "\\b(?:i (?:feel|am|am feeling)|i'm|im) (?:so |very |really |feeling )?(?:lonely|alone|isolated|sad|anxious|overwhelmed|bored|stressed)\\b",
       "\\b(?:i have no friends|no one cares about me|nobody cares about me|malungkot ako|nag-iisa ako|mag-isa ako|walang kaibigan|wala akong kaibigan|sobrang lungkot|naiiwan ako)\\b"
+    ],
+    "distress": [
+      "\\b(?:i (?:feel|am|am feeling)|i'm|im) (?:so |very |really |feeling )?(?:depressed|hopeless|worthless|in despair|unable to cope)\\b",
+      "\\b(?:i can't cope anymore|i cannot cope anymore|i've been depressed for|i have been depressed for)\\b"
     ],
     "followup": [
       "^(?:yes|yeah|yep|oo|opo|tonight|now|ngayon|mamaya|i have (?:the pills|a knife|a gun)|i (?:have|made) a plan|i might|i will|i already did|nagawa ko na)[.! ]*$"

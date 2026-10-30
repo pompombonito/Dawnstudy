@@ -126,6 +126,8 @@ class SocialTests(unittest.TestCase):
     def test_companion_suggests_friends_without_storing_the_conversation(self):
         result = self.post("/companion", {"message": "I'm feeling lonely"})
         self.assertTrue(result.json()["suggest_friends"])
+        self.assertEqual(result.json()["safety"]["contacts"], [])
+        self.assertNotIn("counselling", result.json()["reply"])
         self.assertEqual(self.tables["EncryptedMessages"], [])
 
     def test_emergency_reply_bypasses_ai_failure_and_conversational_rate_limit(self):

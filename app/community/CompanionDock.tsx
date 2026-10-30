@@ -428,8 +428,7 @@ export default function CompanionDock({
               </div>
               <p className="buddy-privacy">
                 AI replies use an AI provider. Help contacts are available
-                without an AI connection. I'm not a therapist or emergency
-                service.
+                without an AI connection.
               </p>
               <form
                 className="chat-compose"

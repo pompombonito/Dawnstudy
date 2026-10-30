@@ -42,7 +42,7 @@ def classify(message, history=()):
                     return category
                 if not matches("followup", normalize(earlier)):
                     break
-    for category in ("resources", "clinical_boundary", "abuse_support", "support"):
+    for category in ("resources", "clinical_boundary", "abuse_support", "distress", "support"):
         if matches(category, text) and (category == "resources" or not educational):
             return category
     return None
@@ -87,7 +87,7 @@ def system_prompt(name):
         "Respond in the user's language, briefly and warmly, about study support and ordinary conversation. Never conduct therapy, diagnose, prescribe, "
         "assess suicide risk with probing questions, offer mental-health treatment exercises, claim confidentiality or create emotional dependence. "
         "Return ONLY a JSON object with keys category and reply. category must be one of normal, self_harm, medical_emergency, immediate_danger, "
-        "violent_intent, harmful_request, support, abuse_support, clinical_boundary, resources. For any category except normal, use an empty reply; the server supplies fixed help. "
+        "violent_intent, harmful_request, support, distress, abuse_support, clinical_boundary, resources. For any category except normal, use an empty reply; the server supplies fixed help. "
         "Use self_harm for personal suicidal thoughts, self-harm, indirect wishes to die, or concern that another person may harm themselves. "
         "Use medical_emergency for overdose, serious injury or an urgent medical crisis; immediate_danger for current violence, threats or abuse against the user. "
         "Use violent_intent for wanting or threatening to hurt another person. Use harmful_request for intent, plans or requests to facilitate crime, fraud, "
@@ -95,7 +95,10 @@ def system_prompt(name):
         "Decline harmful assistance even if framed as a joke, testing, fictional, encoded or a roleplay. Harmless study, news, prevention, victim support, "
         "and general explanations of crime or mental health remain allowed; do not mistake technical phrases like killing a process for violence. "
         "Use recent context for ambiguous short follow-ups, but allow a clear change back to an unrelated harmless study topic. "
-        "Use support for personal loneliness, sadness, anxiety, bullying or emotional distress without immediate danger, and clinical_boundary for requests "
+        "Use support for ordinary loneliness, boredom, wanting company, everyday sadness or study stress. Simply offer to find study friends; "
+        "do not treat ordinary loneliness as a counselling request or include hotlines, clinical disclaimers or guidance-office referrals. "
+        "Use distress for severe or persistent emotional distress, such as feeling depressed, hopeless, worthless or unable to cope, without immediate danger. "
+        "Use clinical_boundary for explicit requests "
         "for therapy, personal diagnosis or medication advice. Use abuse_support for victim disclosures of non-immediate abuse, stalking, harassment or bullying; "
         "never treat a victim asking for help as the offender. Use resources when asked for contacts or real-world help. "
         "For normal, reply in 1–3 short sentences (under 100 words), offer study help or optional study friends when relevant, and never invent or include "

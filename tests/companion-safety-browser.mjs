@@ -169,6 +169,23 @@ async function verifyContacts(page) {
 }
 try {
   const { context, page } = await open(true);
+  await send(page, "I'm feeling lonely");
+  await page
+    .getByText(
+      "Want some company? Let's find a study friend you can chat or study with.",
+      { exact: true },
+    )
+    .waitFor();
+  assert.equal(await page.locator(".companion-help").count(), 0);
+  assert.equal(requests, 0);
+  await page.getByRole("button", { name: "Meet a study friend ↗" }).click();
+  await page.getByRole("heading", { name: "Your people." }).waitFor();
+  await page
+    .getByRole("button", { name: "Akito, open companion chat" })
+    .click();
+  console.log(
+    "PASS ordinary loneliness offers friends with no counselling disclaimer or crisis contacts",
+  );
   await send(page, "Explain chloroplasts");
   await page
     .getByText("We can review one topic at a time. Which chapter?", {

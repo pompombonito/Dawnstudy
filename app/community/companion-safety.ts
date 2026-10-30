@@ -84,6 +84,7 @@ export function classifyCompanion(
     "resources",
     "clinical_boundary",
     "abuse_support",
+    "distress",
     "support",
   ] as const)
     if ((category === "resources" || !educational) && matches(category, text))

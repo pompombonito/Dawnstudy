@@ -52,6 +52,26 @@ test("crime refusals exactly match the requested wording", () => {
     "I can't engage with that kind of conversation.",
   );
 });
+test("loneliness and saved older loneliness replies offer friends without clinical contacts", () => {
+  const result = safetyReply(classifyCompanion("I'm feeling lonely"));
+  assert.equal(result.suggest_friends, true);
+  assert.deepEqual(result.safety.contacts, []);
+  assert(!/counsell|therap|hotline|crisis|gcd/i.test(result.reply));
+  const history = restoreCompanionHistory([
+    { role: "user", content: "I'm feeling lonely" },
+    {
+      role: "assistant",
+      content: "I'm an AI and can't provide counselling.",
+      safety: {
+        category: "support",
+        contacts: ["ncmh", "ceu"],
+        emergency: false,
+      },
+    },
+  ]);
+  assert.equal(history[1].content, result.reply);
+  assert.deepEqual(history[1].safety.contacts, []);
+});
 test("refresh upgrades legacy crisis replies instead of retaining old model guidance", () => {
   const turns = restoreCompanionHistory([
     { role: "user", content: "I feel suicidal" },
