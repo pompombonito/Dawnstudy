@@ -182,7 +182,7 @@ async function context(uid, width = 1440, height = 1000) {
     else if (path === "/api/community/companion")
       data = {
         reply:
-          "That sounds like a heavy day. I'm glad you shared it. Would a small break or reaching out to someone you trust feel helpful?",
+          "I'm an AI study companion, so I can't provide counselling. If you'd like some company, you can meet a study friend here. For personal support, you can contact CEU GCD or the NCMH Crisis Hotline below.",
         suggest_friends: true,
         model: "mock",
       };
@@ -290,7 +290,7 @@ try {
   await p.getByRole("button", { name: "Biscuit, open companion chat" }).click();
   await p
     .getByText(
-      "That sounds like a heavy day. I'm glad you shared it. Would a small break or reaching out to someone you trust feel helpful?",
+      "I'm an AI study companion, so I can't provide counselling. If you'd like some company, you can meet a study friend here. For personal support, you can contact CEU GCD or the NCMH Crisis Hotline below.",
       { exact: true },
     )
     .waitFor();

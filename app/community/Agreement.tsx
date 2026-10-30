@@ -69,11 +69,12 @@ export default function Agreement({ compact = false }: { compact?: boolean }) {
         Google Sheets stores account, study and social records. Google sign-in,
         Vercel hosting, Render hosting, and the configured AI providers process
         the information necessary for their services, potentially outside the
-        Philippines. Material, voice-review content and AI companion
-        conversations are sent to the selected or fallback AI provider. AI
-        companion chat is separate from encrypted friend messages. Do not send
-        the companion information you would not want processed by an AI
-        provider.
+        Philippines. Material, voice-review content and companion messages
+        requiring AI replies are sent to the selected or fallback AI provider.
+        Common safety responses and help contacts can be displayed locally on
+        your device. AI companion chat is separate from encrypted friend
+        messages. Do not send the companion information you would not want
+        processed by an AI provider.
       </p>
       <h2>6. Private messages and keys</h2>
       <p>

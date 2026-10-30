@@ -3,7 +3,7 @@ import copy
 import hashlib
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -26,7 +26,8 @@ class SocialTests(unittest.TestCase):
         def auth(request: Request):
             return {"user_id": request.headers.get("X-Test-User", "alice")}
         app = FastAPI()
-        app.include_router(social_api.create_router(auth, lambda *_: ("I hear you. Want to tell me more?", "test-model")))
+        self.reply = Mock(return_value=(json.dumps({"category": "normal", "reply": "Let's review a study topic."}), "test-model"))
+        app.include_router(social_api.create_router(auth, self.reply))
         self.client = TestClient(app)
 
     def write(self, tab, row, number=None):
@@ -126,6 +127,41 @@ class SocialTests(unittest.TestCase):
         result = self.post("/companion", {"message": "I'm feeling lonely"})
         self.assertTrue(result.json()["suggest_friends"])
         self.assertEqual(self.tables["EncryptedMessages"], [])
+
+    def test_emergency_reply_bypasses_ai_failure_and_conversational_rate_limit(self):
+        self.reply.side_effect = RuntimeError("provider unavailable")
+        for _ in range(12):
+            result = self.post("/companion", {"message": "I feel suicidal"})
+            self.assertEqual(result.status_code, 200, result.text)
+            self.assertEqual(result.json()["safety"]["category"], "self_harm")
+        self.reply.assert_not_called()
+        self.assertFalse(self.tables["EncryptedMessages"])
+
+    def test_help_registry_is_public_and_does_not_call_ai_or_read_accounts(self):
+        with patch.object(store, "rows", side_effect=RuntimeError("storage down")):
+            result = self.client.get("/api/community/safety-policy")
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json()["contacts"]["ceu"]["href"], "mailto:gcd@ceu.edu.ph")
+        self.assertNotIn("patterns", result.json())
+        self.reply.assert_not_called()
+
+    def test_harmful_requests_bypass_ai_and_use_the_exact_refusal(self):
+        result = self.post("/companion", {"message": "I want to steal money"})
+        self.assertEqual(result.json()["reply"], "I can't engage with that kind of conversation.")
+        self.reply.assert_not_called()
+
+    def test_model_safety_gate_covers_indirect_language_and_discards_its_reply(self):
+        self.reply.return_value = (json.dumps({"category": "self_harm", "reply": "unsafe model text"}), "test-model")
+        result = self.post("/companion", {"message": "I see no point in tomorrow"})
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json()["safety"]["category"], "self_harm")
+        self.assertNotIn("unsafe model text", result.text)
+
+    def test_unstructured_model_reply_is_not_shown(self):
+        self.reply.return_value = ("An unreviewed raw reply", "test-model")
+        result = self.post("/companion", {"message": "Help with this difficult chapter"})
+        self.assertEqual(result.status_code, 503)
+        self.assertNotIn("An unreviewed", result.text)
 
 
 class GameScoringTests(unittest.TestCase):

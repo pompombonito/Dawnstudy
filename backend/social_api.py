@@ -92,6 +92,12 @@ class GameAction(BaseModel):
 def create_router(authenticated_user, reply):
     router = APIRouter(prefix="/api/community")
 
+    @router.get("/safety-policy")
+    def safety_policy():
+        # Public help information must not depend on account/Sheets availability.
+        from companion_safety import POLICY
+        return {key: POLICY[key] for key in ("version", "contacts_verified_at", "contacts")}
+
     def signed(user=Depends(authenticated_user)):
         try:
             if not store.ready(user["user_id"]):
@@ -282,11 +288,19 @@ def create_router(authenticated_user, reply):
 
     @router.post("/companion")
     def companion(body: CompanionInput, uid=Depends(signed)):
-        limited(uid, "companion", 10)
+        from companion_safety import classify, response, resolve_model_reply
         history = [{"role": r["role"], "content": r.get("content", "")[:1200]} for r in body.history if r.get("role") in {"user", "assistant"}][-12:]
+        category = classify(body.message, history)
+        if category:
+            return response(category)
+        # Emergency contacts/refusals above never depend on provider quotas or
+        # the conversational rate limit. They are not forwarded to an AI.
+        limited(uid, "companion", 10)
         text, model = reply(body.message, history, store.profile(uid)["companion_name"])
-        suggest = bool(re.search(r"lonel|alone|no friends|isolat|sad|malungkot|mag.isa|walang kaibigan", body.message, re.I))
-        return {"reply": text, "model": model, "suggest_friends": suggest}
+        result = resolve_model_reply(text, model)
+        if result is None:
+            raise HTTPException(503, "Your companion couldn't respond safely. Try a study question, or open Philippine help contacts in the chat header.")
+        return result
 
     def room_for(code, uid, member=True):
         room = games.ROOMS.get(code.upper())

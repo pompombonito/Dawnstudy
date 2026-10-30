@@ -1,12 +1,32 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { MessageCircle, Send, Settings2, Sparkles, X } from "lucide-react";
+import {
+  LifeBuoy,
+  MessageCircle,
+  Send,
+  Settings2,
+  Sparkles,
+  X,
+} from "lucide-react";
 import Avatar from "../components/Avatar";
 import { AvatarPicker } from "./ProfileEditor";
 import type { Community } from "./useCommunity";
 import { communityApi } from "./api";
+import {
+  classifyCompanion,
+  restoreCompanionHistory,
+  safetyReply,
+  type CompanionReply,
+  type SafetyInfo,
+} from "./companion-safety";
+import CompanionSafetyCard from "./CompanionSafetyCard";
 
-type Turn = { role: "user" | "assistant"; content: string; suggest?: boolean };
+type Turn = {
+  role: "user" | "assistant";
+  content: string;
+  suggest?: boolean;
+  safety?: SafetyInfo | null;
+};
 const lines = [
   "A little progress is still progress. What will you learn today?",
   "Unclench your shoulders. One question at a time.",
@@ -41,6 +61,15 @@ export default function CompanionDock({
     [quiet, setQuiet] = useState(false);
   const bottom = useRef<HTMLDivElement>(null),
     running = useRef(false);
+  const request = useRef<AbortController | null>(null);
+  const sequence = useRef(0);
+  const [showHelp, setShowHelp] = useState(false);
+  useEffect(
+    () => () => {
+      request.current?.abort();
+    },
+    [],
+  );
   const [historyReady, setHistoryReady] = useState(false);
   useEffect(() => {
     let local;
@@ -68,16 +97,7 @@ export default function CompanionDock({
           `dawnstudy-companion-chat:${community.userId}`,
         ) || "[]",
       );
-      if (Array.isArray(history))
-        setTurns(
-          history
-            .filter(
-              (t) =>
-                ["user", "assistant"].includes(t.role) &&
-                typeof t.content === "string",
-            )
-            .slice(-24),
-        );
+      setTurns(restoreCompanionHistory(history));
     } catch {
       /* A fresh conversation. */
     }
@@ -89,8 +109,26 @@ export default function CompanionDock({
       `dawnstudy-companion-chat:${community.userId}`,
       JSON.stringify(turns.slice(-24)),
     );
-    bottom.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const messages =
+      bottom.current?.parentElement?.querySelectorAll<HTMLElement>(
+        ".buddy-turn",
+      );
+    const urgent = turns[turns.length - 1]?.safety?.emergency;
+    const last = messages?.[messages.length - 1];
+    const target = urgent
+      ? last?.querySelector<HTMLElement>(".companion-help")
+      : bottom.current;
+    target?.scrollIntoView({
+      block: urgent ? "start" : "nearest",
+      behavior: urgent ? "instant" : "smooth",
+    });
   }, [turns, community.userId, historyReady]);
+  useEffect(() => {
+    if (showHelp)
+      bottom.current?.parentElement
+        ?.querySelector<HTMLElement>(".buddy-help-panel")
+        ?.scrollIntoView({ block: "start", behavior: "instant" });
+  }, [showHelp]);
   useEffect(() => {
     if (open || quiet) return;
     const timer = setInterval(() => {
@@ -136,43 +174,77 @@ export default function CompanionDock({
     }
   }
   async function send() {
-    if (!text.trim() || running.current) return;
+    if (!text.trim()) return;
+    const content = text.trim();
+    const category = classifyCompanion(content, turns);
+    if (category) {
+      request.current?.abort();
+      sequence.current += 1;
+      running.current = false;
+      setBusy(false);
+      setError("");
+      const result = safetyReply(category);
+      setTurns([
+        ...turns,
+        { role: "user", content },
+        {
+          role: "assistant",
+          content: result.reply,
+          suggest: result.suggest_friends,
+          safety: result.safety,
+        },
+      ]);
+      setText("");
+      return;
+    }
+    if (running.current) return;
     if (!p?.onboarded) {
       signIn();
       return;
     }
-    const content = text.trim();
     const history = [...turns, { role: "user", content } as Turn];
+    const current = ++sequence.current;
+    const controller = new AbortController();
+    request.current = controller;
     running.current = true;
     setBusy(true);
     setError("");
     setTurns(history);
     setText("");
     try {
-      const result = await communityApi<{
-        reply: string;
-        suggest_friends: boolean;
-      }>(community.token, "/companion", {
-        message: content,
-        history: turns
-          .slice(-12)
-          .map(({ role, content }) => ({ role, content })),
-      });
+      const result = await communityApi<CompanionReply>(
+        community.token,
+        "/companion",
+        {
+          message: content,
+          history: turns
+            .slice(-12)
+            .map(({ role, content }) => ({ role, content })),
+        },
+        undefined,
+        controller.signal,
+      );
+      if (current !== sequence.current) return;
       setTurns([
         ...history,
         {
           role: "assistant",
           content: result.reply,
           suggest: result.suggest_friends,
+          safety: result.safety,
         },
       ]);
     } catch (e) {
+      if (current !== sequence.current || controller.signal.aborted) return;
       setError((e as Error).message);
       setText(content);
       setTurns(history.slice(0, -1));
     } finally {
-      running.current = false;
-      setBusy(false);
+      if (current === sequence.current) {
+        running.current = false;
+        setBusy(false);
+        request.current = null;
+      }
     }
   }
   return (
@@ -203,6 +275,18 @@ export default function CompanionDock({
                 {settings ? "Make your buddy yours" : "Your AI study companion"}
               </small>
             </div>
+            <button
+              className="plain-icon"
+              aria-label="Show Philippine help contacts"
+              aria-expanded={showHelp}
+              onClick={() => {
+                setSettings(false);
+                setShowHelp((v) => !v);
+              }}
+              title="Philippine help contacts"
+            >
+              <LifeBuoy size={18} />
+            </button>
             <button
               className="plain-icon"
               aria-label={
@@ -268,6 +352,10 @@ export default function CompanionDock({
               <button
                 className="text-button"
                 onClick={() => {
+                  request.current?.abort();
+                  sequence.current += 1;
+                  running.current = false;
+                  setBusy(false);
                   setTurns([]);
                   setSaved("Conversation cleared from this tab.");
                 }}
@@ -278,13 +366,27 @@ export default function CompanionDock({
           ) : (
             <>
               <div className="buddy-history" aria-live="polite">
+                {showHelp && (
+                  <div className="buddy-help-panel">
+                    <button
+                      className="text-button"
+                      onClick={() => setShowHelp(false)}
+                    >
+                      Close help contacts
+                    </button>
+                    <CompanionSafetyCard
+                      info={safetyReply("resources").safety!}
+                    />
+                  </div>
+                )}
                 {!turns.length && (
                   <div className="buddy-greeting">
                     <Sparkles size={23} />
                     <h3>What's on your mind?</h3>
                     <p>
-                      How are you feeling today? You can tell me about your day
-                      or what's making studying difficult.
+                      I'm an AI study companion. I can help with studying,
+                      finding a study friend, or connecting you with real-world
+                      support.
                     </p>
                     <div className="buddy-starters">
                       {[
@@ -303,6 +405,7 @@ export default function CompanionDock({
                   <div className={`buddy-turn ${turn.role}`} key={i}>
                     <small>{turn.role === "user" ? "You" : name}</small>
                     <p>{turn.content}</p>
+                    {turn.safety && <CompanionSafetyCard info={turn.safety} />}
                     {turn.suggest && (
                       <button
                         className="social-button"
@@ -324,8 +427,9 @@ export default function CompanionDock({
                 <div ref={bottom} />
               </div>
               <p className="buddy-privacy">
-                AI chat is sent to an AI provider. Friend messages use a
-                separate encrypted chat.
+                AI replies use an AI provider. Help contacts are available
+                without an AI connection. I'm not a therapist or emergency
+                service.
               </p>
               <form
                 className="chat-compose"
@@ -342,13 +446,15 @@ export default function CompanionDock({
                   placeholder={
                     p?.onboarded
                       ? `Talk to ${name}…`
-                      : "Sign in to talk to your companion"
+                      : "Sign in for AI chat · help is always available"
                   }
                   aria-label="Message your AI companion"
                 />
                 <button
                   className="social-button primary"
-                  disabled={busy || !text.trim()}
+                  disabled={
+                    !text.trim() || (busy && !classifyCompanion(text, turns))
+                  }
                   aria-label="Send to companion"
                 >
                   <Send size={17} />

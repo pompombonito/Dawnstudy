@@ -1,0 +1,157 @@
+{
+  "version": "2026-10-30-safety-1",
+  "contacts_verified_at": "2026-10-30",
+  "contacts": {
+    "emergency": {
+      "name": "Philippine National Emergency Hotline",
+      "detail": "Immediate danger · police, fire or medical emergency",
+      "label": "Call 911",
+      "href": "tel:911",
+      "source": "https://ehotlines.e.gov.ph/"
+    },
+    "ncmh": {
+      "name": "NCMH Crisis Hotline",
+      "detail": "Philippines · 24/7 crisis and emotional support",
+      "label": "1800-1888-1553",
+      "href": "tel:+63180018881553?oai_link_source=model_response_hotline",
+      "source": "https://www.facebook.com/ncmhcrisishotline?mibextid=LQQJ4d&oai_link_source=model_response_hotline"
+    },
+    "ceu": {
+      "name": "CEU Guidance and Counseling Department",
+      "detail": "Campus support · email is not an emergency service",
+      "label": "gcd@ceu.edu.ph",
+      "href": "mailto:gcd@ceu.edu.ph",
+      "source": "https://www.ceu.edu.ph/static/campus-life/10.html"
+    }
+  },
+  "responses": {
+    "self_harm": {
+      "reply": "I'm an AI study companion and can't provide crisis care. If you might act on these thoughts or have already hurt yourself, call 911 now or go to the nearest emergency department. Please contact the NCMH Crisis Hotline below and someone you trust who can stay with you.",
+      "contacts": ["emergency", "ncmh", "ceu"],
+      "emergency": true,
+      "suggest_friends": false
+    },
+    "medical_emergency": {
+      "reply": "This may be an emergency. Call 911 now or ask someone nearby to call, and seek immediate medical care. I'm an AI study companion and cannot assess your condition or send emergency responders.",
+      "contacts": ["emergency", "ceu"],
+      "emergency": true,
+      "suggest_friends": false
+    },
+    "immediate_danger": {
+      "reply": "If you or someone else is in immediate danger, call 911 now. If possible, move to a safe place and contact someone you trust. I'm an AI study companion and cannot intervene or send emergency responders.",
+      "contacts": ["emergency", "ceu"],
+      "emergency": true,
+      "suggest_friends": false
+    },
+    "violent_intent": {
+      "reply": "I can't engage with that kind of conversation.",
+      "contacts": ["emergency", "ncmh", "ceu"],
+      "emergency": true,
+      "suggest_friends": false
+    },
+    "harmful_request": {
+      "reply": "I can't engage with that kind of conversation.",
+      "contacts": [],
+      "emergency": false,
+      "suggest_friends": false
+    },
+    "support": {
+      "reply": "I'm an AI study companion, so I can't provide counselling. If you'd like some company, you can meet a study friend here. For personal support, you can contact CEU GCD or the NCMH Crisis Hotline below.",
+      "contacts": ["ncmh", "ceu"],
+      "emergency": false,
+      "suggest_friends": true
+    },
+    "clinical_boundary": {
+      "reply": "I'm an AI study companion and can't diagnose, prescribe medication or provide therapy. You can contact CEU GCD or a qualified healthcare professional for personal care.",
+      "contacts": ["ncmh", "ceu"],
+      "emergency": false,
+      "suggest_friends": false
+    },
+    "abuse_support": {
+      "reply": "You can contact CEU GCD and someone you trust for real-world support. If you are unsafe or someone is threatening you now, call 911. I'm an AI study companion and can't investigate, intervene or provide counselling.",
+      "contacts": ["emergency", "ceu"],
+      "emergency": false,
+      "suggest_friends": false
+    },
+    "resources": {
+      "reply": "Here are Philippine help contacts and CEU GCD's email. For immediate danger, call 911. Campus email is for non-emergency support.",
+      "contacts": ["emergency", "ncmh", "ceu"],
+      "emergency": false,
+      "suggest_friends": false
+    }
+  },
+  "patterns": {
+    "negations": [
+      "\\b(?:i am |i'm |im )?not (?:feeling )?suicidal\\b",
+      "\\b(?:i do not|i don't|i dont|i am not|i'm not|im not) (?:want to|going to|planning to|intend to) (?:die|kill myself|hurt myself|harm myself|kill someone|hurt someone)\\b",
+      "\\b(?:hindi|di) (?:ko )?(?:gustong?|balak) (?:magpakamatay|saktan ang sarili ko|saktan siya|pumatay)\\b"
+    ],
+    "educational": [
+      "^(?:(?:my|our|the|a) (?:class|assignment|essay|project|presentation|research|book|lecture|lesson)|i(?: am|'m) (?:writing an essay|researching a topic|reading a book|studying))\\b",
+      "^(?:what (?:is|are|does)|define|explain|meaning of|translate|how (?:can (?:we|people)|to) (?:prevent|recognize|report)|for (?:my|our) (?:class|essay|assignment)|i'm studying|i am studying|ano ang ibig sabihin|ipaliwanag|para sa (?:klase|assignment))\\b"
+    ],
+    "personal_intent": [
+      "\\b(?:i (?:feel|am feeling|want|plan|intend|might|will|have taken|took)|i'm (?:feeling|going)|im (?:feeling|going)|my (?:friend|sister|brother|classmate) (?:is|wants)|gusto ko|balak ko|naiisip kong|umiinom ako|myself|my own life|my life)\\b"
+    ],
+    "harmless": [
+      "\\bkill (?:time|a process|the process|a python process|a linux process|a bug|the lights)\\b",
+      "\\bsteal (?:a base|the show|my heart|the spotlight)\\b"
+    ],
+    "self_harm": [
+      "\\bsu[i1]c[i1]d(?:al|e thoughts|e plan|e attempt)\\b",
+      "\\b(?:kill|hurt|harm|cut|hang|shoot|poison|end) (?:myself|my self|my own life|my life)\\b",
+      "\\b(?:want|wanna|wish|ready|going|plan|planning|intend|need|like) (?:to )?(?:die|end it all|end my life|stop living)\\b",
+      "\\b(?:don't|do not|dont|can't|cannot) (?:want to live|go on living|keep living)\\b",
+      "\\b(?:better off dead|no reason to live|not worth living|self[- ]?harm|unalive myself|unalive me)\\b",
+      "\\b(?:magpakamatay|magpapakamatay|nagpakamatay|nagpapakamatay|pagpapakamatay|patiwakal|magbigti|magbibigti)\\b",
+      "\\b(?:gusto ko(?:ng)?|nais ko(?:ng)?|balak ko(?:ng)?)(?: na(?:ng)?)? (?:mamatay|mawala sa mundo)\\b",
+      "\\b(?:ayoko|ayaw ko) na(?:ng)? mabuhay\\b",
+      "\\b(?:saktan|sasaktan|lasunin|lasunin ko) (?:ang )?sarili(?: ko)?\\b"
+    ],
+    "medical_emergency": [
+      "\\bi (?:just )?(?:took|swallowed) (?:all (?:of )?(?:the |my )?|a handful of |[2-9][0-9]+ )(?:pills|tablets|medication)\\b",
+      "\\b(?:i|my (?:friend|sister|brother|classmate)|someone) (?:have |has |just )?(?:overdosed|took too many pills|swallowed poison|drank poison)\\b",
+      "\\b(?:i (?:can't|cannot|cant) breathe|i am choking|i'm choking|im choking|i am bleeding heavily|i'm bleeding heavily|severe chest pain|someone is unconscious|not breathing)\\b",
+      "\\b(?:hindi|di) (?:ako|siya) makahinga\\b",
+      "\\b(?:uminom|nakainom) (?:ako )?(?:ng )?(?:lason|maraming gamot|sobrang gamot)\\b",
+      "\\b(?:dumudugo nang malakas|walang malay|hindi humihinga|nagtangkang magpakamatay)\\b"
+    ],
+    "immediate_danger": [
+      "\\b(?:someone|my (?:partner|father|mother|friend)|he|she|they) (?:is |are )?(?:trying to kill me|threatening to kill me|attacking me|hurting me right now|holding me hostage)\\b",
+      "\\b(?:i am|i'm|im) (?:being attacked|being assaulted|being raped|in immediate danger|not safe right now)\\b",
+      "\\b(?:may sunog|may nananaksak|may nambabaril|may gustong pumatay sa akin|sinasaktan ako ngayon)\\b"
+    ],
+    "violent_intent": [
+      "\\b(?:i'll|i am going to|i am about to|i'm about to) (?:kill|murder|shoot|stab|hurt|poison|attack|rape|kidnap) (?:you|him|her|them|someone|somebody|my|a person|people)\\b",
+      "\\b(?:papatayin|sasaksakin|babarilin|sasaktan|lalasunin) ko (?:siya|sila|ang|si)\\b",
+      "\\b(?:i (?:want|plan|intend|will)|i'm going|im going|help me|show me how|how (?:can|do) i) (?:to )?(?:murder|rape|kidnap|assault)\\b",
+      "\\b(?:i (?:want|plan|intend|will|might)|i'm going|im going|help me|show me how|how (?:can|do) i) (?:to )?(?:kill|shoot|stab|hurt|poison|attack) (?:someone|somebody|people|a person|him|her|them|my|a classmate|a teacher|a friend)\\b",
+      "\\b(?:gusto ko(?:ng)?|balak ko(?:ng)?|paano (?:ko|ako)|tulungan mo ako(?:ng)?) (?:pumatay|manaksak|mamaril|manggahasa|manakit|saktan siya|saktan sila|dukutin)\\b"
+    ],
+    "harmful_request": [
+      "\\b(?:i (?:want|plan|intend|will)|i'm going|im going|help me|teach me|show me|how (?:can|do) i|how to) (?:to )?(?:steal|rob|blackmail|extort|scam|defraud|doxx?|stalk|commit a crime|evade the police|hide evidence|launder money|forge|shoplift)\\b",
+      "\\b(?:gusto ko(?:ng)?|balak ko(?:ng)?|paano (?:ko|ako)|turuan mo ako(?:ng)?|tulungan mo ako(?:ng)?) (?:magnakaw|mangholdap|manloko|mang-scam|mandaya|mangikil|gumawa ng krimen|magtago ng ebidensya)\\b",
+      "\\b(?:hack|break into|steal) (?:someone else's|someone's|my (?:friend's|classmate's|ex's)|their|another person's) (?:account|password|phone|email)\\b",
+      "\\b(?:make|build) (?:a |an )?(?:bomb|explosive) (?:to|for) (?:hurt|kill|attack)\\b"
+    ],
+    "resources": [
+      "\\b(?:hotlines?|crisis (?:number|support)|emergency (?:number|contacts?)|philippine help|ceu gcd|gcd@ceu\\.edu\\.ph|guidance (?:office|counsell?ing))\\b"
+    ],
+    "clinical_boundary": [
+      "\\b(?:be|act as) my (?:therapist|psychologist|psychiatrist|counsell?or)\\b",
+      "\\b(?:diagnose me|do i have (?:depression|bipolar|adhd|anxiety|ptsd)|what (?:medication|medicine|dose|dosage) should i take|prescribe (?:me|a))\\b"
+    ],
+    "abuse_support": [
+      "\\b(?:i am|i'm|im) being (?:bullied|abused|harassed|blackmailed|stalked)\\b",
+      "\\b(?:someone|my (?:partner|classmate|friend)) is (?:abusing|bullying|harassing|blackmailing|stalking) me\\b",
+      "\\b(?:binubully ako|inaabuso ako|hina-harass ako|pinagbabantaan ako)\\b"
+    ],
+    "support": [
+      "\\b(?:i (?:feel|am|am feeling)|i'm|im) (?:so |very |really |feeling )?(?:lonely|alone|isolated|sad|depressed|anxious|overwhelmed|hopeless|worthless|bullied)\\b",
+      "\\b(?:i have no friends|no one cares about me|nobody cares about me|malungkot ako|nag-iisa ako|mag-isa ako|walang kaibigan|wala akong kaibigan|sobrang lungkot|naiiwan ako)\\b"
+    ],
+    "followup": [
+      "^(?:yes|yeah|yep|oo|opo|tonight|now|ngayon|mamaya|i have (?:the pills|a knife|a gun)|i (?:have|made) a plan|i might|i will|i already did|nagawa ko na)[.! ]*$"
+    ]
+  }
+}
