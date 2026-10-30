@@ -19,12 +19,14 @@ from urllib.parse import unquote, urljoin, urlparse
 from uuid import uuid4
 from material_scope import selected_pages, focus_excerpt
 from public_fetch import pinned_public_connection
+from generation_jobs import GenerationAlreadyRunning, GenerationJobs, GenerationQueueFull, merge_continued_generation
 
 import requests
 from docx import Document
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
 from pptx import Presentation
@@ -96,8 +98,7 @@ _memory_usage_lock = threading.Lock()
 _memory_usage: dict[tuple[str, str], int] = {}
 _generation_progress: ContextVar[Any] = ContextVar("generation_progress", default=None)
 _persist_generation: ContextVar[bool] = ContextVar("persist_generation", default=False)
-_jobs: dict[str, dict[str, Any]] = {}
-_jobs_lock = threading.Lock()
+generation_jobs = GenerationJobs()
 _generation_workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="study-generation")
 
 
@@ -2030,6 +2031,7 @@ async def start_generation_job(
     use_web: bool = Form(False), model: str = Form("auto"), question_count: int = Form(10),
     difficulty: Literal["easy", "medium", "hard"] = Form("medium"),
     existing_questions: str = Form(""), expected_material_fingerprint: str = Form(""),
+    study_set_id: str = Form("", max_length=100),
     user: dict[str, str] = Depends(authenticated_user),
 ):
     if len(files) > 5 or bool(files) == bool(source_url.strip()):
@@ -2047,30 +2049,60 @@ async def start_generation_job(
     finally:
         for upload in files:
             await upload.close()
-    now = time.monotonic()
-    with _jobs_lock:
-        for key in [key for key, job in _jobs.items() if job["status"] in {"complete", "error"} and now - job["updated"] > 900]:
-            _jobs.pop(key)
-        active = [job for job in _jobs.values() if job["status"] in {"queued", "running"}]
-        if any(job["user_id"] == user["user_id"] for job in active):
-            raise HTTPException(status_code=409, detail="A generation is already running for your account. Let it finish first.")
-        if len(active) >= 6:
-            raise HTTPException(status_code=429, detail="The study queue is busy. Try again shortly; no allowance was used.")
-        job_id = str(uuid4())
-        _jobs[job_id] = {"user_id": user["user_id"], "status": "queued", "stage": "queued", "message": "Waiting for a generation slot…", "completed": 0, "requested": question_count, "updated": now}
+    base_set = None
+    if study_set_id:
+        try:
+            base_set = next((item for item in list_study_sets(user["user_id"]) if item["id"] == study_set_id), None)
+        except StorageError as exc:
+            raise storage_http_error(exc) from exc
+        if not base_set:
+            raise HTTPException(status_code=404, detail="The study set to continue was not found.")
+        if base_set["type"] != format:
+            raise HTTPException(status_code=422, detail="Continue with the original study format.")
+        remaining = (base_set.get("requested_count") or len(base_set["items"])) - len(base_set["items"])
+        if remaining <= 0:
+            raise HTTPException(status_code=409, detail="This study set is already complete. Open it from your library.")
+        question_count = min(question_count, remaining)
+        existing_questions = json.dumps([item["question"] for item in base_set["items"]], ensure_ascii=False)
+        expected_material_fingerprint = base_set.get("material_fingerprint", "")
+    target_count = (base_set.get("requested_count") or len(base_set["items"])) if base_set else question_count
+    try:
+        job_id = generation_jobs.start(user["user_id"], target_count)
+    except GenerationAlreadyRunning as exc:
+        return JSONResponse(status_code=409, content={
+            "detail": "A generation is already running for your account. Reconnecting to it.",
+            "job_id": exc.job_id,
+        })
+    except GenerationQueueFull:
+        raise HTTPException(status_code=429, detail="The study queue is busy. Try again shortly; no allowance was used.")
 
     def update(fields):
-        with _jobs_lock:
-            _jobs[job_id].update(fields, updated=time.monotonic())
+        generation_jobs.update(job_id, **fields)
+
+    def progress(event):
+        if base_set:
+            event = {**event, "completed": len(base_set["items"]) + event["completed"]}
+            if event["stage"] == "validating":
+                event["message"] = f"Checking answers · {event['completed']} of {target_count} ready"
+        update({**event, "status": "running"})
 
     def run():
         uploads = [UploadFile(filename=name, file=BytesIO(raw)) for name, raw in raw_files]
-        progress_token = _generation_progress.set(lambda event: update({**event, "status": "running"}))
-        persist_token = _persist_generation.set(not bool(existing_questions))
+        progress_token = _generation_progress.set(progress)
+        persist_token = _persist_generation.set(not bool(existing_questions) and base_set is None)
         try:
             update({"status": "running"})
             result = generate(file=None, files=uploads, source_url=source_url, page_ranges=page_ranges, focus_topic=focus_topic, format=format, use_web=use_web, model=model, question_count=question_count, difficulty=difficulty, existing_questions=existing_questions, expected_material_fingerprint=expected_material_fingerprint, user=user)
-            update({"status": "complete", "stage": "complete", "message": "Your complete study set is ready.", "completed": question_count, "result": result})
+            if base_set:
+                result = merge_continued_generation(base_set, result)
+                update({"stage": "saving", "message": "Saving your updated study set…", "completed": len(result["items"])})
+                try:
+                    result.update(extend_study_set(study_set_id, SavedStudySet(**result), user))
+                except HTTPException as exc:
+                    result["persistence_error"] = str(exc.detail)
+            update({"status": "complete", "stage": "complete",
+                    "message": "Your questions are saved. Continue when ready." if result.get("incomplete") else "Your study set is ready.",
+                    "completed": len(result["items"]), "result": result})
         except HTTPException as exc:
             update({"status": "error", "message": exc.detail, "error_status": exc.status_code})
         except Exception as exc:
@@ -2081,17 +2113,31 @@ async def start_generation_job(
             _persist_generation.reset(persist_token)
             for upload in uploads:
                 upload.file.close()
-    _generation_workers.submit(run)
-    return {"job_id": job_id}
+    try:
+        _generation_workers.submit(run)
+    except RuntimeError:
+        update({"status": "error", "message": "The generation queue is restarting. Please try again.", "error_status": 503})
+    return generation_jobs.get(job_id, user["user_id"])
+
+
+@app.get("/api/generation-jobs")
+def recover_generation_job(user: dict[str, str] = Depends(authenticated_user)):
+    return {"job": generation_jobs.recover(user["user_id"])}
 
 
 @app.get("/api/generation-jobs/{job_id}")
 def generation_job_status(job_id: str, user: dict[str, str] = Depends(authenticated_user)):
-    with _jobs_lock:
-        job = _jobs.get(job_id)
-        if not job or job["user_id"] != user["user_id"]:
-            raise HTTPException(status_code=404, detail="This generation is no longer available. Please try again.")
-        return {key: value for key, value in job.items() if key not in {"user_id", "updated"}}
+    job = generation_jobs.get(job_id, user["user_id"])
+    if not job:
+        raise HTTPException(status_code=404, detail="This generation is no longer available. Check your library for its saved questions.")
+    return job
+
+
+@app.post("/api/generation-jobs/{job_id}/acknowledge")
+def acknowledge_generation_job(job_id: str, user: dict[str, str] = Depends(authenticated_user)):
+    if not generation_jobs.acknowledge(job_id, user["user_id"]):
+        raise HTTPException(status_code=404, detail="Generation not found.")
+    return {"ok": True}
 
 
 @app.post("/api/voice/chat")

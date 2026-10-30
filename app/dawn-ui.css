@@ -76,3 +76,6 @@
 .creator-footer-note{flex:1;min-width:0}
 
 .companion-panel{max-height:calc(100svh - 170px);overflow-y:auto}
+
+.generation-reconnect{min-height:40px;flex:0 0 auto;padding:8px 13px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:12px;font-weight:600}
+@media(max-width:700px){.generation-status:has(.generation-reconnect){flex-wrap:wrap}.generation-status:has(.generation-reconnect) .generation-status-copy{flex-basis:calc(100% - 25px)}.generation-status:has(.generation-reconnect) .generation-progress-track{flex:1}.generation-reconnect{margin-left:auto}}

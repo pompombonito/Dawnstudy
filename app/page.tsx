@@ -3,6 +3,7 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import StudyMascot from "./components/StudyMascot";
 import { DawnArtwork, DawnMark } from "./components/DawnArtwork";
+import { findGenerationJob, GenerationJobError, pollGenerationJob, startGenerationJob, type GenerationJob, type GenerationStatus } from "./generation-jobs";
 import {
   AlarmClock, BookOpen, Check, CheckSquare, ChevronLeft, ChevronRight, CircleHelp, Clock3,
   CloudUpload, Copy, Cpu, ExternalLink, FileText, Flag, Globe2, GraduationCap, Layers3, LogOut, Menu, Mic,
@@ -23,7 +24,8 @@ type MaterialSearchResult = { title: string; url: string; snippet: string; file_
 type Theme = "dark" | "light";
 type PracticeAnswer = string | string[] | null;
 type WorkspaceView = "study" | "library" | "finder" | "voice" | "about";
-type GenerationStatus = { status: string; stage: string; message: string; completed: number; requested: number; model?: string | null };
+type GenerationResult = StudySet & { auto_model?: string; auto_reason?: string; persistence_error?: string; continued_set_id?: string };
+type PendingGeneration = { job_id: string; base?: StudySet };
 type CompanionId = "cat" | "fox" | "bunny" | "bear";
 type VoiceMode = "multiple_choice" | "identification" | "open_ended" | "enumeration";
 type VoicePersona = "warm_tutor" | "calm_mentor" | "energetic_coach" | "clear_lecturer";
@@ -49,6 +51,24 @@ const THEME_KEY = "dawnstudy_theme_v1";
 const VOICE_PERSONA_KEY = "dawnstudy_voice_persona_v1";
 const VOICE_DEVICE_KEY = "dawnstudy_device_voice_v1";
 const COMPANION_KEY = "dawnstudy_companion_v1";
+const GENERATION_KEY = "dawnstudy_generation_v1:";
+
+function pendingGeneration(userId: string): PendingGeneration | null {
+  try {
+    const value = JSON.parse(localStorage.getItem(GENERATION_KEY + userId) || "null");
+    if (typeof value?.job_id !== "string") return null;
+    const base = value.base && typeof value.base.id === "string" && Array.isArray(value.base.items)
+      && value.base.items.every((item: Card) => typeof item?.question === "string") ? value.base as StudySet : undefined;
+    return { job_id: value.job_id, base };
+  } catch { return null; }
+}
+
+function rememberGeneration(userId: string, pending: PendingGeneration | null) {
+  try {
+    if (pending) localStorage.setItem(GENERATION_KEY + userId, JSON.stringify(pending));
+    else localStorage.removeItem(GENERATION_KEY + userId);
+  } catch { /* Account job discovery also works when device storage is unavailable. */ }
+}
 const companionChoices: { id: CompanionId; label: string }[] = [
   { id: "cat", label: "Cat" },
   { id: "fox", label: "Fox" },
@@ -215,6 +235,7 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [continueBusy, setContinueBusy] = useState(false);
   const [generationStatus, setGenerationStatus] = useState<GenerationStatus | null>(null);
+  const [generationNeedsReconnect, setGenerationNeedsReconnect] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [result, setResult] = useState<StudySet | null>(null);
@@ -279,6 +300,7 @@ export default function Home() {
   const voiceMessagesElement = useRef<HTMLDivElement>(null);
   const practicePanel = useRef<HTMLElement>(null);
   const voiceSessionId = useRef(0);
+  const generationController = useRef<AbortController | null>(null);
 
   async function loadAccountSets(token: string) {
     if (!API_BASE) return;
@@ -338,6 +360,15 @@ export default function Home() {
       })
       .catch(() => { localStorage.removeItem(TOKEN_KEY); setAuthToken(""); setAccount(null); setActiveShares([]); });
   }, []);
+
+  useEffect(() => {
+    if (!authToken || !account?.id) return;
+    void restoreGeneration(authToken, account.id);
+    return () => {
+      generationController.current?.abort();
+      generationController.current = null;
+    };
+  }, [authToken, account?.id]);
 
   useEffect(() => {
     if (!("speechSynthesis" in window)) return;
@@ -568,38 +599,164 @@ export default function Home() {
     window.setTimeout(() => document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
   }
 
-  async function waitForGeneration(form: FormData) {
-    if (!API_BASE) throw new Error("The API address is not configured for this site.");
-    const headers = { Authorization: "Bearer " + authToken };
-    const started = await fetch(API_BASE + "/api/generation-jobs", { method: "POST", headers, body: form });
-    if (!started.ok) throw new Error(await responseError(started));
-    const { job_id: jobId } = await started.json() as { job_id: string };
-    if (!jobId) throw new Error("The generation queue did not return a job ID. Please try again.");
-    const deadline = Date.now() + 12 * 60 * 1000;
-    let transientFailures = 0;
-    while (Date.now() < deadline) {
-      await new Promise((resolve) => window.setTimeout(resolve, 1100));
+  function generationOptions(token: string, controller: AbortController) {
+    return { baseUrl: API_BASE, token, signal: controller.signal };
+  }
+
+  async function acknowledgeGeneration(jobId: string, token: string, signal: AbortSignal) {
+    try {
+      await fetch(API_BASE + "/api/generation-jobs/" + encodeURIComponent(jobId) + "/acknowledge", {
+        method: "POST", headers: { Authorization: "Bearer " + token }, signal,
+      });
+    } catch { /* The same completed set can be recovered if acknowledgement is interrupted. */ }
+  }
+
+  async function applyGenerationResult(data: GenerationResult, token: string, signal: AbortSignal, base?: StudySet) {
+    let studySet: GenerationResult = { ...data, id: data.id || crypto.randomUUID(), created_at: data.created_at || new Date().toISOString() };
+    const legacyContinuation = base && data.continued_set_id !== base.id;
+    if (legacyContinuation) {
+      const target = base.requested_count || base.items.length;
+      const seen = new Set<string>();
+      const items = [...base.items, ...data.items].filter((item) => {
+        const key = normalizedAnswer(item.question);
+        if (!key || seen.has(key) || seen.size >= target) return false;
+        seen.add(key); return true;
+      });
+      studySet = { ...base, ...data, id: base.id, title: base.title, created_at: base.created_at, items,
+        requested_count: target, incomplete: items.length < target, page_ranges: base.page_ranges, focus_topic: base.focus_topic,
+        sources: [...new Map([...(base.sources || []), ...(data.sources || [])].map((source) => [source.url, source] as const)).values()].slice(0, 20) };
+    }
+    if (signal.aborted) throw new DOMException("Generation monitoring stopped.", "AbortError");
+    setActiveView("study"); setSelected(studySet.type); setResult(studySet); setCurrent(0);
+    resetStudyAnswer(); resetReviewAnswer(); setReviewActive(false); setPracticeActive(false); setPracticeComplete(false); setShareUrl("");
+    setFocusTopic(studySet.focus_topic || "");
+    if (studySet.source_url) {
+      setSourceMode("website"); setWebsiteUrl(studySet.source_url); setWebsitePageRange(studySet.page_ranges?.["0"] || "");
+    } else { setSourceMode("file"); setPageRanges(studySet.page_ranges || {}); }
+    let synced = true;
+    if (!data.id || data.persistence_error || legacyContinuation) {
       try {
-        const response = await fetch(API_BASE + "/api/generation-jobs/" + encodeURIComponent(jobId), { headers });
-        if (!response.ok) {
-          if (response.status >= 500 && transientFailures < 4) { transientFailures += 1; continue; }
-          throw new Error(await responseError(response));
-        }
-        const job = await response.json() as GenerationStatus & { result?: StudySet; error_status?: number };
-        transientFailures = 0;
-        setGenerationStatus(job);
-        if (job.status === "error") throw new Error(job.message || "Generation could not finish. Please try again.");
-        if (job.status === "complete" && job.result) return job.result;
+        const body = JSON.stringify({ title: studySet.title, type: studySet.type, items: studySet.items,
+          sources: studySet.sources || [], source_url: studySet.source_url || "", material_fingerprint: studySet.material_fingerprint,
+          incomplete: studySet.incomplete || false, requested_count: studySet.requested_count || studySet.items.length,
+          page_ranges: studySet.page_ranges || {}, focus_topic: studySet.focus_topic || "" });
+        const headers = { "Content-Type": "application/json", Authorization: "Bearer " + token };
+        const updateExisting = Boolean(data.id || legacyContinuation);
+        let saved = await fetch(API_BASE + "/api/study-sets" + (updateExisting ? "/" + encodeURIComponent(studySet.id) : ""), {
+          method: updateExisting ? "PUT" : "POST", headers, body, signal,
+        });
+        if (saved.status === 404 && updateExisting) saved = await fetch(API_BASE + "/api/study-sets", { method: "POST", headers, body, signal });
+        if (!saved.ok) throw new Error(await responseError(saved));
+        studySet = { ...studySet, ...await saved.json(), persistence_error: undefined };
+        if (signal.aborted) throw new DOMException("Generation monitoring stopped.", "AbortError");
+        setResult(studySet);
       } catch (caught) {
-        if (caught instanceof Error && !/fetch|network/i.test(caught.message)) throw caught;
-        transientFailures += 1;
-        if (transientFailures > 4) throw new Error("The connection to the generation queue was lost. Your generated questions may still be available; refresh your study sets before retrying.");
+        if (signal.aborted) throw caught;
+        synced = false;
+        setError("Your questions are ready, but account sync is unavailable: " + (caught instanceof Error ? caught.message : "try again later.") + " Refreshing will retry saving these questions.");
       }
     }
-    throw new Error("This generation is taking longer than expected. Check your study sets in a moment before starting it again.");
+    if (signal.aborted) throw new DOMException("Generation monitoring stopped.", "AbortError");
+    if (synced) setSets((old) => [studySet, ...old.filter((item) => item.id !== studySet.id && item.id !== base?.id)].slice(0, 100));
+    const notices = [studySet.incomplete
+      ? `${studySet.items.length} of ${studySet.requested_count || studySet.items.length} questions are saved. Continue generating when you are ready.`
+      : `Your study set is ready with ${studySet.items.length} questions.`];
+    if (data.auto_model) notices.push("Auto chose " + modelName(data.auto_model) + ".");
+    if (data.fallback) notices.push(modelName(data.fallback.to) + " helped complete the generation.");
+    if (data.usage?.remaining !== null && data.usage?.remaining !== undefined) notices.push(`${data.usage.remaining} of ${data.usage.limit} generations left today.`);
+    setNotice(notices.join(" "));
+    void loadProgress(token);
+    return synced;
+  }
+
+  async function watchGeneration(job: GenerationJob<GenerationResult>, pending: PendingGeneration, token: string, userId: string, controller: AbortController) {
+    rememberGeneration(userId, pending);
+    setGenerationNeedsReconnect(false);
+    const data = await pollGenerationJob(job.job_id, generationOptions(token, controller), (status) => {
+      if (controller.signal.aborted) return;
+      setGenerationStatus((old) => status.completed < 0
+        ? { ...status, completed: old?.completed || 0, requested: old?.requested || 0, model: old?.model }
+        : status);
+    }, job);
+    const synced = await applyGenerationResult(data, token, controller.signal, pending.base);
+    if (synced) {
+      rememberGeneration(userId, null);
+      await acknowledgeGeneration(job.job_id, token, controller.signal);
+    }
+    if (!controller.signal.aborted) {
+      setGenerationNeedsReconnect(!synced);
+      setGenerationStatus(synced ? null : {
+        status: "paused", stage: "saving", message: "Your questions are ready. Reconnect to retry saving them to your account.",
+        completed: data.items.length, requested: data.requested_count || data.items.length,
+      });
+    }
+  }
+
+  async function generationFailure(caught: unknown, userId: string, token: string, controller: AbortController, jobId?: string) {
+    if (controller.signal.aborted) return;
+    const message = caught instanceof Error ? caught.message : "Could not connect to the generation service.";
+    setError(message);
+    if (caught instanceof GenerationJobError && caught.terminal) {
+      rememberGeneration(userId, null); setGenerationStatus(null); setGenerationNeedsReconnect(false);
+      if (jobId) await acknowledgeGeneration(jobId, token, controller.signal);
+    } else {
+      setGenerationNeedsReconnect(true);
+      setGenerationStatus((old) => ({ status: "paused", stage: "reconnecting", message: "Reconnect to restore your generation's progress.",
+        completed: old?.completed || 0, requested: old?.requested || 0, model: old?.model }));
+    }
+  }
+
+  function releaseGeneration(controller: AbortController) {
+    if (generationController.current !== controller) return;
+    generationController.current = null;
+    setBusy(false); setContinueBusy(false);
+  }
+
+  async function runGeneration(form: FormData, base?: StudySet) {
+    if (!account || !authToken || generationController.current) return;
+    if (!API_BASE) { setError("The API address is not configured for this site."); setBusy(false); setContinueBusy(false); return; }
+    const token = authToken, userId = account.id, controller = new AbortController();
+    generationController.current = controller;
+    setBusy(!base); setContinueBusy(Boolean(base)); setError(""); setNotice(""); setGenerationNeedsReconnect(false);
+    let jobId: string | undefined;
+    try {
+      const job = await startGenerationJob<GenerationResult>(form, generationOptions(token, controller));
+      jobId = job.job_id;
+      const previous = pendingGeneration(userId);
+      const pending = previous?.job_id === jobId ? previous : { job_id: jobId, base: job.resumed ? undefined : base };
+      await watchGeneration(job, pending, token, userId, controller);
+    } catch (caught) { await generationFailure(caught, userId, token, controller, jobId); }
+    finally { releaseGeneration(controller); }
+  }
+
+  async function restoreGeneration(token: string, userId: string) {
+    if (!API_BASE || generationController.current) return;
+    const controller = new AbortController();
+    generationController.current = controller;
+    setBusy(true); setGenerationNeedsReconnect(false); setError("");
+    let jobId: string | undefined;
+    try {
+      const previous = pendingGeneration(userId);
+      let job = await findGenerationJob<GenerationResult>(generationOptions(token, controller));
+      if (!job && previous) job = await findGenerationJob<GenerationResult>(generationOptions(token, controller), previous.job_id);
+      if (!job) {
+        rememberGeneration(userId, null); setGenerationStatus(null);
+        if (previous) {
+          setNotice("This generation is no longer running. Check My Library for its saved study set.");
+          void loadAccountSets(token);
+        }
+        return;
+      }
+      jobId = job.job_id;
+      setError("");
+      const pending = previous?.job_id === jobId ? previous : { job_id: jobId };
+      await watchGeneration(job, pending, token, userId, controller);
+    } catch (caught) { await generationFailure(caught, userId, token, controller, jobId); }
+    finally { releaseGeneration(controller); }
   }
 
   async function generate() {
+    if (busy || continueBusy || generationNeedsReconnect || generationController.current) return;
     if (!authToken || !account) {
       setAuthOpen(true);
       setError("Sign in with your verified CEU Google account (@ceu.edu.ph, @mnl.ceu.edu.ph, @mkt.ceu.edu.ph, or @mls.ceu.edu.ph) to make a study set.");
@@ -621,66 +778,7 @@ export default function Home() {
       : websitePageRange.trim() ? { "0": websitePageRange.trim() } : {};
     form.append("page_ranges", JSON.stringify(requestPageRanges));
     form.append("focus_topic", focusTopic.trim());
-    try {
-      const data = await waitForGeneration(form) as StudySet & { auto_model?: string; auto_reason?: string; persistence_error?: string; previous_question_count?: number };
-      let studySet: StudySet = {
-        ...data,
-        id: data.id || crypto.randomUUID(),
-        created_at: data.created_at || new Date().toISOString(),
-        page_ranges: data.page_ranges || Object.fromEntries(Object.entries(pageRanges).filter(([, value]) => value.trim())),
-        focus_topic: data.focus_topic ?? focusTopic.trim(),
-      };
-      if (data.source_url) { setWebsiteUrl(data.source_url); setSourceMode("website"); }
-      if (studySet.source_url) setWebsitePageRange(studySet.page_ranges?.["0"] || "");
-      else setPageRanges(studySet.page_ranges || {});
-      setFocusTopic(studySet.focus_topic || "");
-      let generationNotice = "";
-      if (data.auto_model) generationNotice = "Auto chose " + modelName(data.auto_model) + " for this material (" + data.auto_reason + ").";
-      const fallbackInfo = data.fallback;
-      if (fallbackInfo) {
-        const original = models.find((item) => item.id === fallbackInfo.from)?.name || fallbackInfo.from;
-        const fallbackModel = models.find((item) => item.id === fallbackInfo.to)?.name || fallbackInfo.to;
-        const issue = fallbackInfo.reason === "limit" ? "may have reached its limit" : fallbackInfo.reason === "busy" ? "was busy" : fallbackInfo.reason === "incomplete" ? "returned an incomplete set" : "was unavailable";
-        generationNotice = [generationNotice, original + " " + issue + "; " + fallbackModel + " helped finish the set."].filter(Boolean).join(" ");
-      }
-      if (data.incomplete) generationNotice = [generationNotice, "Only " + data.items.length + " of " + data.requested_count + " requested questions could be completed by the available models."].filter(Boolean).join(" ");
-      if (data.previous_question_count) generationNotice = [generationNotice, "Checked " + data.previous_question_count + " questions from your earlier sets to avoid repeats."].filter(Boolean).join(" ");
-      if (data.usage?.unlimited) generationNotice = [generationNotice, "No Dawnstudy daily generation cap applies to your account. AI provider limits may still apply."].filter(Boolean).join(" ");
-      else if (data.usage && data.usage.remaining !== null && data.usage.limit !== null) generationNotice = [generationNotice, data.usage.remaining + " of " + data.usage.limit + " generations left today" + (authToken ? " for your account" : " in this browser") + "."].filter(Boolean).join(" ");
-      setResult(studySet); setCurrent(0); setRevealed(false); setSelectedOption(null);
-      setStudySelectedOptions([]); setStudyIdentificationAnswer(""); setReviewSelectedOptions([]); setReviewIdentificationAnswer("");
-      setShareUrl(""); setPracticeActive(false); setPracticeComplete(false);
-      if (!data.id) {
-        try {
-          const saved = await fetch(API_BASE + "/api/study-sets", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: "Bearer " + authToken },
-            body: JSON.stringify({
-              title: studySet.title, type: studySet.type, items: studySet.items, sources: studySet.sources || [],
-              source_url: studySet.source_url || "", material_fingerprint: studySet.material_fingerprint,
-              incomplete: studySet.incomplete || false, requested_count: studySet.requested_count || studySet.items.length,
-              page_ranges: studySet.page_ranges || {}, focus_topic: studySet.focus_topic || "",
-            }),
-          });
-          if (saved.ok) {
-            const savedSet = { ...await saved.json(), page_ranges: studySet.page_ranges, focus_topic: studySet.focus_topic } as StudySet;
-            studySet = savedSet;
-            setResult(savedSet);
-          } else {
-            setError("Your questions are ready, but they could not sync to your account: " + await responseError(saved));
-          }
-        } catch (caught) {
-          setError("Your questions are ready, but account sync is unavailable: " + (caught instanceof Error ? caught.message : "try again later."));
-        }
-      } else {
-        setSets((old) => [studySet, ...old.filter((item) => item.id !== studySet.id)].slice(0, 100));
-      }
-      void loadProgress(authToken);
-      if (data.persistence_error) setError("Your questions are ready, but account sync failed: " + data.persistence_error);
-      setNotice(generationNotice);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Something went wrong. Please try again.");
-    } finally { setBusy(false); setGenerationStatus(null); }
+    await runGeneration(form);
   }
 
   async function searchMaterials(event: FormEvent<HTMLFormElement>) {
@@ -735,7 +833,7 @@ export default function Home() {
   }
 
   async function continueGenerating() {
-    if (!result || !result.incomplete || continueBusy) return;
+    if (!result || !result.incomplete || busy || continueBusy || generationNeedsReconnect || generationController.current) return;
     if (!files.length && !result.source_url) {
       setError("Upload the original study material to continue generating this set.");
       return;
@@ -760,63 +858,13 @@ export default function Home() {
     form.append("focus_topic", result.focus_topic || focusTopic.trim());
     form.append("existing_questions", JSON.stringify(result.items.map((item) => item.question)));
     if (result.material_fingerprint) form.append("expected_material_fingerprint", result.material_fingerprint);
-    try {
-      if (!API_BASE || !authToken) throw new Error("Sign in again to continue generating this study set.");
-      const data = await waitForGeneration(form) as StudySet & { models_used?: string[] };
-      const nextItems = [...result.items];
-      const seen = new Set(nextItems.map((item) => normalizedAnswer(item.question)));
-      for (const item of data.items as Card[]) {
-        const key = normalizedAnswer(item.question);
-        if (key && !seen.has(key) && nextItems.length < targetCount) {
-          nextItems.push(item);
-          seen.add(key);
-        }
-      }
-      const generatedSources = Array.isArray(data.sources) ? data.sources as { title: string; url: string }[] : [];
-      const mergedSources = [...new Map([...(result.sources || []), ...generatedSources].map((source) => [source.url, source] as const)).values()];
-      const merged: StudySet = {
-        ...result,
-        items: nextItems,
-        sources: mergedSources,
-        incomplete: nextItems.length < targetCount,
-        requested_count: targetCount,
-        page_ranges: result.page_ranges || Object.fromEntries(Object.entries(pageRanges).filter(([, value]) => value.trim())),
-        focus_topic: result.focus_topic || focusTopic.trim(),
-        model: data.model || result.model,
-        models_used: [...new Set([...(result.models_used || []), ...(data.models_used || [])])],
-        fallback: data.fallback || result.fallback,
-      };
-      setResult(merged);
-      setSets((old) => old.map((item) => item.id === merged.id ? merged : item));
-      const saveBody = JSON.stringify({ title: merged.title, type: merged.type, items: merged.items, sources: merged.sources || [], source_url: merged.source_url || "", material_fingerprint: merged.material_fingerprint, incomplete: merged.incomplete, requested_count: merged.requested_count, page_ranges: merged.page_ranges || {}, focus_topic: merged.focus_topic || "" });
-      let saved = await fetch(`${API_BASE}/api/study-sets/${encodeURIComponent(merged.id)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
-        body: saveBody,
-      });
-      if (saved.status === 404) {
-        saved = await fetch(`${API_BASE}/api/study-sets`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
-          body: saveBody,
-        });
-      }
-      if (!saved.ok) {
-        setError(`Generated ${nextItems.length} of ${targetCount} questions, but the updated set could not sync to your account: ${await responseError(saved)}`);
-        return;
-      }
-      const savedSet: StudySet = await saved.json();
-      setResult(savedSet);
-      setSets((old) => [savedSet, ...old.filter((item) => item.id !== savedSet.id && item.id !== merged.id)].slice(0, 100));
-      setNotice(savedSet.incomplete
-        ? `Generated ${savedSet.items.length} of ${targetCount} questions. Continue when you’re ready.`
-        : `All ${targetCount} questions are ready.`);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not continue generating this study set.");
-    } finally { setContinueBusy(false); setGenerationStatus(null); }
+    if (sets.some((item) => item.id === result.id)) form.append("study_set_id", result.id);
+    await runGeneration(form, result);
   }
 
   function signOut() {
+    generationController.current?.abort(); generationController.current = null;
+    setBusy(false); setContinueBusy(false); setGenerationStatus(null); setGenerationNeedsReconnect(false);
     localStorage.removeItem(TOKEN_KEY); setAuthToken(""); setAccount(null); setSets([]); setActiveShares([]); setResult(null); setProgress(null); setReviewActive(false); setReviewQueue([]);
     setNotice("You’re signed out. Sign in with your CEU Google account to continue using Dawnstudy.");
   }
@@ -1185,7 +1233,7 @@ export default function Home() {
       <input ref={input} type="file" multiple accept=".pdf,.pptx,.docx,.txt,.md,.png,.jpg,.jpeg,.webp" hidden onChange={(event) => { selectFiles(event.target.files || undefined); event.target.value = ""; }}/>
       <aside className="sidebar" aria-label="Workspace navigation">
         <button className="brand" type="button" onClick={() => navigateTo("study")} aria-label="Dawnstudy home"><DawnMark className="brand-icon"/><span className="brand-copy"><span>dawn<span className="brand-light">study</span></span><small>A LITTLE BRIGHTER, EVERY DAY</small></span></button>
-        <button type="button" className="new-session-button" onClick={beginStudySet} disabled={busy || continueBusy} title="New study set"><Plus size={19}/><span>New study set</span></button>
+        <button type="button" className="new-session-button" onClick={beginStudySet} disabled={busy || continueBusy || generationNeedsReconnect} title="New study set"><Plus size={19}/><span>New study set</span></button>
         <div className="side-kicker">WORKSPACE</div>
         <nav className="desktop-navigation">
           <button className={`nav-item ${activeView === "study" ? "active" : ""}`} title="Study desk" aria-current={activeView === "study" ? "page" : undefined} onClick={() => navigateTo("study")}><span className="nav-icon"><BookOpen size={20}/></span><span className="nav-label">Study desk</span><span className="nav-active-mark"/></button>
@@ -1200,10 +1248,10 @@ export default function Home() {
         </div>
       </aside>
       <section className="main-area" id="home">
-        <header className="topbar"><div className="topbar-left"><button className="mobile-brand" type="button" aria-label="Dawnstudy home" onClick={() => navigateTo("study")}><DawnMark/></button><div className="crumb"><span>YOUR SPACE</span><b>{viewTitle[activeView]}</b></div></div><div className="top-actions">{generationStatus && <button className="activity-pill" onClick={() => navigateTo("study")}><span/>Generating</button>}<button className="theme-toggle" onClick={() => setColorTheme(theme === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>{theme === "dark" ? <Sun size={18}/> : <Moon size={18}/>}<span>{theme === "dark" ? "Light" : "Dark"}</span></button><span className="workspace-label"><span/> CEU WORKSPACE</span><button className="top-account" onClick={() => account ? signOut() : setAuthOpen(true)} title={account ? "Sign out" : "Sign in"}>{account ? <LogOut size={18}/> : <UserRound size={18}/>}<span>{account ? "Sign out" : "Sign in"}</span></button></div></header>
+        <header className="topbar"><div className="topbar-left"><button className="mobile-brand" type="button" aria-label="Dawnstudy home" onClick={() => navigateTo("study")}><DawnMark/></button><div className="crumb"><span>YOUR SPACE</span><b>{viewTitle[activeView]}</b></div></div><div className="top-actions">{generationStatus && <button className="activity-pill" onClick={() => navigateTo("study")}><span/>{generationNeedsReconnect ? "Reconnect" : "Generating"}</button>}<button className="theme-toggle" onClick={() => setColorTheme(theme === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>{theme === "dark" ? <Sun size={18}/> : <Moon size={18}/>}<span>{theme === "dark" ? "Light" : "Dark"}</span></button><span className="workspace-label"><span/> CEU WORKSPACE</span><button className="top-account" onClick={() => account ? signOut() : setAuthOpen(true)} title={account ? "Sign out" : "Sign in"}>{account ? <LogOut size={18}/> : <UserRound size={18}/>}<span>{account ? "Sign out" : "Sign in"}</span></button></div></header>
         <div className="content">
           {(error || notice) && <div className="workspace-feedback" aria-live="polite">{error && <div className="error-box"><CircleHelp size={18}/><span>{error}</span><button className="plain-icon" aria-label="Dismiss error" onClick={() => setError("")}><X size={16}/></button></div>}{notice && <div className="notice-box"><Check size={18}/><span>{notice}</span><button className="plain-icon" aria-label="Dismiss message" onClick={() => setNotice("")}><X size={16}/></button></div>}</div>}
-          {generationStatus && <div className="generation-status" role="status" aria-live="polite"><span className="generation-status-pulse"/><div className="generation-status-copy"><strong>{generationStatus.message || "Preparing your study set…"}</strong><small>{generationStatus.model ? modelName(generationStatus.model) : generationStatus.stage === "queued" ? "Waiting for an available model" : "Dawnstudy generation service"}{generationStatus.requested > 0 && ` · ${generationStatus.completed} of ${generationStatus.requested} ready`}</small></div>{generationStatus.requested > 0 && <div className="generation-progress-track" aria-label={`${generationStatus.completed} of ${generationStatus.requested} questions ready`}><i style={{ width: `${Math.min(100, generationStatus.completed / generationStatus.requested * 100)}%` }}/></div>}</div>}
+          {generationStatus && <div className="generation-status" role="status" aria-live="polite"><span className="generation-status-pulse"/><div className="generation-status-copy"><strong>{generationStatus.message || "Preparing your study set…"}</strong><small>{generationStatus.model ? modelName(generationStatus.model) : generationStatus.stage === "queued" ? "Waiting for an available model" : "Dawnstudy generation service"}{generationStatus.requested > 0 && ` · ${generationStatus.completed} of ${generationStatus.requested} ready`}</small></div>{generationStatus.requested > 0 && <div className="generation-progress-track" aria-label={`${generationStatus.completed} of ${generationStatus.requested} questions ready`}><i style={{ width: `${Math.min(100, generationStatus.completed / generationStatus.requested * 100)}%` }}/></div>}{generationNeedsReconnect && account && <button type="button" className="generation-reconnect" disabled={busy || continueBusy} onClick={() => void restoreGeneration(authToken, account.id)}>Reconnect</button>}</div>}
           {activeView === "study" && <div className="workspace-view study-view" key="study">
           {!result && !reviewActive ? <>
             <section className="studio-intro"><div className="studio-intro-copy"><div className="eyebrow"><span/> A FRESH START TO LEARNING</div><h1>Make room for<br/><em>your next idea.</em></h1><p>Bring your notes. Find your rhythm.<br className="desktop-break"/> Make a little progress, every day.</p></div><DawnArtwork variant="study" className="studio-art"/></section>
@@ -1242,7 +1290,7 @@ export default function Home() {
                   </div>}
                   {composerStep === 2 && <div className="creator-ready"><div className="creator-prompt"><h3>Your next session, ready to go.</h3><p>A quick look before we bring your material to life.</p></div><div className="session-summary"><span className="summary-icon"><BookOpen size={25}/></span><div><strong>{types.find((type) => type.id === selected)?.title}</strong><span>{questionCount} questions <i/> {difficulty} difficulty</span><small>{sourceMode === "file" ? files.length ? `${files.length} material${files.length === 1 ? "" : "s"} selected` : "Add your material in step 1" : websiteUrl.trim() ? "Public website selected" : "Add a website in step 1"}{focusTopic ? ` · ${focusTopic}` : ""}</small></div><button type="button" className="plain-icon" aria-label="Edit practice choices" onClick={() => setComposerStep(1)}><ArrowUpRight size={18}/></button></div><label className="model-choice-field" htmlFor="model-choice"><span><Cpu size={18}/> AI model</span><select id="model-choice" value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}><option value="auto">Auto choose the best available model</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select></label><div className="options-row"><button type="button" className={`web-toggle ${web ? "on" : ""}`} aria-pressed={web} onClick={() => setWeb(!web)}><span className="toggle-track"><span/></span><span><b>Enrich with the web</b><small>Add relevant context and source links.</small></span><Globe2 size={19}/></button></div><details className="model-help-details"><summary>About generation and your allowance <ChevronDown size={14}/></summary><p className="model-help">{hasUnlimitedGenerations ? "Your account has no Dawnstudy daily generation cap." : "Your account includes 5 generations per day, resetting at midnight in Manila."} If a model is busy, another available model can help. Completed questions are saved, and partial sets can be continued.</p></details></div>}
                 </div>
-                <div className="creator-footer"><span className="creator-footer-note">{composerStep === 0 ? <><Leaf size={15}/> One small step starts it.</> : <button type="button" className="creator-back" onClick={() => setComposerStep((step) => Math.max(0, step - 1))}><ChevronLeft size={16}/> Back</button>}</span>{composerStep < 2 ? <button className="creator-next" type="button" onClick={() => setComposerStep((step) => step + 1)}>{composerStep === 0 ? "Choose practice" : "Review & create"}<ArrowRight size={18}/></button> : <button className="generate-button" onClick={generate} disabled={busy || continueBusy}>{busy ? <><span className="spinner"/> Generating...</> : <>Create study set <ArrowRight size={18}/></>}</button>}</div>
+                <div className="creator-footer"><span className="creator-footer-note">{composerStep === 0 ? <><Leaf size={15}/> One small step starts it.</> : <button type="button" className="creator-back" onClick={() => setComposerStep((step) => Math.max(0, step - 1))}><ChevronLeft size={16}/> Back</button>}</span>{composerStep < 2 ? <button className="creator-next" type="button" onClick={() => setComposerStep((step) => step + 1)}>{composerStep === 0 ? "Choose practice" : "Review & create"}<ArrowRight size={18}/></button> : <button className="generate-button" onClick={generate} disabled={busy || continueBusy || generationNeedsReconnect}>{busy ? <><span className="spinner"/> Generating...</> : <>Create study set <ArrowRight size={18}/></>}</button>}</div>
               </section>
               <aside className="desk-aside" aria-label="Study overview">
                 <section className="daily-focus"><div className="daily-focus-top"><span>YOUR DAILY RHYTHM</span><DawnMark/></div><h2>A little<br/>adds up.</h2>{account && progress ? <><div className="daily-numbers"><div><strong>{progress.reviewed_today}</strong><span>reviewed today</span></div><div><strong>{progress.current_streak}<small> days</small></strong><span>current streak</span></div></div><button type="button" onClick={() => void startReview()}>Review what's due <span>{progress.due_count}</span><ArrowUpRight size={17}/></button></> : <><p>Your notes, your pace, and a fresh chance to understand something.</p><button type="button" onClick={() => setAuthOpen(true)}>Find your study rhythm <ArrowUpRight size={17}/></button></>}</section>
@@ -1250,7 +1298,7 @@ export default function Home() {
                 <button type="button" className="desk-finder" onClick={() => navigateTo("finder")}><span><Search size={22}/></span><div><strong>Looking for study material?</strong><small>Search PDFs, slides, and notes</small></div><ArrowUpRight size={19}/></button>
               </aside>
             </div>
-          </> : <div className="session-topline"><div><span className="section-overline">YOUR FOCUS SPACE</span><h1>One idea at a time.</h1></div><button type="button" className="outline-button" disabled={busy || continueBusy} onClick={beginStudySet}><Plus size={17}/> New study set</button></div>}
+          </> : <div className="session-topline"><div><span className="section-overline">YOUR FOCUS SPACE</span><h1>One idea at a time.</h1></div><button type="button" className="outline-button" disabled={busy || continueBusy || generationNeedsReconnect} onClick={beginStudySet}><Plus size={17}/> New study set</button></div>}
           {reviewActive && <section className="review-panel"><div className="result-head"><div><div className="result-kicker"><span/> SPACED REPETITION</div><h2>{reviewQueue.length ? reviewQueue[0].study_set_title : "Review complete"}</h2><p>{reviewQueue.length ? `${reviewQueue.length} cards in this session · ${reviewQueue[0].type.replaceAll("_", " ")}` : "You’re all caught up for now. Nice work showing up."}</p></div><button className="plain-icon" title="Close review" onClick={() => { setReviewActive(false); setReviewQueue([]); setSelectedOption(null); }}><X size={18}/></button></div>{reviewQueue.length ? <div className="study-card"><div className="study-card-top"><span className="flashcard-label">REVIEW {reviewQueue.length} LEFT</span></div>{renderCardInteraction(reviewQueue[0].card, reviewQueue[0].type, true)}{revealed && reviewQueue[0].card.explanation && <p className="explanation">{reviewQueue[0].card.explanation}</p>}{revealed && <div className="rating-row"><button disabled={reviewBusy} onClick={() => void gradeCard("again")}><b>Again</b><small>{reviewQueue[0].intervals.again}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("hard")}><b>Hard</b><small>{reviewQueue[0].intervals.hard}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("good")}><b>Good</b><small>{reviewQueue[0].intervals.good}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("easy")}><b>Easy</b><small>{reviewQueue[0].intervals.easy}</small></button></div>}</div> : <button className="review-done" onClick={() => { setReviewActive(false); setReviewQueue([]); }}>Back to study desk <ChevronRight size={15}/></button>}</section>}
           {result && practiceActive && !reviewActive && <section ref={practicePanel} className="practice-panel">
             <div className="result-head"><div><div className="result-kicker"><span/> {practiceSecondsPerQuestion === 0 ? "SELF-PACED PRACTICE" : "TIMED PRACTICE TEST"}</div><h2>{result.title}</h2><p>{practiceComplete ? "Test results and missed answers" : `${result.items.length} questions · ${practiceSecondsPerQuestion === 0 ? "no time limit" : `${practiceSecondsPerQuestion} seconds per question`}`}</p></div><div className="practice-head-actions"><button className={`quiz-fullscreen-button ${isFullscreen ? "is-fullscreen" : ""}`} type="button" onClick={() => void toggleExerciseFullscreen()} aria-label={isFullscreen ? "Exit quiz fullscreen" : "Show quiz fullscreen"} aria-pressed={isFullscreen}><FullscreenIcon size={19}/><span>{isFullscreen ? "Exit fullscreen" : "Quiz fullscreen"}</span></button><button className="plain-icon" title="Exit practice test" onClick={() => { setPracticeActive(false); setPracticeComplete(false); }}><X size={18}/></button></div></div>
@@ -1274,7 +1322,7 @@ export default function Home() {
           </section>}
           {result && currentCard && !reviewActive && !practiceActive && <section className="result-panel"><div className="result-head"><div><div className="result-kicker"><span/> YOUR STUDY SET</div><h2>{result.title}</h2><p>{result.items.length} {types.find((type) => type.id === result.type)?.title.toLowerCase()} · ready when you are{result.model ? ` · ${modelName(result.model)}` : ""}</p></div><button className="plain-icon" title="Close study set" onClick={() => setResult(null)}><X size={18}/></button></div>
             <div className="set-action-row"><label>Test pace<select value={practiceSecondsPerQuestion} onChange={(event) => setPracticeSecondsPerQuestion(Number(event.target.value))}><option value={0}>No timer</option><option value={20}>20 sec / question</option><option value={30}>30 sec / question</option><option value={45}>45 sec / question</option></select></label><button className="action-button" onClick={startPractice}><AlarmClock size={15}/> {practiceSecondsPerQuestion === 0 ? "Start practice" : "Start timed test"}</button><button className="action-button" onClick={() => void shareCurrentSet()} disabled={shareBusy}><Share2 size={15}/>{shareBusy ? "Working…" : "Share set"}</button></div>
-            {result.incomplete && <div className="incomplete-generation"><div><strong>{result.items.length} of {result.requested_count || result.items.length} questions generated</strong><span>{result.source_url ? "Your generated questions are held. Continue from the same public webpage when ready." : files.length ? "Your generated questions are held. Continue with the selected original files when ready." : "Re-select the original files to continue this set."}</span>{!result.source_url && files.length > 0 && <button type="button" className="resume-source-button" onClick={pickOriginalFiles}>Replace original files ({files.length} selected)</button>}</div><button className="continue-generation-button" disabled={continueBusy || busy} onClick={() => { if (!files.length && !result.source_url) pickOriginalFiles(); else void continueGenerating(); }}>{continueBusy ? <><span className="spinner"/> Continuing…</> : <><Sparkles size={17}/> {!files.length && !result.source_url ? "Select original files" : "Continue generating"}</>}</button></div>}
+            {result.incomplete && <div className="incomplete-generation"><div><strong>{result.items.length} of {result.requested_count || result.items.length} questions generated</strong><span>{result.source_url ? "Your generated questions are held. Continue from the same public webpage when ready." : files.length ? "Your generated questions are held. Continue with the selected original files when ready." : "Re-select the original files to continue this set."}</span>{!result.source_url && files.length > 0 && <button type="button" className="resume-source-button" onClick={pickOriginalFiles}>Replace original files ({files.length} selected)</button>}</div><button className="continue-generation-button" disabled={continueBusy || busy || generationNeedsReconnect} onClick={() => { if (!files.length && !result.source_url) pickOriginalFiles(); else void continueGenerating(); }}>{continueBusy ? <><span className="spinner"/> Continuing…</> : <><Sparkles size={17}/> {!files.length && !result.source_url ? "Select original files" : "Continue generating"}</>}</button></div>}
             {shareUrl && <div className="share-link-row"><span>Anyone with this link can view this set:</span><a href={shareUrl} target="_blank" rel="noreferrer">{shareUrl}</a><button className="plain-icon" title="Copy share link" onClick={() => { void navigator.clipboard.writeText(shareUrl).then(() => setNotice("Share link copied.")).catch(() => setNotice("Select and copy the share link above.")); }}><Copy size={15}/></button><button className="share-revoke" disabled={shareBusy} onClick={() => void turnOffShareLink(result.id)}>Turn off link</button></div>}
             <div className="study-card"><div className="study-card-top"><span className="flashcard-label">{result.type === "flashcards" ? "FLASHCARD" : types.find((type) => type.id === result.type)?.title.toUpperCase()}</span><span className="card-number">{String(current + 1).padStart(2,"0")} <i>/</i> {String(result.items.length).padStart(2,"0")}</span></div>
               {renderCardInteraction(currentCard, result.type)}
