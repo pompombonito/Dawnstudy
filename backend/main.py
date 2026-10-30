@@ -320,6 +320,72 @@ def local_helper_answer(body: LocalHelperAnswerRequest, user: dict[str, str] = D
         raise HTTPException(status_code=503, detail="No Dawnstudy AI provider is available right now.")
     source = [line.model_dump() for line in body.lines]
     source_json = json.dumps(source, ensure_ascii=False, separators=(",", ":"))
+
+    # Some quiz UIs omit A/B/C labels and phrase the stem as a statement. Give
+    # the model a geometry-based hint for that common layout so it does not
+    # mistake a complete question for missing OCR context.
+    def layout_hint(lines: list[dict[str, Any]]) -> str:
+        def is_chrome(text: str) -> bool:
+            value = re.sub(r"\s+", " ", text.casefold()).strip()
+            return (
+                not value
+                or re.fullmatch(r"\d+(?:\s*/\s*\d+)?", value) is not None
+                or re.fullmatch(r"(?:multiple\s*choice|single\s*choice|select\s*all)(?:\s+\d+\s+points?)?", value) is not None
+                or re.fullmatch(r"\d+\s+points?", value) is not None
+                or value in {"next", "previous", "submit", "save", "cancel"}
+            )
+
+        ordered = sorted(
+            (line for line in lines if not is_chrome(line["text"])),
+            key=lambda line: (line["box"][1], line["box"][0]),
+        )
+        for anchor in ordered:
+            if len(re.sub(r"\W", "", anchor["text"])) < 45:
+                continue
+            stem = [anchor]
+            stem_bottom = anchor["box"][3]
+            expanded = True
+            while expanded:
+                expanded = False
+                for line in ordered:
+                    if line in stem or line["box"][1] < anchor["box"][1]:
+                        continue
+                    if line["box"][1] <= stem_bottom + 28 and abs(line["box"][0] - anchor["box"][0]) <= 70:
+                        stem.append(line)
+                        stem_bottom = max(stem_bottom, line["box"][3])
+                        expanded = True
+
+            lower = [
+                line for line in ordered
+                if line not in stem
+                and line["box"][1] > stem_bottom + 8
+                and 3 <= len(line["text"].strip()) <= 180
+            ]
+            clusters: list[list[dict[str, Any]]] = []
+            for line in lower:
+                cluster = next((group for group in clusters if abs(group[0]["box"][0] - line["box"][0]) <= 55), None)
+                if cluster is None:
+                    clusters.append([line])
+                else:
+                    cluster.append(line)
+            candidates = []
+            for cluster in clusters:
+                cluster.sort(key=lambda line: line["box"][1])
+                gaps = [cluster[i]["box"][1] - cluster[i - 1]["box"][1] for i in range(1, len(cluster))]
+                if 2 <= len(cluster) <= 8 and all(12 <= gap <= 180 for gap in gaps):
+                    candidates.append(cluster)
+            if candidates:
+                choices = max(candidates, key=len)
+                stem_ids = ", ".join(str(line["id"]) for line in sorted(stem, key=lambda line: line["box"][1]))
+                choice_ids = ", ".join(str(line["id"]) for line in choices)
+                return (
+                    f"Layout hint: OCR lines {stem_ids} form a long prompt, followed by "
+                    f"{len(choices)} similarly aligned text rows (candidate answer choices) at lines {choice_ids}. "
+                    "These may be an unlettered multiple-choice question; use the wording and positions to solve it."
+                )
+        return ""
+
+    screen_layout_hint = layout_hint(source)
     count_instruction = (
         f"The quiz specifies exactly {body.expected_count} correct choices; return exactly that many."
         if body.expected_count else ""
@@ -328,6 +394,8 @@ def local_helper_answer(body: LocalHelperAnswerRequest, user: dict[str, str] = D
         "You are a capable study-question solver. Solve the active question in the OCR lines for any academic subject. "
         "Ignore browser tabs, addresses, navigation, page titles, progress counters, unrelated page text, and helper overlays. "
         "Identify the main question and its answer choices from their line positions. Reason from the whole question, not keywords. "
+        "Important: a question stem can be a declarative sentence with no question mark, and answer choices may have no A/B/C labels. "
+        "A long prompt followed by separate, similarly aligned lower text rows is a complete multiple-choice question; do not call it missing context for those reasons. "
         "Return one JSON object only with fields question, question_line_ids, answer_text, correct_answers, confidence, "
         "multiple_answers, needs_more_context, and explanation. question_line_ids and each answer's line_ids must use supplied IDs. "
         "Copy the question and correct choice text exactly as shown. If answer choices are visible, return only correct choices. "
@@ -338,6 +406,7 @@ def local_helper_answer(body: LocalHelperAnswerRequest, user: dict[str, str] = D
     )
     message = (
         f"Checkbox question: {body.multiple_answers}. Expected correct-choice count: {body.expected_count or 'not stated'}. "
+        f"OCR line boxes use a 0–1000 screen coordinate scale. {screen_layout_hint} "
         f"OCR lines with screen positions: {source_json}"
     )
     primary_id, _reason = choose_auto_model(models, 0, len(source_json), 1)
