@@ -29,7 +29,7 @@ REVIEWS_TAB = "ReviewLogs"
 SHARES_TAB = "StudyShares"
 REPORTS_TAB = "CardReports"
 USER_COLUMNS = ["user_id", "username", "email", "password_hash", "google_sub", "display_name", "created_at"]
-SET_COLUMNS = ["set_id", "user_id", "title", "type", "items_json", "sources_json", "created_at", "material_fingerprint", "incomplete", "requested_count", "source_url"]
+SET_COLUMNS = ["set_id", "user_id", "title", "type", "items_json", "sources_json", "created_at", "material_fingerprint", "incomplete", "requested_count", "source_url", "page_ranges_json", "focus_topic"]
 USAGE_COLUMNS = ["scope_key", "usage_date", "generation_count"]
 PROGRESS_COLUMNS = ["user_id", "set_id", "card_id", "due_at", "interval_days", "ease_factor", "repetitions", "lapses", "last_reviewed_at", "last_rating"]
 REVIEW_COLUMNS = ["user_id", "set_id", "card_id", "reviewed_at", "rating", "was_correct"]
@@ -262,7 +262,8 @@ def update_user(row_number: int, user: dict[str, str]) -> None:
 def save_study_set(study_set: dict[str, Any]) -> None:
     items_json = json.dumps(study_set["items"], ensure_ascii=False, separators=(",", ":"))
     sources_json = json.dumps(study_set.get("sources", []), ensure_ascii=False, separators=(",", ":"))
-    if len(items_json) + len(sources_json) > 40_000:
+    page_ranges_json = json.dumps(study_set.get("page_ranges", {}), ensure_ascii=False, separators=(",", ":"))
+    if len(items_json) + len(sources_json) + len(page_ranges_json) > 40_000:
         raise StorageError("This study set is too large to save in a Google Sheets cell.")
     with _set_write_lock:
         _append(
@@ -279,6 +280,8 @@ def save_study_set(study_set: dict[str, Any]) -> None:
                 str(bool(study_set.get("incomplete", False))).lower(),
                 str(study_set.get("requested_count", len(study_set["items"]))),
                 str(study_set.get("source_url", ""))[:2048],
+                page_ranges_json,
+                str(study_set.get("focus_topic", ""))[:300],
             ],
         )
 
@@ -286,7 +289,8 @@ def save_study_set(study_set: dict[str, Any]) -> None:
 def update_study_set(user_id: str, set_id: str, study_set: dict[str, Any]) -> bool:
     items_json = json.dumps(study_set["items"], ensure_ascii=False, separators=(",", ":"))
     sources_json = json.dumps(study_set.get("sources", []), ensure_ascii=False, separators=(",", ":"))
-    if len(items_json) + len(sources_json) > 40_000:
+    page_ranges_json = json.dumps(study_set.get("page_ranges", {}), ensure_ascii=False, separators=(",", ":"))
+    if len(items_json) + len(sources_json) + len(page_ranges_json) > 40_000:
         raise StorageError("This study set is too large to save in a Google Sheets cell.")
     with _set_write_lock:
         match = next(
@@ -297,7 +301,7 @@ def update_study_set(user_id: str, set_id: str, study_set: dict[str, Any]) -> bo
         if not match:
             return False
         row_number, existing = match
-        range_name = quote(f"{SETS_TAB}!A{row_number}:K{row_number}", safe="!:")
+        range_name = quote(f"{SETS_TAB}!A{row_number}:M{row_number}", safe="!:")
         _api(
             "PUT",
             f"/values/{range_name}",
@@ -314,6 +318,8 @@ def update_study_set(user_id: str, set_id: str, study_set: dict[str, Any]) -> bo
                 str(bool(study_set.get("incomplete", False))).lower(),
                 str(study_set.get("requested_count", len(study_set["items"]))),
                 str(study_set.get("source_url", existing.get("source_url", "")))[:2048],
+                page_ranges_json,
+                str(study_set.get("focus_topic", existing.get("focus_topic", "")))[:300],
             ]]},
         )
         _invalidate_rows(SETS_TAB)
@@ -322,7 +328,7 @@ def update_study_set(user_id: str, set_id: str, study_set: dict[str, Any]) -> bo
 
 def delete_study_set(user_id: str, set_id: str) -> bool:
     """Delete one saved set only when it belongs to the requesting account."""
-    with _set_write_lock:
+    with _set_write_lock, _review_write_lock:
         row_number = next(
             (
                 row_number
@@ -345,28 +351,18 @@ def delete_study_set(user_id: str, set_id: str) -> bool:
         )
         if sheet_id is None:
             raise StorageError("The StudySets tab could not be found in the spreadsheet.")
-        _api(
-            "POST",
-            ":batchUpdate",
-            body={
-                "requests": [
-                    {
-                        "deleteDimension": {
-                            "range": {
-                                "sheetId": sheet_id,
-                                "dimension": "ROWS",
-                                "startIndex": row_number - 1,
-                                "endIndex": row_number,
-                            }
-                        }
-                    }
-                ]
-            },
-        )
-        _invalidate_rows(SETS_TAB)
-        _delete_rows_for_set(PROGRESS_TAB, PROGRESS_COLUMNS, user_id, set_id)
-        _delete_rows_for_set(REVIEWS_TAB, REVIEW_COLUMNS, user_id, set_id)
-        _delete_rows_for_set(SHARES_TAB, SHARE_COLUMNS, user_id, set_id)
+        deletions = [{"deleteDimension": {"range": {"sheetId": sheet_id, "dimension": "ROWS", "startIndex": row_number - 1, "endIndex": row_number}}}]
+        # Prepare every related row before deleting anything. Sheets applies one
+        # batchUpdate atomically, so failed cleanup cannot leave a half-deleted set.
+        for tab, columns in ((PROGRESS_TAB, PROGRESS_COLUMNS), (REVIEWS_TAB, REVIEW_COLUMNS), (SHARES_TAB, SHARE_COLUMNS), (REPORTS_TAB, REPORT_COLUMNS)):
+            related_sheet_id = next((sheet.get("properties", {}).get("sheetId") for sheet in metadata.get("sheets", []) if sheet.get("properties", {}).get("title") == tab), None)
+            if related_sheet_id is None:
+                continue
+            matching = [number for number, row in _rows(tab, columns, use_cache=False) if row["user_id"] == user_id and row["set_id"] == set_id]
+            deletions.extend({"deleteDimension": {"range": {"sheetId": related_sheet_id, "dimension": "ROWS", "startIndex": number - 1, "endIndex": number}}} for number in reversed(matching))
+        _api("POST", ":batchUpdate", body={"requests": deletions})
+        for tab in (SETS_TAB, PROGRESS_TAB, REVIEWS_TAB, SHARES_TAB, REPORTS_TAB):
+            _invalidate_rows(tab)
         return True
 
 
@@ -462,6 +458,16 @@ def reserve_daily_generation(scope_key: str, usage_date: str, limit: int) -> int
         return 1
 
 
+def release_daily_generation(scope_key: str, usage_date: str) -> None:
+    """Return a reserved allowance when generation or persistence fails."""
+    with _usage_write_lock:
+        match = next(((number, row) for number, row in _rows(USAGE_TAB, USAGE_COLUMNS, use_cache=False) if row["scope_key"] == scope_key and row["usage_date"] == usage_date), None)
+        if match:
+            number, row = match
+            used = max(0, int(row.get("generation_count") or 0) - 1)
+            _api("PUT", f"/values/{quote(f'{USAGE_TAB}!C{number}', safe='!')}" , params={"valueInputOption": "RAW"}, body={"values": [[str(used)]]})
+
+
 def list_study_sets(user_id: str) -> list[dict[str, Any]]:
     result = []
     for _, row in _rows(SETS_TAB, SET_COLUMNS):
@@ -472,6 +478,12 @@ def list_study_sets(user_id: str) -> list[dict[str, Any]]:
             sources = json.loads(row["sources_json"] or "[]")
         except ValueError:
             continue
+        try:
+            page_ranges = json.loads(row.get("page_ranges_json") or "{}")
+            if not isinstance(page_ranges, dict):
+                page_ranges = {}
+        except ValueError:
+            page_ranges = {}
         set_id = row["set_id"]
         items = [
             {**item, "card_id": item.get("card_id") or hashlib.sha256(f"{set_id}:{index}:{item.get('question', '')}".encode()).hexdigest()[:24]}
@@ -490,6 +502,8 @@ def list_study_sets(user_id: str) -> list[dict[str, Any]]:
             "created_at": row["created_at"],
             "material_fingerprint": row.get("material_fingerprint", ""),
             "source_url": row.get("source_url", ""),
+            "page_ranges": {str(key): str(value) for key, value in page_ranges.items() if isinstance(value, str)},
+            "focus_topic": row.get("focus_topic", ""),
             "incomplete": row.get("incomplete", "").casefold() == "true",
             "requested_count": max(len(items), requested_count),
         })

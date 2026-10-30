@@ -10,7 +10,7 @@ import {
 
 type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification";
 type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string; source_refs?: string[] };
-type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; source_url?: string; created_at: string; material_fingerprint?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; usage?: { remaining: number | null; limit: number | null; resets_at: string; unlimited?: boolean } };
+type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; source_url?: string; created_at: string; material_fingerprint?: string; page_ranges?: Record<string, string>; focus_topic?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; usage?: { remaining: number | null; limit: number | null; resets_at: string; unlimited?: boolean } };
 type ActiveShare = { set_id: string; title: string; token: string; created_at: string };
 type ReviewItem = { study_set_id: string; study_set_title: string; type: Kind; card: Card; retried?: boolean; intervals: { again: string; hard: string; good: string; easy: string } };
 type Progress = { total_reviews: number; reviewed_today: number; accuracy: number; current_streak: number; best_streak: number; due_count: number; total_cards: number; week: { date: string; reviews: number }[] };
@@ -20,6 +20,9 @@ type ModelOption = { id: string; provider: string; name: string };
 type MaterialSearchResult = { title: string; url: string; snippet: string; file_type: string };
 type Theme = "dark" | "light";
 type PracticeAnswer = string | string[] | null;
+type WorkspaceView = "study" | "library" | "finder" | "voice" | "about";
+type GenerationStatus = { status: string; stage: string; message: string; completed: number; requested: number; model?: string | null };
+type CompanionId = "cat" | "fox" | "bunny" | "bear";
 type VoiceMode = "multiple_choice" | "identification" | "open_ended" | "enumeration";
 type VoicePersona = "warm_tutor" | "calm_mentor" | "energetic_coach" | "clear_lecturer";
 
@@ -43,6 +46,22 @@ const TOKEN_KEY = "dawnstudy_session_v1";
 const THEME_KEY = "dawnstudy_theme_v1";
 const VOICE_PERSONA_KEY = "dawnstudy_voice_persona_v1";
 const VOICE_DEVICE_KEY = "dawnstudy_device_voice_v1";
+const COMPANION_KEY = "dawnstudy_companion_v1";
+const companionChoices: { id: CompanionId; label: string; emoji: string }[] = [
+  { id: "cat", label: "Cat", emoji: "🐱" },
+  { id: "fox", label: "Fox", emoji: "🦊" },
+  { id: "bunny", label: "Bunny", emoji: "🐰" },
+  { id: "bear", label: "Bear", emoji: "🐻" },
+];
+const companionLines = [
+  "One small study session still counts.",
+  "You’ve got this. Take it one question at a time.",
+  "A quick review now can make tomorrow easier.",
+  "Need a tiny break before the next question?",
+];
+const supportedFiles = new Set(["pdf", "pptx", "docx", "txt", "md", "png", "jpg", "jpeg", "webp"]);
+const maxFileBytes = 15 * 1024 * 1024;
+const maxCombinedFileBytes = 30 * 1024 * 1024;
 const voicePersonas: { id: VoicePersona; name: string; rate: number; pitch: number }[] = [
   { id: "warm_tutor", name: "Warm tutor", rate: 0.96, pitch: 1.04 },
   { id: "calm_mentor", name: "Calm mentor", rate: 0.88, pitch: 0.92 },
@@ -130,7 +149,7 @@ function isPracticeAnswerCorrect(card: Card, type: Kind, response: PracticeAnswe
     return actual.length === expected.length && actual.every((answer, index) => answer === expected[index]);
   }
   const actual = Array.isArray(response) ? response[0] || "" : response;
-  return normalizedAnswer(actual) === expected[0];
+  return expected.includes(normalizedAnswer(actual));
 }
 
 function displayPracticeAnswer(response: PracticeAnswer | undefined) {
@@ -163,7 +182,10 @@ function shuffleSavedItems(items: Card[], kind: Kind) {
 
 export default function Home() {
   const [selected, setSelected] = useState<Kind>("flashcards");
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const [pageRanges, setPageRanges] = useState<Record<string, string>>({});
+  const [websitePageRange, setWebsitePageRange] = useState("");
+  const [focusTopic, setFocusTopic] = useState("");
   const [sourceMode, setSourceMode] = useState<"file" | "website">("file");
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [finderTopic, setFinderTopic] = useState("");
@@ -181,14 +203,25 @@ export default function Home() {
   const [difficulty, setDifficulty] = useState<"easy" | "medium" | "hard">("medium");
   const [models, setModels] = useState<ModelOption[]>([]);
   const [theme, setTheme] = useState<Theme>("dark");
+  const [activeView, setActiveView] = useState<WorkspaceView>("study");
+  const [companionId, setCompanionId] = useState<CompanionId>("cat");
+  const [companionName, setCompanionName] = useState("Miso");
+  const [companionOpen, setCompanionOpen] = useState(false);
+  const [companionLine, setCompanionLine] = useState("");
+  const [companionTalking, setCompanionTalking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [continueBusy, setContinueBusy] = useState(false);
+  const [generationStatus, setGenerationStatus] = useState<GenerationStatus | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [result, setResult] = useState<StudySet | null>(null);
   const [current, setCurrent] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
+  const [studySelectedOptions, setStudySelectedOptions] = useState<string[]>([]);
+  const [reviewSelectedOptions, setReviewSelectedOptions] = useState<string[]>([]);
+  const [studyIdentificationAnswer, setStudyIdentificationAnswer] = useState("");
+  const [reviewIdentificationAnswer, setReviewIdentificationAnswer] = useState("");
   const [practiceActive, setPracticeActive] = useState(false);
   const [practiceComplete, setPracticeComplete] = useState(false);
   const [practiceIndex, setPracticeIndex] = useState(0);
@@ -278,6 +311,11 @@ export default function Home() {
     setTheme(initialTheme);
     const savedPersona = localStorage.getItem(VOICE_PERSONA_KEY) as VoicePersona | null;
     if (savedPersona && voicePersonas.some((persona) => persona.id === savedPersona)) setVoicePersona(savedPersona);
+    try {
+      const savedCompanion = JSON.parse(localStorage.getItem(COMPANION_KEY) || "null") as { id?: CompanionId; name?: string } | null;
+      if (savedCompanion?.id && companionChoices.some((choice) => choice.id === savedCompanion.id)) setCompanionId(savedCompanion.id);
+      if (savedCompanion?.name?.trim()) setCompanionName(savedCompanion.name.trim().slice(0, 24));
+    } catch { localStorage.removeItem(COMPANION_KEY); }
     setDeviceVoiceURI(localStorage.getItem(VOICE_DEVICE_KEY) || "");
     setSets([]);
     if (API_BASE) {
@@ -307,6 +345,21 @@ export default function Home() {
     refreshDeviceVoices();
     window.speechSynthesis.addEventListener("voiceschanged", refreshDeviceVoices);
     return () => window.speechSynthesis.removeEventListener("voiceschanged", refreshDeviceVoices);
+  }, []);
+
+  useEffect(() => {
+    let hideMessage: number | undefined;
+    const interval = window.setInterval(() => {
+      const line = companionLines[Math.floor(Math.random() * companionLines.length)];
+      setCompanionLine(line);
+      setCompanionTalking(true);
+      if (hideMessage !== undefined) window.clearTimeout(hideMessage);
+      hideMessage = window.setTimeout(() => setCompanionTalking(false), 8000);
+    }, 75_000);
+    return () => {
+      window.clearInterval(interval);
+      if (hideMessage !== undefined) window.clearTimeout(hideMessage);
+    };
   }, []);
 
   useEffect(() => {
@@ -383,12 +436,44 @@ export default function Home() {
     void loadAccountSets(data.token);
   }
 
-  function selectFile(nextFile?: File) {
-    if (!nextFile) return;
+  function selectFiles(incoming?: FileList | File[]) {
+    const additions = Array.from(incoming || []);
+    if (!additions.length) return;
+    const valid = additions.filter((candidate) => {
+      const extension = candidate.name.split(".").pop()?.toLowerCase() || "";
+      return supportedFiles.has(extension) && candidate.size > 0 && candidate.size <= maxFileBytes;
+    });
+    const invalidCount = additions.length - valid.length;
+    const next = [...files];
+    for (const candidate of valid) {
+      const duplicate = next.some((currentFile) =>
+        currentFile.name === candidate.name && currentFile.size === candidate.size && currentFile.lastModified === candidate.lastModified,
+      );
+      if (!duplicate) next.push(candidate);
+    }
+    if (next.length > 5) { setError("Choose up to five files per study set."); return; }
+    if (next.reduce((total, candidate) => total + candidate.size, 0) > maxCombinedFileBytes) {
+      setError("Keep the combined file size under 30 MB. Each file can be up to 15 MB.");
+      return;
+    }
+    if (!next.length) {
+      setError(invalidCount ? "Choose supported, nonempty files up to 15 MB each (30 MB total)." : "Choose at least one study material.");
+      return;
+    }
     setSourceMode("file");
-    setFile(nextFile); setError(""); setNotice("");
+    setFiles(next); setError(invalidCount ? "Some files were skipped. Use PDF, PPTX, DOCX, TXT, MD, or an image up to 15 MB." : ""); setNotice("");
     if (!result?.incomplete) setResult(null);
-    setSelectedOption(null);
+    setSelectedOption(null); setStudySelectedOptions([]); setStudyIdentificationAnswer("");
+  }
+
+  function removeFile(index: number) {
+    setFiles((old) => old.filter((_, position) => position !== index));
+    setPageRanges((old) => Object.fromEntries(Object.entries(old).flatMap(([key, value]) => {
+      const oldIndex = Number(key);
+      if (oldIndex === index) return [];
+      return [[String(oldIndex > index ? oldIndex - 1 : oldIndex), value]];
+    })));
+    setError("");
   }
 
   function setColorTheme(nextTheme: Theme) {
@@ -397,60 +482,149 @@ export default function Home() {
     localStorage.setItem(THEME_KEY, nextTheme);
   }
 
+  function navigateTo(view: WorkspaceView) {
+    setActiveView(view);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function updateCompanion(id: CompanionId, name: string) {
+    setCompanionId(id);
+    setCompanionName(name);
+    localStorage.setItem(COMPANION_KEY, JSON.stringify({ id, name }));
+  }
+
+  function resetStudyAnswer() {
+    setRevealed(false);
+    setSelectedOption(null);
+    setStudySelectedOptions([]);
+    setStudyIdentificationAnswer("");
+  }
+
+  function resetReviewAnswer() {
+    setRevealed(false);
+    setSelectedOption(null);
+    setReviewSelectedOptions([]);
+    setReviewIdentificationAnswer("");
+  }
+
+  function navigateToLibrarySection(sectionId: string) {
+    setActiveView("library");
+    window.setTimeout(() => document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+  }
+
+  async function waitForGeneration(form: FormData) {
+    if (!API_BASE) throw new Error("The API address is not configured for this site.");
+    const headers = { Authorization: "Bearer " + authToken };
+    const started = await fetch(API_BASE + "/api/generation-jobs", { method: "POST", headers, body: form });
+    if (!started.ok) throw new Error(await responseError(started));
+    const { job_id: jobId } = await started.json() as { job_id: string };
+    if (!jobId) throw new Error("The generation queue did not return a job ID. Please try again.");
+    const deadline = Date.now() + 12 * 60 * 1000;
+    let transientFailures = 0;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1100));
+      try {
+        const response = await fetch(API_BASE + "/api/generation-jobs/" + encodeURIComponent(jobId), { headers });
+        if (!response.ok) {
+          if (response.status >= 500 && transientFailures < 4) { transientFailures += 1; continue; }
+          throw new Error(await responseError(response));
+        }
+        const job = await response.json() as GenerationStatus & { result?: StudySet; error_status?: number };
+        transientFailures = 0;
+        setGenerationStatus(job);
+        if (job.status === "error") throw new Error(job.message || "Generation could not finish. Please try again.");
+        if (job.status === "complete" && job.result) return job.result;
+      } catch (caught) {
+        if (caught instanceof Error && !/fetch|network/i.test(caught.message)) throw caught;
+        transientFailures += 1;
+        if (transientFailures > 4) throw new Error("The connection to the generation queue was lost. Your generated questions may still be available; refresh your study sets before retrying.");
+      }
+    }
+    throw new Error("This generation is taking longer than expected. Check your study sets in a moment before starting it again.");
+  }
+
   async function generate() {
     if (!authToken || !account) {
       setAuthOpen(true);
       setError("Sign in with your verified CEU Google account (@ceu.edu.ph, @mnl.ceu.edu.ph, @mkt.ceu.edu.ph, or @mls.ceu.edu.ph) to make a study set.");
       return;
     }
-    if (sourceMode === "file" && !file) { setError("Choose a study material first."); return; }
+    if (sourceMode === "file" && !files.length) { setError("Choose at least one study material first."); return; }
     if (sourceMode === "website" && !websiteUrl.trim()) { setError("Paste a public website link first."); return; }
     setBusy(true); setError(""); setNotice("");
+    setGenerationStatus({ status: "queued", stage: "queued", message: "Joining the study queue…", completed: 0, requested: questionCount });
     const form = new FormData();
-    if (sourceMode === "file" && file) form.append("file", file);
+    if (sourceMode === "file") files.forEach((selectedFile) => form.append("files", selectedFile));
     else form.append("source_url", websiteUrl.trim());
     form.append("format", selected); form.append("use_web", String(web));
     form.append("model", modelChoice);
     form.append("question_count", String(questionCount));
     form.append("difficulty", difficulty);
+    const requestPageRanges = sourceMode === "file"
+      ? Object.fromEntries(Object.entries(pageRanges).filter(([, value]) => value.trim()))
+      : websitePageRange.trim() ? { "0": websitePageRange.trim() } : {};
+    form.append("page_ranges", JSON.stringify(requestPageRanges));
+    form.append("focus_topic", focusTopic.trim());
     try {
-      if (!API_BASE) throw new Error("The API address is not configured for this site.");
-      const headers: Record<string, string> = { Authorization: `Bearer ${authToken}` };
-      const response = await fetch(`${API_BASE}/api/generate`, { method: "POST", headers, body: form });
-      if (!response.ok) throw new Error(await responseError(response));
-      const data = await response.json();
-      let studySet: StudySet = { ...data, id: crypto.randomUUID(), created_at: new Date().toISOString() };
+      const data = await waitForGeneration(form) as StudySet & { auto_model?: string; auto_reason?: string; persistence_error?: string; previous_question_count?: number };
+      let studySet: StudySet = {
+        ...data,
+        id: data.id || crypto.randomUUID(),
+        created_at: data.created_at || new Date().toISOString(),
+        page_ranges: data.page_ranges || Object.fromEntries(Object.entries(pageRanges).filter(([, value]) => value.trim())),
+        focus_topic: data.focus_topic ?? focusTopic.trim(),
+      };
       if (data.source_url) { setWebsiteUrl(data.source_url); setSourceMode("website"); }
+      if (studySet.source_url) setWebsitePageRange(studySet.page_ranges?.["0"] || "");
+      else setPageRanges(studySet.page_ranges || {});
+      setFocusTopic(studySet.focus_topic || "");
       let generationNotice = "";
-      if (data.auto_model) {
-        generationNotice = `Auto chose ${modelName(data.auto_model)} for this material (${data.auto_reason}).`;
+      if (data.auto_model) generationNotice = "Auto chose " + modelName(data.auto_model) + " for this material (" + data.auto_reason + ").";
+      const fallbackInfo = data.fallback;
+      if (fallbackInfo) {
+        const original = models.find((item) => item.id === fallbackInfo.from)?.name || fallbackInfo.from;
+        const fallbackModel = models.find((item) => item.id === fallbackInfo.to)?.name || fallbackInfo.to;
+        const issue = fallbackInfo.reason === "limit" ? "may have reached its limit" : fallbackInfo.reason === "busy" ? "was busy" : fallbackInfo.reason === "incomplete" ? "returned an incomplete set" : "was unavailable";
+        generationNotice = [generationNotice, original + " " + issue + "; " + fallbackModel + " helped finish the set."].filter(Boolean).join(" ");
       }
-      if (data.fallback) {
-        const original = models.find((item) => item.id === data.fallback.from)?.name || data.fallback.from;
-        const fallbackModel = models.find((item) => item.id === data.fallback.to)?.name || data.fallback.to;
-        const issue = data.fallback.reason === "limit" ? "may have reached its limit" : data.fallback.reason === "busy" ? "was busy" : data.fallback.reason === "incomplete" ? "returned an incomplete set" : "was unavailable";
-        generationNotice = [generationNotice, `${original} ${issue}; ${fallbackModel} helped finish the set.`].filter(Boolean).join(" ");
-      }
-      if (data.incomplete) generationNotice = [generationNotice, `Only ${data.items.length} of ${data.requested_count} requested questions could be completed by the available models.`].filter(Boolean).join(" ");
-      if (data.previous_question_count) generationNotice = [generationNotice, `Checked ${data.previous_question_count} questions from your earlier sets to avoid repeats.`].filter(Boolean).join(" ");
+      if (data.incomplete) generationNotice = [generationNotice, "Only " + data.items.length + " of " + data.requested_count + " requested questions could be completed by the available models."].filter(Boolean).join(" ");
+      if (data.previous_question_count) generationNotice = [generationNotice, "Checked " + data.previous_question_count + " questions from your earlier sets to avoid repeats."].filter(Boolean).join(" ");
       if (data.usage?.unlimited) generationNotice = [generationNotice, "No Dawnstudy daily generation cap applies to your account. AI provider limits may still apply."].filter(Boolean).join(" ");
-      else if (data.usage && data.usage.remaining !== null && data.usage.limit !== null) generationNotice = [generationNotice, `${data.usage.remaining} of ${data.usage.limit} generations left today${authToken ? " for your account" : " in this browser"}.`].filter(Boolean).join(" ");
-      setResult(studySet); setCurrent(0); setRevealed(false); setSelectedOption(null); setShareUrl(""); setPracticeActive(false);
-      const saved = await fetch(`${API_BASE}/api/study-sets`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({ title: studySet.title, type: studySet.type, items: studySet.items, sources: studySet.sources || [], source_url: studySet.source_url || "", material_fingerprint: studySet.material_fingerprint, incomplete: studySet.incomplete || false, requested_count: studySet.requested_count || studySet.items.length }),
-      });
-      if (!saved.ok) throw new Error(await responseError(saved));
-      const savedSet: StudySet = await saved.json();
-      studySet = { ...studySet, id: savedSet.id, items: savedSet.items, created_at: savedSet.created_at };
-      setResult(studySet);
-      setSets((old) => [studySet, ...old.filter((item) => item.id !== studySet.id)].slice(0, 100));
+      else if (data.usage && data.usage.remaining !== null && data.usage.limit !== null) generationNotice = [generationNotice, data.usage.remaining + " of " + data.usage.limit + " generations left today" + (authToken ? " for your account" : " in this browser") + "."].filter(Boolean).join(" ");
+      setResult(studySet); setCurrent(0); setRevealed(false); setSelectedOption(null);
+      setStudySelectedOptions([]); setStudyIdentificationAnswer(""); setReviewSelectedOptions([]); setReviewIdentificationAnswer("");
+      setShareUrl(""); setPracticeActive(false); setPracticeComplete(false);
+      if (!data.id) {
+        try {
+          const saved = await fetch(API_BASE + "/api/study-sets", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: "Bearer " + authToken },
+            body: JSON.stringify({
+              title: studySet.title, type: studySet.type, items: studySet.items, sources: studySet.sources || [],
+              source_url: studySet.source_url || "", material_fingerprint: studySet.material_fingerprint,
+              incomplete: studySet.incomplete || false, requested_count: studySet.requested_count || studySet.items.length,
+              page_ranges: studySet.page_ranges || {}, focus_topic: studySet.focus_topic || "",
+            }),
+          });
+          if (saved.ok) {
+            const savedSet = { ...await saved.json(), page_ranges: studySet.page_ranges, focus_topic: studySet.focus_topic } as StudySet;
+            studySet = savedSet;
+            setResult(savedSet);
+          } else {
+            setError("Your questions are ready, but they could not sync to your account: " + await responseError(saved));
+          }
+        } catch (caught) {
+          setError("Your questions are ready, but account sync is unavailable: " + (caught instanceof Error ? caught.message : "try again later."));
+        }
+      } else {
+        setSets((old) => [studySet, ...old.filter((item) => item.id !== studySet.id)].slice(0, 100));
+      }
       void loadProgress(authToken);
+      if (data.persistence_error) setError("Your questions are ready, but account sync failed: " + data.persistence_error);
       setNotice(generationNotice);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Something went wrong. Please try again.");
-    } finally { setBusy(false); }
+    } finally { setBusy(false); setGenerationStatus(null); }
   }
 
   async function searchMaterials(event: FormEvent<HTMLFormElement>) {
@@ -492,15 +666,17 @@ export default function Home() {
   }
 
   function useFinderMaterial(resource: MaterialSearchResult) {
+    setActiveView("study");
     setSourceMode("website");
     setWebsiteUrl(resource.url);
+    setWebsitePageRange("");
     setError("");
-    document.getElementById("study-source-toggle")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    window.setTimeout(() => document.getElementById("study-source-toggle")?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
   }
 
   async function continueGenerating() {
     if (!result || !result.incomplete || continueBusy) return;
-    if (!file && !result.source_url) {
+    if (!files.length && !result.source_url) {
       setError("Upload the original study material to continue generating this set.");
       return;
     }
@@ -511,22 +687,22 @@ export default function Home() {
       return;
     }
     setContinueBusy(true); setError(""); setNotice("");
+    setGenerationStatus({ status: "queued", stage: "queued", message: "Joining the study queue…", completed: result.items.length, requested: targetCount });
     const form = new FormData();
     if (result.source_url) form.append("source_url", result.source_url);
-    else if (file) form.append("file", file);
+    else files.forEach((selectedFile) => form.append("files", selectedFile));
     form.append("format", result.type);
     form.append("use_web", String(web));
     form.append("model", modelChoice);
     form.append("question_count", String(remainingCount));
     form.append("difficulty", difficulty);
+    form.append("page_ranges", JSON.stringify(result.page_ranges || (result.source_url ? (websitePageRange.trim() ? { "0": websitePageRange.trim() } : {}) : Object.fromEntries(Object.entries(pageRanges).filter(([, value]) => value.trim())))));
+    form.append("focus_topic", result.focus_topic || focusTopic.trim());
     form.append("existing_questions", JSON.stringify(result.items.map((item) => item.question)));
     if (result.material_fingerprint) form.append("expected_material_fingerprint", result.material_fingerprint);
     try {
       if (!API_BASE || !authToken) throw new Error("Sign in again to continue generating this study set.");
-      const headers = { Authorization: `Bearer ${authToken}` };
-      const response = await fetch(`${API_BASE}/api/generate`, { method: "POST", headers, body: form });
-      if (!response.ok) throw new Error(await responseError(response));
-      const data = await response.json();
+      const data = await waitForGeneration(form) as StudySet & { models_used?: string[] };
       const nextItems = [...result.items];
       const seen = new Set(nextItems.map((item) => normalizedAnswer(item.question)));
       for (const item of data.items as Card[]) {
@@ -544,13 +720,15 @@ export default function Home() {
         sources: mergedSources,
         incomplete: nextItems.length < targetCount,
         requested_count: targetCount,
+        page_ranges: result.page_ranges || Object.fromEntries(Object.entries(pageRanges).filter(([, value]) => value.trim())),
+        focus_topic: result.focus_topic || focusTopic.trim(),
         model: data.model || result.model,
         models_used: [...new Set([...(result.models_used || []), ...(data.models_used || [])])],
         fallback: data.fallback || result.fallback,
       };
       setResult(merged);
       setSets((old) => old.map((item) => item.id === merged.id ? merged : item));
-      const saveBody = JSON.stringify({ title: merged.title, type: merged.type, items: merged.items, sources: merged.sources || [], source_url: merged.source_url || "", material_fingerprint: merged.material_fingerprint, incomplete: merged.incomplete, requested_count: merged.requested_count });
+      const saveBody = JSON.stringify({ title: merged.title, type: merged.type, items: merged.items, sources: merged.sources || [], source_url: merged.source_url || "", material_fingerprint: merged.material_fingerprint, incomplete: merged.incomplete, requested_count: merged.requested_count, page_ranges: merged.page_ranges || {}, focus_topic: merged.focus_topic || "" });
       let saved = await fetch(`${API_BASE}/api/study-sets/${encodeURIComponent(merged.id)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
@@ -575,7 +753,7 @@ export default function Home() {
         : `All ${targetCount} questions are ready.`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not continue generating this study set.");
-    } finally { setContinueBusy(false); }
+    } finally { setContinueBusy(false); setGenerationStatus(null); }
   }
 
   function signOut() {
@@ -600,8 +778,11 @@ export default function Home() {
   }
 
   function openSavedSet(studySet: StudySet) {
-    setReviewActive(false); setPracticeActive(false); setPracticeComplete(false); setShareUrl(""); setResult({ ...studySet, items: shuffleSavedItems(studySet.items, studySet.type) }); setSelected(studySet.type); setCurrent(0); setRevealed(false); setSelectedOption(null); setError(""); setNotice("");
-    document.querySelector(".result-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setActiveView("study");
+    setSourceMode(studySet.source_url ? "website" : "file");
+    if (studySet.source_url) setWebsiteUrl(studySet.source_url);
+    setReviewActive(false); setPracticeActive(false); setPracticeComplete(false); setShareUrl(""); setResult({ ...studySet, items: shuffleSavedItems(studySet.items, studySet.type) }); setSelected(studySet.type); setCurrent(0); resetStudyAnswer(); resetReviewAnswer(); setPageRanges(studySet.source_url ? {} : studySet.page_ranges || {}); setWebsitePageRange(studySet.source_url ? studySet.page_ranges?.["0"] || "" : ""); setFocusTopic(studySet.focus_topic || ""); setError(""); setNotice("");
+    window.requestAnimationFrame(() => document.querySelector(".result-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
 
   function startPractice() {
@@ -814,14 +995,15 @@ export default function Home() {
   }
 
   async function startReview() {
+    setActiveView("study");
     if (!authToken) { setAuthOpen(true); return; }
     setError("");
     try {
       const response = await fetch(`${API_BASE}/api/reviews/due?limit=50`, { headers: { Authorization: `Bearer ${authToken}` } });
       if (!response.ok) throw new Error(await responseError(response));
       const data = await response.json();
-      setReviewQueue(data.items || []); setReviewActive(true); setResult(null); setRevealed(false); setSelectedOption(null);
-      document.querySelector(".review-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      setReviewQueue(data.items || []); setReviewActive(true); setResult(null); setRevealed(false); setSelectedOption(null); setReviewSelectedOptions([]); setReviewIdentificationAnswer("");
+      window.requestAnimationFrame(() => document.querySelector(".review-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }));
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not load your review queue."); }
   }
 
@@ -836,7 +1018,7 @@ export default function Home() {
         const remaining = old.slice(1);
         return rating === "again" && !item.retried && remaining.length ? [...remaining, { ...item, retried: true }] : remaining;
       });
-      setRevealed(false); setSelectedOption(null); void loadProgress(authToken);
+      setRevealed(false); setSelectedOption(null); setReviewSelectedOptions([]); setReviewIdentificationAnswer(""); void loadProgress(authToken);
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not save your review."); }
     finally { setReviewBusy(false); }
   }
@@ -849,7 +1031,7 @@ export default function Home() {
       if (!response.ok) throw new Error(await responseError(response));
       const data = await response.json();
       setNotice(`Card added to your review schedule · next review ${data.next_review_in}.`);
-      setCurrent((index) => (index + 1) % result.items.length); setRevealed(false); setSelectedOption(null);
+      setCurrent((index) => (index + 1) % result.items.length); setRevealed(false); setSelectedOption(null); setStudySelectedOptions([]); setStudyIdentificationAnswer("");
       void loadProgress(authToken);
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not save this card's review schedule."); }
     finally { setReviewBusy(false); }
@@ -885,20 +1067,70 @@ export default function Home() {
     </div>;
   }
 
+  function renderCheckboxQuiz(card: Card, isReview = false) {
+    const selectedAnswers = isReview ? reviewSelectedOptions : studySelectedOptions;
+    const setSelectedAnswers = isReview ? setReviewSelectedOptions : setStudySelectedOptions;
+    const correctOptions = choiceAnswerOptions(card.correct_answer || card.answer, card.options || []);
+    const correctKeys = correctOptions.map(normalizedAnswer);
+    const isCorrect = (option: string) => correctKeys.includes(normalizedAnswer(option));
+    const typedAnswer = isReview ? reviewIdentificationAnswer : studyIdentificationAnswer;
+    const setTypedAnswer = isReview ? setReviewIdentificationAnswer : setStudyIdentificationAnswer;
+    const exact = card.options?.length
+      ? selectedAnswers.length === correctOptions.length && selectedAnswers.every(isCorrect)
+      : isPracticeAnswerCorrect(card, "checkbox", typedAnswer);
+    return <div className={"study-face choice-study-face" + (revealed ? " is-revealed" : "")}>
+      <span className="face-label">{revealed ? "ANSWER FEEDBACK" : "SELECT EVERY CORRECT ANSWER"}</span>
+      <span className="face-question">{card.question}</span>
+      {card.options?.length ? <div className="choice-options" role="group" aria-label="Choose all correct answers">{card.options.map((option, index) => {
+        const picked = selectedAnswers.includes(option);
+        const correct = isCorrect(option);
+        const status = revealed ? correct ? "choice-correct" : picked ? "choice-wrong" : "" : "";
+        return <button type="button" key={String(index) + "-" + option} className={"choice-option " + status + (picked && !revealed ? " selected" : "")} disabled={revealed} aria-pressed={picked} onClick={() => setSelectedAnswers((old) => old.includes(option) ? old.filter((value) => value !== option) : [...old, option])}>
+          <i>{picked && !revealed ? "✓" : String.fromCharCode(65 + index)}</i><span>{option}</span>{revealed && correct && <Check size={16} aria-label="Correct answer"/>}
+        </button>;
+      })}</div> : <label className="practice-written study-identification-input"><span>Your answers (separate multiple answers with a | )</span><textarea value={typedAnswer} disabled={revealed} onChange={(event) => setTypedAnswer(event.target.value)} rows={2} placeholder="Type the answers you think apply"/></label>}
+      {!revealed ? <button type="button" className="check-answer-button" disabled={card.options?.length ? selectedAnswers.length === 0 : !typedAnswer.trim()} onClick={() => setRevealed(true)}>Check answers</button> : <p className={"choice-feedback " + (exact || (!card.options?.length && isPracticeAnswerCorrect(card, "checkbox", typedAnswer)) ? "correct" : "wrong")} role="status">{exact || (!card.options?.length && isPracticeAnswerCorrect(card, "checkbox", typedAnswer)) ? "Correct! You selected every correct answer." : "Not quite. Correct answers: " + displayCorrectAnswer(card)}</p>}
+    </div>;
+  }
+
+  function renderIdentificationQuiz(card: Card, isReview = false) {
+    const answer = isReview ? reviewIdentificationAnswer : studyIdentificationAnswer;
+    const setAnswer = isReview ? setReviewIdentificationAnswer : setStudyIdentificationAnswer;
+    const correct = isPracticeAnswerCorrect(card, "identification", answer);
+    return <div className={"study-face choice-study-face" + (revealed ? " is-revealed" : "")}>
+      <span className="face-label">{revealed ? "ANSWER FEEDBACK" : "IDENTIFY THE TERM OR CONCEPT"}</span>
+      <span className="face-question">{card.question}</span>
+      <label className="practice-written study-identification-input"><span>Your answer</span><input value={answer} disabled={revealed} onChange={(event) => setAnswer(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && answer.trim() && !revealed) setRevealed(true); }} placeholder="Type the term or concept"/></label>
+      {!revealed ? <button type="button" className="check-answer-button" disabled={!answer.trim()} onClick={() => setRevealed(true)}>Check answer</button> : <p className={"choice-feedback " + (correct ? "correct" : "wrong")} role="status">{correct ? "Correct! Nice work." : "Correct answer: " + displayCorrectAnswer(card)}</p>}
+    </div>;
+  }
+
+  function renderCardInteraction(card: Card, kind: Kind, isReview = false) {
+    if (kind === "multiple_choice") return card.options?.length ? renderMultipleChoice(card) : renderIdentificationQuiz(card, isReview);
+    if (kind === "checkbox") return renderCheckboxQuiz(card, isReview);
+    if (kind === "identification") return renderIdentificationQuiz(card, isReview);
+    return <button className={"study-face" + (revealed ? " is-revealed" : "")} onClick={() => setRevealed(!revealed)}>
+      <span className="face-label">{revealed ? "THE ANSWER" : "YOUR QUESTION"}</span>
+      <span className="face-question">{revealed ? card.answer : card.question}</span>
+      {!revealed && <span className="tap-hint">Tap to reveal <span>↗</span></span>}
+    </button>;
+  }
+
   const FullscreenIcon = isFullscreen ? Minimize2 : Maximize2;
+  const currentCompanion = companionChoices.find((choice) => choice.id === companionId) || companionChoices[0];
+  const viewTitle: Record<WorkspaceView, string> = { study: "Study desk", library: "My Library", finder: "PDF Finder", voice: "Voice review", about: "About Dawnstudy" };
 
   return (
     <main className="shell">
       <aside className="sidebar">
         <a className="brand" href="#home"><span className="brand-icon"><Sparkles size={19} strokeWidth={2.2} /></span><span className="brand-copy"><span>dawn<span className="brand-light">study</span></span><small>by Devon</small></span></a>
         <div className="side-kicker">YOUR SPACE</div>
-        <button className="nav-item active" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}><span className="nav-icon"><BookOpen size={18}/></span> Study desk</button>
-        <button className="nav-item" onClick={() => document.getElementById("pdf-finder")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><Search size={18}/></span> PDF Finder</button>
-        <button className="nav-item" onClick={() => document.querySelector(".voice-review")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><Mic size={18}/></span> Voice review</button>
-        <button className="nav-item" onClick={() => document.querySelector(".recent-section")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><Layers3 size={18}/></span> My study sets <span className="nav-count">{sets.length}</span></button>
-        <button className="nav-item" onClick={() => document.querySelector(".active-links-section")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><Share2 size={18}/></span> Active Links <span className="nav-count">{activeShares.length}</span></button>
-        <button className="nav-item" onClick={() => document.querySelector(".progress-panel")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><Clock3 size={18}/></span> Study progress</button>
-        <button className="nav-item" onClick={() => document.querySelector(".about-section")?.scrollIntoView({ behavior: "smooth" })}><span className="nav-icon"><UserRound size={18}/></span> About the Developer</button>
+        <button className={`nav-item ${activeView === "study" ? "active" : ""}`} aria-current={activeView === "study" ? "page" : undefined} onClick={() => navigateTo("study")}><span className="nav-icon"><BookOpen size={18}/></span> Study desk</button>
+        <button className={`nav-item ${activeView === "finder" ? "active" : ""}`} aria-current={activeView === "finder" ? "page" : undefined} onClick={() => navigateTo("finder")}><span className="nav-icon"><Search size={18}/></span> PDF Finder</button>
+        <button className={`nav-item ${activeView === "voice" ? "active" : ""}`} aria-current={activeView === "voice" ? "page" : undefined} onClick={() => navigateTo("voice")}><span className="nav-icon"><Mic size={18}/></span> Voice review</button>
+        <button className={`nav-item ${activeView === "library" ? "active" : ""}`} aria-current={activeView === "library" ? "page" : undefined} onClick={() => navigateTo("library")}><span className="nav-icon"><Layers3 size={18}/></span> My Library <span className="nav-count">{sets.length}</span></button>
+        {activeView === "library" && <div className="nav-subitems"><button type="button" onClick={() => navigateToLibrarySection("active-links")}>Active links <span>{activeShares.length}</span></button><button type="button" onClick={() => navigateToLibrarySection("study-progress")}>Study progress</button></div>}
+        <button className={`nav-item ${activeView === "about" ? "active" : ""}`} aria-current={activeView === "about" ? "page" : undefined} onClick={() => navigateTo("about")}><span className="nav-icon"><UserRound size={18}/></span> About Dawnstudy</button>
         <div className="side-separator" />
         <div className="set-heading"><span className="side-kicker">RECENT SETS</span><button className="plain-icon" title={account ? "Add a study set" : "Sign in to add a study set"} onClick={() => account ? input.current?.click() : setAuthOpen(true)}><Plus size={17}/></button></div>
         <div className="mini-sets">
@@ -917,28 +1149,43 @@ export default function Home() {
       </aside>
 
       <section className="main-area" id="home">
-        <header className="topbar"><div className="crumb"><span>Your space</span><ChevronRight size={14}/><b>Study desk</b></div><div className="top-actions"><button className="theme-toggle" onClick={() => setColorTheme(theme === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>{theme === "dark" ? <Sun size={16}/> : <Moon size={16}/>}<span>{theme === "dark" ? "Light mode" : "Dark mode"}</span></button><span className="today-pill"><span className="status-dot"/> YOUR STUDY DESK</span>{!account && <button className="top-signin" onClick={() => setAuthOpen(true)}><UserRound size={14}/> Sign in</button>}<button className="profile-mobile" onClick={() => account ? signOut() : setAuthOpen(true)} title={account ? "Sign out" : "Sign in with Google"}>{account ? <LogOut size={18}/> : <Menu size={20}/>}</button></div></header>
+        <header className="topbar"><div className="crumb"><span>Your space</span><ChevronRight size={14}/><b>{viewTitle[activeView]}</b></div><div className="top-actions"><button className="theme-toggle" onClick={() => setColorTheme(theme === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>{theme === "dark" ? <Sun size={16}/> : <Moon size={16}/>}<span>{theme === "dark" ? "Light mode" : "Dark mode"}</span></button><span className="today-pill"><span className="status-dot"/> {viewTitle[activeView].toUpperCase()}</span>{!account && <button className="top-signin" onClick={() => setAuthOpen(true)}><UserRound size={14}/> Sign in</button>}<button className="profile-mobile" onClick={() => account ? signOut() : setAuthOpen(true)} title={account ? "Sign out" : "Sign in with Google"}>{account ? <LogOut size={18}/> : <Menu size={20}/>}</button></div></header>
         <div className="content">
+          {activeView === "study" && <div className="workspace-view study-view" key="study">
           <div className="access-banner"><GraduationCap size={19}/><span><strong>For CEU students.</strong> Sign in with a verified school Google account to use Dawnstudy.</span></div>
           <section className="welcome"><div className="welcome-copy"><div className="eyebrow"><span/> A FRESH PAGE, A FRESH START</div><h1>Make today<br/>a little <em>brighter.</em></h1><p>Drop in your notes. We’ll help the important things stick.</p></div><div className="sunrise-art" aria-hidden="true"><div className="sun"/><div className="cloud cloud-one"/><div className="cloud cloud-two"/><div className="horizon h-back"/><div className="horizon h-front"/></div><span className="welcome-note">one page at a time <span>✳</span></span></section>
           <div className="section-intro"><div><div className="section-title-row"><h2>Start a study set</h2></div><p>Choose how you’d like to practice.</p></div><span className="quiet-note">Good things take practice <span>↗</span></span></div>
-          {account && progress && <section className="progress-panel"><div className="progress-copy"><div className="result-kicker"><span/> YOUR STUDY PROGRESS</div><h2>Small steps add up.</h2><p>Review a little each day to keep ideas fresh.</p><div className="progress-stats"><div><strong>{progress.reviewed_today}</strong><span>today</span></div><div><strong>{progress.accuracy}%</strong><span>accuracy</span></div><div><strong>{progress.current_streak} <small>days</small></strong><span>current streak</span></div><div><strong>{progress.best_streak} <small>days</small></strong><span>best streak</span></div></div><div className="week-bars" aria-label="Reviews during the past seven days">{progress.week.map((day) => <div key={day.date} title={`${day.reviews} reviews`}><i style={{ height: `${Math.max(8, Math.min(100, day.reviews * 18))}%` }}/><small>{new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: "narrow" })}</small></div>)}</div></div><button className="review-start" onClick={() => void startReview()}><Clock3 size={17}/><span>Review due</span><b>{progress.due_count}</b><ChevronRight size={16}/></button></section>}
-          <div className="type-grid">{types.map(({ id, title, detail, icon: Icon }) => <button key={id} className={`type-card ${selected === id ? "chosen" : ""}`} onClick={() => { setSelected(id); setResult(null); setCurrent(0); setRevealed(false); setError(""); }}><span className="type-icon"><Icon size={19}/></span><span className="type-text"><strong>{title}</strong><small>{detail}</small></span>{selected === id && <span className="check-icon"><Check size={13} strokeWidth={3}/></span>}</button>)}</div>
+          <div className="type-grid">{types.map(({ id, title, detail, icon: Icon }) => <button key={id} className={`type-card ${selected === id ? "chosen" : ""}`} onClick={() => { setSelected(id); setResult(null); setCurrent(0); resetStudyAnswer(); resetReviewAnswer(); setError(""); }}><span className="type-icon"><Icon size={19}/></span><span className="type-text"><strong>{title}</strong><small>{detail}</small></span>{selected === id && <span className="check-icon"><Check size={13} strokeWidth={3}/></span>}</button>)}</div>
           <div className="source-mode-toggle" id="study-source-toggle" role="group" aria-label="Choose a study material source">
             <button type="button" className={sourceMode === "file" ? "source-mode-choice chosen" : "source-mode-choice"} aria-pressed={sourceMode === "file"} onClick={() => { setSourceMode("file"); setError(""); }}><CloudUpload size={16}/> Upload a file</button>
             <button type="button" className={sourceMode === "website" ? "source-mode-choice chosen" : "source-mode-choice"} aria-pressed={sourceMode === "website"} onClick={() => { setSourceMode("website"); setError(""); }}><Globe2 size={16}/> Paste a website</button>
           </div>
-          {sourceMode === "file" ? <section className={`upload-zone ${dragging ? "dragging" : ""} ${file ? "has-file" : ""}`} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); selectFile(event.dataTransfer.files[0]); }} onClick={() => !file && input.current?.click()} role="button" tabIndex={0} onKeyDown={(event) => event.key === "Enter" && input.current?.click()}>
-            <input ref={input} type="file" accept=".pdf,.pptx,.docx,.txt,.md,.png,.jpg,.jpeg,.webp" hidden onChange={(event) => selectFile(event.target.files?.[0])}/>
-            <span className="upload-icon">{file ? <FileText size={22}/> : <CloudUpload size={23}/>}</span><span className="upload-copy">{file ? <><strong>{file.name}</strong><small>{(file.size / 1024 / 1024).toFixed(2)} MB · ready to study</small></> : <><strong>Drop your study material here</strong><small>or <span className="browse-link">browse your files</span></small></>}</span>{file ? <button className="remove-file" title="Remove file" onClick={(event) => { event.stopPropagation(); setFile(null); }}><X size={18}/></button> : <span className="format-hint">PDF, PPTX, DOCX, TXT, MD, or image <i>·</i> Max 15 MB</span>}
-          </section> : <section className="website-source-zone"><label htmlFor="website-source-url">Public website link</label><div className="website-source-input"><Globe2 size={17}/><input id="website-source-url" type="url" inputMode="url" value={websiteUrl} onChange={(event) => setWebsiteUrl(event.target.value)} maxLength={2048} placeholder="https://example.edu/biology/cell-division"/><button type="button" onClick={() => setWebsiteUrl("")} disabled={!websiteUrl} aria-label="Clear website link"><X size={16}/></button></div><small>Public pages only. Pages requiring sign-in will show a specific access message.</small></section>}
-          <button type="button" className="finder-shortcut" onClick={() => document.getElementById("pdf-finder")?.scrollIntoView({ behavior: "smooth", block: "center" })}><Search size={15}/><span>No materials to upload? <b>Find some with PDF Finder</b></span><ChevronRight size={15}/></button>
+          {sourceMode === "file" ? <section className="materials-uploader">
+            <input ref={input} type="file" multiple accept=".pdf,.pptx,.docx,.txt,.md,.png,.jpg,.jpeg,.webp" hidden onChange={(event) => { selectFiles(event.target.files || undefined); event.target.value = ""; }}/>
+            <div className={"upload-zone " + (dragging ? "dragging" : "")} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); selectFiles(event.dataTransfer.files); }}>
+              <span className="upload-icon"><CloudUpload size={23}/></span>
+              <span className="upload-copy"><strong>{files.length ? "Add another material" : "Drop your study materials here"}</strong><small>{files.length ? files.length + " of 5 files selected" : "Upload more than one file, or choose them from your device."}</small></span>
+              <button type="button" className="upload-browse-button" onClick={() => input.current?.click()}><Plus size={15}/>{files.length ? "Add files" : "Browse files"}</button>
+            </div>
+            <div className="upload-limits">PDF, PPTX, DOCX, TXT, MD, PNG, JPG, WEBP · 15 MB each · 30 MB total</div>
+            {files.length > 0 && <div className="selected-files">{files.map((selectedFile, index) => {
+              const extension = selectedFile.name.split(".").pop()?.toLowerCase() || "";
+              const pageSelectable = extension === "pdf" || extension === "pptx";
+              return <article className="selected-file" key={selectedFile.name + ":" + selectedFile.size + ":" + selectedFile.lastModified}>
+                <div className="selected-file-heading"><span className="selected-file-icon"><FileText size={17}/></span><span className="selected-file-copy"><strong title={selectedFile.name}>{selectedFile.name}</strong><small>{(selectedFile.size / 1024 / 1024).toFixed(2)} MB{pageSelectable ? " · pages/slides can be scoped" : ""}</small></span><button type="button" className="remove-file" title={"Remove " + selectedFile.name} aria-label={"Remove " + selectedFile.name} onClick={() => removeFile(index)}><X size={17}/></button></div>
+                {pageSelectable && <label className="file-page-range">{extension === "pdf" ? "PDF pages" : "PowerPoint slides"} <span>(optional)</span><input value={pageRanges[String(index)] || ""} onChange={(event) => setPageRanges((old) => ({ ...old, [String(index)]: event.target.value }))} maxLength={120} placeholder="All pages, or 1-5, 8, 12-15"/></label>}
+              </article>;
+            })}</div>}
+          </section> : <section className="website-source-zone"><label htmlFor="website-source-url">Public website link</label><div className="website-source-input"><Globe2 size={17}/><input id="website-source-url" type="url" inputMode="url" value={websiteUrl} onChange={(event) => setWebsiteUrl(event.target.value)} maxLength={2048} placeholder="https://example.edu/biology/cell-division"/><button type="button" onClick={() => setWebsiteUrl("")} disabled={!websiteUrl} aria-label="Clear website link"><X size={16}/></button></div><small>Public pages only. Pages requiring sign-in will show a specific access message.</small><label className="file-page-range website-page-range">Pages <span>(optional, for direct PDF links)</span><input value={websitePageRange} onChange={(event) => setWebsitePageRange(event.target.value)} maxLength={120} placeholder="All pages, or 1-5, 8, 12-15"/></label></section>}
+          <label className="focus-topic-field">Focus on a topic or chapter <span>(optional)</span><input value={focusTopic} onChange={(event) => setFocusTopic(event.target.value)} maxLength={300} placeholder="e.g. Chapter 4: cellular respiration"/><small>Leave blank to build a set from all the selected material.</small></label>
+          <button type="button" className="finder-shortcut" onClick={() => navigateTo("finder")}><Search size={15}/><span>No materials to upload? <b>Find some with PDF Finder</b></span><ChevronRight size={15}/></button>
           <div className="model-row"><label htmlFor="model-choice"><Cpu size={16}/> AI model</label><select id="model-choice" value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}><option value="auto">Auto choose · switch when busy or limited</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select><label className="count-label" htmlFor="question-count">Questions</label><select id="question-count" value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{[10, 20, 30, 40, 50].map((count) => <option key={count} value={count}>{count} questions</option>)}</select><label htmlFor="question-difficulty">Difficulty</label><select id="question-difficulty" value={difficulty} onChange={(event) => setDifficulty(event.target.value as "easy" | "medium" | "hard")}><option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option></select><details className="model-help-details"><summary>Model and generation details</summary><p className="model-help">Difficulty adjusts question depth. Choice options are checked for similar lengths at every level. {modelChoice === "auto" ? "Auto uses file size, extracted text, and question count to choose a compact model for smaller jobs and a stronger one for larger jobs." : "Your choice is tried first. Another configured model can help if it fails or returns a partial set."} Up to 50 questions per request. {hasUnlimitedGenerations ? "No Dawnstudy daily generation cap applies to your account." : "Each submitted request uses one of 5 daily generations, even if fallback models are tried; your allowance resets at midnight Manila time."} Provider free quotas are shared and may still be busy or exhausted. Auto and fallback can use Mistral models, which may use paid credits; check that provider account’s pricing.</p></details></div>
           <div className="options-row"><button className={`web-toggle ${web ? "on" : ""}`} onClick={() => setWeb(!web)}><span className="toggle-track"><span/></span><Globe2 size={16}/><span>Enrich with the web</span><span className="optional-tag">OPTIONAL</span></button><button className="web-info" title="Searches the web for relevant context and includes source links with your results."><CircleHelp size={15}/></button></div>
-          <div className="generate-row"><span className="privacy-note"><span className="privacy-dot"/> Sent to your selected AI provider; sets sync to your account.</span><button className="generate-button" onClick={generate} disabled={busy}>{busy ? <><span className="spinner"/> Trying available models…</> : <><Sparkles size={16}/> Make my study set <ChevronRight size={16}/></>}</button></div>
+          <div className="generate-row"><span className="privacy-note"><span className="privacy-dot"/> Sent to your selected AI provider; sets sync to your account.</span><button className="generate-button" onClick={generate} disabled={busy}>{busy ? <><span className="spinner"/> Generating…</> : <><Sparkles size={16}/> Make my study set <ChevronRight size={16}/></>}</button></div>
+          {generationStatus && <div className="generation-status" role="status" aria-live="polite"><span className="generation-status-pulse"/><div className="generation-status-copy"><strong>{generationStatus.message || "Preparing your study set…"}</strong><small>{generationStatus.model ? modelName(generationStatus.model) : generationStatus.stage === "queued" ? "Waiting for an available model" : "Dawnstudy generation service"}{generationStatus.requested > 0 && ` · ${generationStatus.completed} of ${generationStatus.requested} ready`}</small></div>{generationStatus.requested > 0 && <div className="generation-progress-track" aria-label={`${generationStatus.completed} of ${generationStatus.requested} questions ready`}><i style={{ width: `${Math.min(100, generationStatus.completed / generationStatus.requested * 100)}%` }}/></div>}</div>}
           {error && <div className="error-box"><CircleHelp size={16}/><span>{error}</span></div>}
           {notice && <div className="notice-box"><Check size={15}/><span>{notice}</span></div>}
-          {reviewActive && <section className="review-panel"><div className="result-head"><div><div className="result-kicker"><span/> SPACED REPETITION</div><h2>{reviewQueue.length ? reviewQueue[0].study_set_title : "Review complete"}</h2><p>{reviewQueue.length ? `${reviewQueue.length} cards in this session · ${reviewQueue[0].type.replaceAll("_", " ")}` : "You’re all caught up for now. Nice work showing up."}</p></div><button className="plain-icon" title="Close review" onClick={() => { setReviewActive(false); setReviewQueue([]); setSelectedOption(null); }}><X size={18}/></button></div>{reviewQueue.length ? <div className="study-card"><div className="study-card-top"><span className="flashcard-label">REVIEW {reviewQueue.length} LEFT</span></div>{reviewQueue[0].type === "multiple_choice" && reviewQueue[0].card.options?.length ? renderMultipleChoice(reviewQueue[0].card) : <button className={`study-face ${revealed ? "is-revealed" : ""}`} onClick={() => setRevealed(!revealed)}><span className="face-label">{revealed ? "THE ANSWER" : "YOUR QUESTION"}</span><span className="face-question">{revealed ? reviewQueue[0].card.answer : reviewQueue[0].card.question}</span>{!revealed && <span className="tap-hint">Tap to reveal <span>↗</span></span>}</button>}{revealed && reviewQueue[0].card.explanation && <p className="explanation">{reviewQueue[0].card.explanation}</p>}{revealed && <div className="rating-row"><button disabled={reviewBusy} onClick={() => void gradeCard("again")}><b>Again</b><small>{reviewQueue[0].intervals.again}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("hard")}><b>Hard</b><small>{reviewQueue[0].intervals.hard}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("good")}><b>Good</b><small>{reviewQueue[0].intervals.good}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("easy")}><b>Easy</b><small>{reviewQueue[0].intervals.easy}</small></button></div>}</div> : <button className="review-done" onClick={() => { setReviewActive(false); setReviewQueue([]); }}>Back to study desk <ChevronRight size={15}/></button>}</section>}
+          {reviewActive && <section className="review-panel"><div className="result-head"><div><div className="result-kicker"><span/> SPACED REPETITION</div><h2>{reviewQueue.length ? reviewQueue[0].study_set_title : "Review complete"}</h2><p>{reviewQueue.length ? `${reviewQueue.length} cards in this session · ${reviewQueue[0].type.replaceAll("_", " ")}` : "You’re all caught up for now. Nice work showing up."}</p></div><button className="plain-icon" title="Close review" onClick={() => { setReviewActive(false); setReviewQueue([]); setSelectedOption(null); }}><X size={18}/></button></div>{reviewQueue.length ? <div className="study-card"><div className="study-card-top"><span className="flashcard-label">REVIEW {reviewQueue.length} LEFT</span></div>{renderCardInteraction(reviewQueue[0].card, reviewQueue[0].type, true)}{revealed && reviewQueue[0].card.explanation && <p className="explanation">{reviewQueue[0].card.explanation}</p>}{revealed && <div className="rating-row"><button disabled={reviewBusy} onClick={() => void gradeCard("again")}><b>Again</b><small>{reviewQueue[0].intervals.again}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("hard")}><b>Hard</b><small>{reviewQueue[0].intervals.hard}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("good")}><b>Good</b><small>{reviewQueue[0].intervals.good}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("easy")}><b>Easy</b><small>{reviewQueue[0].intervals.easy}</small></button></div>}</div> : <button className="review-done" onClick={() => { setReviewActive(false); setReviewQueue([]); }}>Back to study desk <ChevronRight size={15}/></button>}</section>}
           {result && practiceActive && !reviewActive && <section ref={practicePanel} className="practice-panel">
             <div className="result-head"><div><div className="result-kicker"><span/> {practiceSecondsPerQuestion === 0 ? "SELF-PACED PRACTICE" : "TIMED PRACTICE TEST"}</div><h2>{result.title}</h2><p>{practiceComplete ? "Test results and missed answers" : `${result.items.length} questions · ${practiceSecondsPerQuestion === 0 ? "no time limit" : `${practiceSecondsPerQuestion} seconds per question`}`}</p></div><div className="practice-head-actions"><button className={`quiz-fullscreen-button ${isFullscreen ? "is-fullscreen" : ""}`} type="button" onClick={() => void toggleExerciseFullscreen()} aria-label={isFullscreen ? "Exit quiz fullscreen" : "Show quiz fullscreen"} aria-pressed={isFullscreen}><FullscreenIcon size={19}/><span>{isFullscreen ? "Exit fullscreen" : "Quiz fullscreen"}</span></button><button className="plain-icon" title="Exit practice test" onClick={() => { setPracticeActive(false); setPracticeComplete(false); }}><X size={18}/></button></div></div>
             {!practiceComplete && practiceCard ? <>
@@ -961,17 +1208,20 @@ export default function Home() {
           </section>}
           {result && currentCard && !reviewActive && !practiceActive && <section className="result-panel"><div className="result-head"><div><div className="result-kicker"><span/> YOUR STUDY SET</div><h2>{result.title}</h2><p>{result.items.length} {types.find((type) => type.id === result.type)?.title.toLowerCase()} · ready when you are{result.model ? ` · ${modelName(result.model)}` : ""}</p></div><button className="plain-icon" title="Close study set" onClick={() => setResult(null)}><X size={18}/></button></div>
             <div className="set-action-row"><label>Test pace<select value={practiceSecondsPerQuestion} onChange={(event) => setPracticeSecondsPerQuestion(Number(event.target.value))}><option value={0}>No timer</option><option value={20}>20 sec / question</option><option value={30}>30 sec / question</option><option value={45}>45 sec / question</option></select></label><button className="action-button" onClick={startPractice}><AlarmClock size={15}/> {practiceSecondsPerQuestion === 0 ? "Start practice" : "Start timed test"}</button><button className="action-button" onClick={() => void shareCurrentSet()} disabled={shareBusy}><Share2 size={15}/>{shareBusy ? "Working…" : "Share set"}</button></div>
-            {result.incomplete && <div className="incomplete-generation"><div><strong>{result.items.length} of {result.requested_count || result.items.length} questions generated</strong><span>{result.source_url ? "Your generated questions are held. Continue from the same public webpage when ready." : file ? "Your generated questions are held. Continue for the remaining questions when ready." : "Upload the original material to continue this set."}</span></div><button className="continue-generation-button" disabled={continueBusy || busy || (!file && !result.source_url)} onClick={() => void continueGenerating()}>{continueBusy ? <><span className="spinner"/> Continuing…</> : <><Sparkles size={17}/> Continue generating</>}</button></div>}
+            {result.incomplete && <div className="incomplete-generation"><div><strong>{result.items.length} of {result.requested_count || result.items.length} questions generated</strong><span>{result.source_url ? "Your generated questions are held. Continue from the same public webpage when ready." : files.length ? "Your generated questions are held. Continue with the selected original files when ready." : "Re-select the original files to continue this set."}</span></div><button className="continue-generation-button" disabled={continueBusy || busy || (!files.length && !result.source_url)} onClick={() => void continueGenerating()}>{continueBusy ? <><span className="spinner"/> Continuing…</> : <><Sparkles size={17}/> Continue generating</>}</button></div>}
             {shareUrl && <div className="share-link-row"><span>Anyone with this link can view this set:</span><a href={shareUrl} target="_blank" rel="noreferrer">{shareUrl}</a><button className="plain-icon" title="Copy share link" onClick={() => { void navigator.clipboard.writeText(shareUrl).then(() => setNotice("Share link copied.")).catch(() => setNotice("Select and copy the share link above.")); }}><Copy size={15}/></button><button className="share-revoke" disabled={shareBusy} onClick={() => void turnOffShareLink(result.id)}>Turn off link</button></div>}
             <div className="study-card"><div className="study-card-top"><span className="flashcard-label">{result.type === "flashcards" ? "FLASHCARD" : types.find((type) => type.id === result.type)?.title.toUpperCase()}</span><span className="card-number">{String(current + 1).padStart(2,"0")} <i>/</i> {String(result.items.length).padStart(2,"0")}</span></div>
-              {result.type === "multiple_choice" && currentCard.options?.length ? renderMultipleChoice(currentCard) : <button className={`study-face ${revealed ? "is-revealed" : ""}`} onClick={() => setRevealed(!revealed)}><span className="face-label">{revealed ? "THE ANSWER" : "YOUR QUESTION"}</span><span className="face-question">{revealed ? currentCard.answer : currentCard.question}</span>{!revealed && <span className="tap-hint">Tap to reveal <span>↗</span></span>}</button>}
+              {renderCardInteraction(currentCard, result.type)}
               {currentCard.source_refs?.length ? <div className="material-citations"><strong>From your material</strong>{currentCard.source_refs.map((source) => <span key={source}>{source}</span>)}</div> : null}
               {revealed && currentCard.explanation && <p className="explanation">{currentCard.explanation}</p>}
               {revealed && account && authToken && currentCard.card_id && <><div className="rating-prompt">How well did you recall it? Your answer schedules this card for another review.</div><div className="rating-row"><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("again")}><b>Again</b><small>Hard to recall</small></button><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("hard")}><b>Hard</b><small>With effort</small></button><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("good")}><b>Good</b><small>Recalled it</small></button><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("easy")}><b>Easy</b><small>Very easy</small></button></div></>}
               {currentCard.card_id && <div className="card-report-wrap">{reportedCards.includes(currentCard.card_id) ? <span className="report-sent"><Check size={14}/> Report received</span> : <button className="report-toggle" onClick={() => setReportingCard(!reportingCard)}><Flag size={14}/> Report an issue with this card</button>}{reportingCard && !reportedCards.includes(currentCard.card_id) && <div className="card-report-form"><label>What should we review?<select value={reportReason} onChange={(event) => setReportReason(event.target.value)}>{reportReasons.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><textarea value={reportNote} onChange={(event) => setReportNote(event.target.value)} maxLength={500} rows={2} placeholder="Optional note to help us check it"/><button className="action-button" disabled={reportBusy} onClick={() => void submitCardReport()}>{reportBusy ? "Sending…" : "Send report"}</button></div>}</div>}
-              <div className="study-controls"><button className="control-button" onClick={() => { setCurrent((current - 1 + result.items.length) % result.items.length); setRevealed(false); setSelectedOption(null); }}><ChevronLeft size={16}/> Previous</button><span className="dots">{result.items.slice(0, Math.min(result.items.length, 7)).map((_, index) => <i key={index} className={index === current ? "dot-active" : ""}/>)}</span><button className="control-button next" onClick={() => { setCurrent((current + 1) % result.items.length); setRevealed(false); setSelectedOption(null); }}>Next <ChevronRight size={16}/></button></div>
+              <div className="study-controls"><button className="control-button" onClick={() => { setCurrent((current - 1 + result.items.length) % result.items.length); resetStudyAnswer(); }}><ChevronLeft size={16}/> Previous</button><span className="dots">{result.items.slice(0, Math.min(result.items.length, 7)).map((_, index) => <i key={index} className={index === current ? "dot-active" : ""}/>)}</span><button className="control-button next" onClick={() => { setCurrent((current + 1) % result.items.length); resetStudyAnswer(); }}>Next <ChevronRight size={16}/></button></div>
               {result.sources?.length ? <div className="source-links"><Globe2 size={14}/><span>Sources:</span>{result.sources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer">{source.title}</a>)}</div> : null}
             </div></section>}
+          </div>}
+          {activeView === "finder" && <div className="workspace-view finder-view" key="finder">
+          <div className="workspace-page-heading"><div className="result-kicker"><span/> LEARNING MATERIALS</div><h1>Find your next study source.</h1><p>Search public files by topic, course, book, or tags.</p></div>
           <section className="pdf-finder-section" id="pdf-finder">
             <div className="pdf-finder-heading"><div><div className="result-kicker"><span/> PDF FINDER</div><h2>Find material to study</h2><p>Search the web for PDFs, slides, documents, and other files Dawnstudy can read.</p></div><span className="finder-heading-icon"><Search size={20}/></span></div>
             <form className="finder-form" onSubmit={(event) => void searchMaterials(event)}>
@@ -986,6 +1236,10 @@ export default function Home() {
             {finderSearched && finderResults.length > 0 && <div className="finder-results">{finderResults.map((resource) => <article className="finder-result-card" key={resource.url}><span className="finder-file-type"><FileText size={14}/>{resource.file_type}</span><div className="finder-result-copy"><strong>{resource.title}</strong>{resource.snippet && <p>{resource.snippet}</p>}<small>{resource.url}</small></div><div className="finder-result-actions"><button className="finder-use-link" type="button" onClick={() => useFinderMaterial(resource)}><Plus size={14}/><span>Use for study set</span></button><a className="finder-open-link" href={resource.url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${resource.title}`}><span>Open</span><ExternalLink size={15}/></a></div></article>)}</div>}
             {finderSearched && finderResults.length === 0 && !finderError && <p className="finder-empty">Try a broader topic, a different title, or fewer tags.</p>}
           </section>
+          </div>}
+          {activeView === "library" && <div className="workspace-view library-view" key="library">
+          <div className="workspace-page-heading"><div className="result-kicker"><span/> YOUR STUDY SPACE</div><h1>Everything you’ve saved.</h1><p>Manage shared links, revisit a set, and keep your study rhythm in view.</p></div>
+          {account && progress && <section className="progress-panel" id="study-progress"><div className="progress-copy"><div className="result-kicker"><span/> YOUR STUDY PROGRESS</div><h2>Small steps add up.</h2><p>Review a little each day to keep ideas fresh.</p><div className="progress-stats"><div><strong>{progress.reviewed_today}</strong><span>today</span></div><div><strong>{progress.accuracy}%</strong><span>accuracy</span></div><div><strong>{progress.current_streak} <small>days</small></strong><span>current streak</span></div><div><strong>{progress.best_streak} <small>days</small></strong><span>best streak</span></div></div><div className="week-bars" aria-label="Reviews during the past seven days">{progress.week.map((day) => <div key={day.date} title={`${day.reviews} reviews`}><i style={{ height: `${Math.max(8, Math.min(100, day.reviews * 18))}%` }}/><small>{new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: "narrow" })}</small></div>)}</div></div><button className="review-start" onClick={() => void startReview()}><Clock3 size={17}/><span>Review due</span><b>{progress.due_count}</b><ChevronRight size={16}/></button></section>}
           <section className="active-links-section" id="active-links"><div className="recent-head"><div><div className="section-title-row"><h2>Active Links</h2><span className="recent-count">{activeShares.length}</span></div><p>Share links that are currently enabled for your study sets.</p></div></div>
             {activeShares.length ? <div className="active-links-list">{activeShares.map((share) => {
               const url = `${siteOrigin}/shared/${share.token}`;
@@ -996,6 +1250,9 @@ export default function Home() {
             {sets.length ? <div className="recent-grid">{sets.slice(0, showAll ? sets.length : 3).map((studySet, index) => <div className="recent-card-wrap" key={studySet.id}><button className="recent-card" onClick={() => openSavedSet(studySet)}><span className={`recent-art art-${["aqua", "coral", "gold"][index % 3]}`}><BookOpen size={18}/><span className="art-orbit"/></span><span className="recent-info"><span className="subject-label">{types.find((type) => type.id === studySet.type)?.title.toUpperCase()}</span><strong>{studySet.title}</strong><small>{studySet.items.length} cards <i>·</i> {ageLabel(studySet.created_at)}</small></span><ChevronRight size={16} className="recent-arrow"/></button><button className="recent-delete" title={`Delete ${studySet.title}`} aria-label={`Delete ${studySet.title}`} onClick={() => void removeStudySet(studySet)}><Trash2 size={15}/></button></div>)}</div> : <div className="empty-sets"><Layers3 size={20}/><span>{account ? "Your study sets will appear here after you make one." : "Sign in with your CEU Google account to access Dawnstudy."}</span></div>}
             <div className="bottom-note"><span>✳</span> Little by little, a little becomes a lot. <i>— A study reminder</i></div>
           </section>
+          </div>}
+          {activeView === "voice" && <div className="workspace-view voice-view" key="voice">
+          <div className="workspace-page-heading"><div className="result-kicker"><span/> SPEAK IT TO REMEMBER IT</div><h1>Review it out loud.</h1><p>Have a spoken, back-and-forth study session with your chosen voice and format.</p></div>
           <section className="voice-review" id="voice-review">
             <div className="voice-review-heading"><div><div className="result-kicker"><span/> VOICE REVIEW</div><h2>Talk it through.</h2><p>Choose a topic and a question style for a spoken, back-and-forth review.</p></div><span className="voice-mark"><Mic size={20}/></span></div>
             {!voiceActive ? <div className="voice-setup">
@@ -1021,18 +1278,27 @@ export default function Home() {
             </div>}
             {voiceError && <p className="voice-error" role="alert">{voiceError}</p>}
           </section>
+          </div>}
+          {activeView === "about" && <div className="workspace-view about-view" key="about">
+          <div className="workspace-page-heading"><div className="result-kicker"><span/> BUILT FOR CURIOUS MINDS</div><h1>A calmer way to make learning stick.</h1><p>Dawnstudy turns your learning materials into practical ways to review.</p></div>
           <section className="about-section" id="about"><div className="about-header"><div className="about-identity"><span className="eyebrow"><span/> THE PERSON BEHIND DAWNSTUDY</span><h2>Hey, I’m Devon! <span role="img" aria-label="waving hand">👋</span></h2><p>Computer Engineering Student &amp; Developer</p><strong>Centro Escolar University Manila</strong><div className="about-tags"><span>Network Engineering</span><span>Applied AI</span></div></div></div><div className="about-body"><h3>Building Dawnstudy</h3><p>I’m Jairo Devon A. Daquioag, a Computer Engineering student at Centro Escolar University Manila who enjoys building things that solve problems, no matter how small.</p><p>I created Dawnstudy with my fellow students in mind. I wanted to make studying more accessible by turning PDFs into flashcards, multiple-choice questions, identification questions, and select-all-that-apply exercises—using the AI models available through the configured provider accounts.</p><p>I’m a tech generalist at heart, with a particular interest in Network Engineering and Applied AI. I enjoy exploring technology, experimenting with different AI models, and finding practical ways to use them to make everyday tasks easier.</p><p>For me, technology isn’t just about building something impressive. It’s about building something useful, especially when it can help others without costing them anything.</p></div><div className="about-links"><h3>Let’s connect</h3><a href="https://www.linkedin.com/in/jairo-devon-daquioag-466124295/" target="_blank" rel="noreferrer"><span className="social-mark">in</span><span><strong>LinkedIn</strong><small>Jairo Devon Daquioag</small></span><span className="external-mark">↗</span></a><a href="https://www.instagram.com/jairodaquioag/" target="_blank" rel="noreferrer"><span className="social-mark">◎</span><span><strong>Instagram</strong><small>@jairodaquioag</small></span><span className="external-mark">↗</span></a><a href="mailto:daquioagjairodevon@gmail.com"><span className="social-mark">✉</span><span><strong>Email</strong><small>daquioagjairodevon@gmail.com</small></span><span className="external-mark">↗</span></a></div></section>
+          </div>}
         </div>
       </section>
 
       <nav className="mobile-bottom-nav" aria-label="Main navigation">
-        <button type="button" onClick={() => document.getElementById("home")?.scrollIntoView({ behavior: "smooth" })}><BookOpen size={18}/><span>Study</span></button>
-        <button type="button" onClick={() => document.getElementById("pdf-finder")?.scrollIntoView({ behavior: "smooth" })}><Search size={18}/><span>Finder</span></button>
-        <button type="button" onClick={() => document.getElementById("recent-sets")?.scrollIntoView({ behavior: "smooth" })}><Layers3 size={18}/><span>Sets</span></button>
-        <button type="button" onClick={() => document.getElementById("active-links")?.scrollIntoView({ behavior: "smooth" })}><Share2 size={18}/><span>Links</span></button>
-        <button type="button" onClick={() => document.getElementById("voice-review")?.scrollIntoView({ behavior: "smooth" })}><Mic size={18}/><span>Voice</span></button>
-        <button type="button" onClick={() => document.getElementById("about")?.scrollIntoView({ behavior: "smooth" })}><UserRound size={18}/><span>About</span></button>
+        <button type="button" aria-current={activeView === "study" ? "page" : undefined} onClick={() => navigateTo("study")}><BookOpen size={18}/><span>Study</span></button>
+        <button type="button" aria-current={activeView === "finder" ? "page" : undefined} onClick={() => navigateTo("finder")}><Search size={18}/><span>Finder</span></button>
+        <button type="button" aria-current={activeView === "library" ? "page" : undefined} onClick={() => navigateTo("library")}><Layers3 size={18}/><span>Library</span></button>
+        <button type="button" aria-current={activeView === "voice" ? "page" : undefined} onClick={() => navigateTo("voice")}><Mic size={18}/><span>Voice</span></button>
+        <button type="button" aria-current={activeView === "about" ? "page" : undefined} onClick={() => navigateTo("about")}><UserRound size={18}/><span>About</span></button>
       </nav>
+
+      <aside className={`study-companion ${companionOpen ? "is-open" : ""}`} aria-label="Your study companion">
+        {companionTalking && companionLine && <div className="companion-bubble" role="status" aria-live="polite"><strong>{companionName}</strong><span>{companionLine}</span></div>}
+        {companionOpen && <div className="companion-panel"><div className="companion-panel-head"><div><strong>Make it yours</strong><small>Your little study buddy</small></div><button type="button" className="plain-icon" onClick={() => setCompanionOpen(false)} aria-label="Close companion settings"><X size={16}/></button></div><label className="companion-name-field">Name<input value={companionName} maxLength={24} onChange={(event) => updateCompanion(companionId, event.target.value)}/></label><span className="companion-choice-label">Choose an animal</span><div className="companion-choices">{companionChoices.map((choice) => <button type="button" key={choice.id} className={companionId === choice.id ? "chosen" : ""} aria-pressed={companionId === choice.id} onClick={() => updateCompanion(choice.id, companionName)}><span>{choice.emoji}</span><small>{choice.label}</small></button>)}</div></div>}
+        <button type="button" className="companion-avatar" aria-expanded={companionOpen} aria-label={`${companionName}, open companion settings`} title={`${companionName} · customize study companion`} onClick={() => { setCompanionOpen((open) => !open); setCompanionLine(companionLines[Math.floor(Math.random() * companionLines.length)]); setCompanionTalking(true); }}><span>{currentCompanion.emoji}</span><i/></button>
+      </aside>
 
       {authOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) { setAuthOpen(false); setAuthError(""); } }}>
         <section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title">
