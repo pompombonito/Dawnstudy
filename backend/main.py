@@ -17,6 +17,7 @@ from typing import Any, Literal
 from urllib.parse import unquote, urljoin, urlparse
 from uuid import uuid4
 from material_scope import selected_pages, focus_excerpt
+from study_quality import QUESTION_QUALITY_INSTRUCTIONS, is_source_lookup_question
 from public_fetch import pinned_public_connection
 from generation_jobs import GenerationAlreadyRunning, GenerationJobs, GenerationQueueFull, merge_continued_generation
 
@@ -1507,10 +1508,11 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
             batch = min(8, question_count - len(completed))
             generation_progress("generating" if not completed else "finishing", f"{label} is {'generating' if not completed else 'finishing your questions'}…", len(completed), label)
             prompt = prompt_builder(batch, completed)
+            prompt += "\n" + QUESTION_QUALITY_INSTRUCTIONS
             if excluded_questions:
                 prompt += "\nDo not repeat or closely paraphrase these earlier questions: " + json.dumps(excluded_questions[-MAX_QUESTIONS_PER_GENERATION:], ensure_ascii=False)
             if empty_attempts:
-                prompt += "\nReturn new, complete questions. Ensure answers match options exactly, with all four options concise and similar in length."
+                prompt += "\nReturn new, complete, self-contained concept questions. Do not repeat rejected source-location trivia. Ensure answers match options exactly, with all four options concise and similar in length."
             model_schema = json.loads(json.dumps(schema))
             if provider != "gemini":
                 model_schema["properties"]["items"]["maxItems"] = batch
@@ -1531,6 +1533,7 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
                 candidates = safe_model_items(exc.partial_items)
                 pending = pending or (model_id, provider_failure_reason(exc))
                 print(f"AI provider {provider} ({model}) failed: {describe_provider_failure(exc)}")
+            candidates = [item for item in candidates if not is_source_lookup_question(item["question"])]
             if study_format in {"multiple_choice", "checkbox"}:
                 candidates = [clean for item in candidates if (clean := normalize_choice_item(item, study_format)) is not None and choice_options_have_similar_lengths(clean.get("options"))]
             added = add_unique_items(completed, candidates, question_count, excluded_questions)
