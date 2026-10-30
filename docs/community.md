@@ -4,7 +4,7 @@ New and existing accounts without setup version `2026-10-30` must read and accep
 
 ## Storage and deployment
 
-The existing service account creates five additional tabs in its existing spreadsheet: `Profiles`, `Friendships`, `UserBlocks`, `EncryptedMessages`, `GameResults`. No new credentials are required. Keep the sheet private. The original account/study schemas remain intact. Auth/profile/friend/block reads share a 30-second process cache with immediate invalidation on writes. Message reads share a five-second cache. Presence uses an ephemeral heartbeat and does not write to Sheets.
+The existing service account creates five additional tabs in its existing spreadsheet: `Profiles`, `Friendships`, `UserBlocks`, `EncryptedMessages`, `GameResults`. No new credentials are required. Keep the sheet private. Existing account columns and study records are preserved; `StudySets` adds `items_json_2` through `items_json_10` for longer sets of up to 100 questions, while older single-cell JSON remains readable. Auth/profile/friend/block reads share a 30-second process cache with immediate invalidation on writes. Message reads share a five-second cache. Presence uses an ephemeral heartbeat and does not write to Sheets.
 
 Continue using **one Uvicorn worker** as configured in `render.yaml`. Quiz rooms are server-authoritative process memory, expire after an hour without activity, and disappear when Render restarts. A shared database/pubsub implementation is required before deploying multiple API workers or instances. Finished standings are appended in one Sheets request per game. This is a low-traffic prototype, not a high-volume messaging backend; monitor Sheets quotas as usage grows.
 

@@ -30,6 +30,11 @@ SHARES_TAB = "StudyShares"
 REPORTS_TAB = "CardReports"
 USER_COLUMNS = ["user_id", "username", "email", "password_hash", "google_sub", "display_name", "created_at"]
 SET_COLUMNS = ["set_id", "user_id", "title", "type", "items_json", "sources_json", "created_at", "material_fingerprint", "incomplete", "requested_count", "source_url", "page_ranges_json", "focus_topic"]
+# Keep each stored cell within the existing size budget. Extra columns let
+# longer 100-question sets fit without changing or deleting legacy JSON rows.
+SET_ITEM_COLUMNS = ["items_json", *[f"items_json_{index}" for index in range(2, 11)]]
+SET_COLUMNS += SET_ITEM_COLUMNS[1:]
+SET_CELL_UNITS = 40_000
 USAGE_COLUMNS = ["scope_key", "usage_date", "generation_count"]
 PROGRESS_COLUMNS = ["user_id", "set_id", "card_id", "due_at", "interval_days", "ease_factor", "repetitions", "lapses", "last_reviewed_at", "last_rating"]
 REVIEW_COLUMNS = ["user_id", "set_id", "card_id", "reviewed_at", "rating", "was_correct"]
@@ -45,7 +50,6 @@ SOCIAL_TABLES = {
 _schema_ready = False
 _schema_lock = threading.Lock()
 _user_write_lock = threading.Lock()
-_usage_write_lock = threading.Lock()
 _set_write_lock = threading.Lock()
 _review_write_lock = threading.Lock()
 _row_cache_lock = threading.Lock()
@@ -58,13 +62,6 @@ _sheets_retry_count = 4
 
 class StorageError(RuntimeError):
     pass
-
-
-class UsageLimitExceeded(RuntimeError):
-    def __init__(self, used: int, limit: int):
-        super().__init__("The daily study-set generation limit has been reached.")
-        self.used = used
-        self.limit = limit
 
 
 def _spreadsheet_id() -> str:
@@ -268,12 +265,31 @@ def update_user(row_number: int, user: dict[str, str]) -> None:
         _update_user(row_number, user)
 
 
-def save_study_set(study_set: dict[str, Any]) -> None:
+def _cell_chunks(value: str) -> list[str]:
+    """Split on Unicode character boundaries, budgeting UTF-16 code units."""
+    chunks, start, units = [], 0, 0
+    for index, char in enumerate(value):
+        width = 2 if ord(char) > 0xFFFF else 1
+        if units + width > SET_CELL_UNITS:
+            chunks.append(value[start:index])
+            start, units = index, 0
+        units += width
+    chunks.append(value[start:])
+    return chunks
+
+
+def _study_set_payload(study_set: dict[str, Any]) -> tuple[list[str], str, str]:
     items_json = json.dumps(study_set["items"], ensure_ascii=False, separators=(",", ":"))
     sources_json = json.dumps(study_set.get("sources", []), ensure_ascii=False, separators=(",", ":"))
     page_ranges_json = json.dumps(study_set.get("page_ranges", {}), ensure_ascii=False, separators=(",", ":"))
-    if len(items_json) + len(sources_json) + len(page_ranges_json) > 40_000:
-        raise StorageError("This study set is too large to save in a Google Sheets cell.")
+    chunks = _cell_chunks(items_json)
+    if len(chunks) > len(SET_ITEM_COLUMNS) or any(len(_cell_chunks(value)) > 1 for value in (sources_json, page_ranges_json)):
+        raise StorageError("This study set's text is too large to save. Use more concise questions or fewer source links.")
+    return chunks + [""] * (len(SET_ITEM_COLUMNS) - len(chunks)), sources_json, page_ranges_json
+
+
+def save_study_set(study_set: dict[str, Any]) -> None:
+    chunks, sources_json, page_ranges_json = _study_set_payload(study_set)
     with _set_write_lock:
         _append(
             SETS_TAB,
@@ -282,7 +298,7 @@ def save_study_set(study_set: dict[str, Any]) -> None:
                 str(study_set["user_id"]),
                 str(study_set["title"])[:150],
                 str(study_set["type"]),
-                items_json,
+                chunks[0],
                 sources_json,
                 str(study_set["created_at"]),
                 str(study_set.get("material_fingerprint", "")),
@@ -291,16 +307,13 @@ def save_study_set(study_set: dict[str, Any]) -> None:
                 str(study_set.get("source_url", ""))[:2048],
                 page_ranges_json,
                 str(study_set.get("focus_topic", ""))[:300],
+                *chunks[1:],
             ],
         )
 
 
 def update_study_set(user_id: str, set_id: str, study_set: dict[str, Any]) -> bool:
-    items_json = json.dumps(study_set["items"], ensure_ascii=False, separators=(",", ":"))
-    sources_json = json.dumps(study_set.get("sources", []), ensure_ascii=False, separators=(",", ":"))
-    page_ranges_json = json.dumps(study_set.get("page_ranges", {}), ensure_ascii=False, separators=(",", ":"))
-    if len(items_json) + len(sources_json) + len(page_ranges_json) > 40_000:
-        raise StorageError("This study set is too large to save in a Google Sheets cell.")
+    chunks, sources_json, page_ranges_json = _study_set_payload(study_set)
     with _set_write_lock:
         match = next(
             ((row_number, row) for row_number, row in _rows(SETS_TAB, SET_COLUMNS, use_cache=False)
@@ -310,7 +323,7 @@ def update_study_set(user_id: str, set_id: str, study_set: dict[str, Any]) -> bo
         if not match:
             return False
         row_number, existing = match
-        range_name = quote(f"{SETS_TAB}!A{row_number}:M{row_number}", safe="!:")
+        range_name = quote(f"{SETS_TAB}!A{row_number}:{chr(64 + len(SET_COLUMNS))}{row_number}", safe="!:")
         _api(
             "PUT",
             f"/values/{range_name}",
@@ -320,7 +333,7 @@ def update_study_set(user_id: str, set_id: str, study_set: dict[str, Any]) -> bo
                 user_id,
                 str(study_set["title"])[:150],
                 str(study_set["type"]),
-                items_json,
+                chunks[0],
                 sources_json,
                 existing["created_at"],
                 str(study_set.get("material_fingerprint", existing.get("material_fingerprint", ""))),
@@ -329,6 +342,7 @@ def update_study_set(user_id: str, set_id: str, study_set: dict[str, Any]) -> bo
                 str(study_set.get("source_url", existing.get("source_url", "")))[:2048],
                 page_ranges_json,
                 str(study_set.get("focus_topic", existing.get("focus_topic", "")))[:300],
+                *chunks[1:],
             ]]},
         )
         _invalidate_rows(SETS_TAB)
@@ -436,54 +450,13 @@ def save_card_review(user_id: str, set_id: str, card_id: str, progress: dict[str
         _append(REVIEWS_TAB, [review.get(column, "") for column in REVIEW_COLUMNS])
 
 
-def reserve_daily_generation(scope_key: str, usage_date: str, limit: int) -> int:
-    """Atomically reserve one daily generation within this API process."""
-    with _usage_write_lock:
-        match = next(
-            (
-                (row_number, row)
-                for row_number, row in _rows(USAGE_TAB, USAGE_COLUMNS)
-                if row["scope_key"] == scope_key and row["usage_date"] == usage_date
-            ),
-            None,
-        )
-        if match:
-            row_number, row = match
-            try:
-                used = int(row["generation_count"] or "0")
-            except ValueError:
-                used = 0
-            if used >= limit:
-                raise UsageLimitExceeded(used, limit)
-            _api(
-                "PUT",
-                f"/values/{quote(f'{USAGE_TAB}!C{row_number}', safe='!:')}",
-                params={"valueInputOption": "RAW"},
-                body={"values": [[str(used + 1)]]},
-            )
-            return used + 1
-
-        _append(USAGE_TAB, [scope_key, usage_date, "1"])
-        return 1
-
-
-def release_daily_generation(scope_key: str, usage_date: str) -> None:
-    """Return a reserved allowance when generation or persistence fails."""
-    with _usage_write_lock:
-        match = next(((number, row) for number, row in _rows(USAGE_TAB, USAGE_COLUMNS, use_cache=False) if row["scope_key"] == scope_key and row["usage_date"] == usage_date), None)
-        if match:
-            number, row = match
-            used = max(0, int(row.get("generation_count") or 0) - 1)
-            _api("PUT", f"/values/{quote(f'{USAGE_TAB}!C{number}', safe='!')}" , params={"valueInputOption": "RAW"}, body={"values": [[str(used)]]})
-
-
 def list_study_sets(user_id: str) -> list[dict[str, Any]]:
     result = []
     for _, row in _rows(SETS_TAB, SET_COLUMNS):
         if row["user_id"] != user_id:
             continue
         try:
-            items = json.loads(row["items_json"])
+            items = json.loads("".join(row.get(column, "") for column in SET_ITEM_COLUMNS))
             sources = json.loads(row["sources_json"] or "[]")
         except ValueError:
             continue
