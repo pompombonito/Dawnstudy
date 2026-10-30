@@ -1,4 +1,4 @@
-const BASE = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
+export const dawnstudyApiBase = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
 export async function communityApi<T>(
   token: string,
   path: string,
@@ -6,7 +6,7 @@ export async function communityApi<T>(
   method?: string,
   signal?: AbortSignal,
 ): Promise<T> {
-  const response = await fetch(`${BASE}/api/community${path}`, {
+  const response = await fetch(`${dawnstudyApiBase}/api/community${path}`, {
     method: method || (body === undefined ? "GET" : "POST"),
     headers: {
       Authorization: `Bearer ${token}`,

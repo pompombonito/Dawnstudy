@@ -513,16 +513,24 @@ def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
 
-def create_session(user_id: str) -> str:
+def _create_signed_session(user_id: str, audience: str) -> str:
     secret = os.getenv("SESSION_SECRET", "")
     if len(secret) < 32:
         raise StorageError("Sign-in is not configured yet. Add a random SESSION_SECRET of at least 32 characters on Render.")
-    payload = _b64url(json.dumps({"sub": user_id, "exp": int(time.time()) + 60 * 60 * 24 * 30}, separators=(",", ":")).encode())
+    payload = _b64url(json.dumps({"sub": user_id, "aud": audience, "exp": int(time.time()) + 60 * 60 * 24 * 30}, separators=(",", ":")).encode())
     signature = _b64url(hmac.new(secret.encode(), payload.encode(), hashlib.sha256).digest())
     return payload + "." + signature
 
 
-def verify_session(token: str) -> str | None:
+def create_session(user_id: str) -> str:
+    return _create_signed_session(user_id, "web")
+
+
+def create_local_helper_session(user_id: str) -> str:
+    return _create_signed_session(user_id, "local-helper")
+
+
+def _verify_signed_session(token: str, audience: str) -> str | None:
     secret = os.getenv("SESSION_SECRET", "")
     if len(secret) < 32:
         return None
@@ -533,11 +541,19 @@ def verify_session(token: str) -> str | None:
             return None
         encoded = payload + "=" * (-len(payload) % 4)
         contents = json.loads(base64.urlsafe_b64decode(encoded))
-        if int(contents.get("exp", 0)) < int(time.time()):
+        if int(contents.get("exp", 0)) < int(time.time()) or contents.get("aud", "web") != audience:
             return None
         return str(contents["sub"])
     except (ValueError, TypeError, KeyError, json.JSONDecodeError):
         return None
+
+
+def verify_session(token: str) -> str | None:
+    return _verify_signed_session(token, "web")
+
+
+def verify_local_helper_session(token: str) -> str | None:
+    return _verify_signed_session(token, "local-helper")
 
 
 def verify_google_credential(credential: str) -> dict[str, str]:

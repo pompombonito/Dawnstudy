@@ -4,6 +4,7 @@ import ProfileEditor from "./ProfileEditor";
 import type { Community } from "./useCommunity";
 import type { Theme, ProfileInput } from "./types";
 import { enableMessaging, exportRecovery, importRecovery } from "./crypto";
+import { dawnstudyApiBase } from "./api";
 
 export default function ProfilePage({
   community,
@@ -65,6 +66,36 @@ export default function ProfilePage({
           </button>
         </div>
       </form>
+      <section className="social-card">
+        <span className="eyebrow">DESKTOP STUDY HELPER</span>
+        <h2>Connect Dawnstudy’s hosted models</h2>
+        <p>
+          Copy a 30-day, answer-only connection token, then paste it into the
+          local helper. It sends recognized question text and answer choices to
+          Dawnstudy; screenshots stay on your computer.
+        </p>
+        <button
+          className="social-button primary"
+          disabled={busy}
+          onClick={() =>
+            void operation(async () => {
+              if (!dawnstudyApiBase) throw new Error("The Dawnstudy API address is not configured.");
+              const response = await fetch(`${dawnstudyApiBase}/api/local-helper/connect`, {
+                method: "POST",
+                headers: { Authorization: `Bearer ${community.token}` },
+                cache: "no-store",
+              });
+              const data = await response.json().catch(() => ({}));
+              if (!response.ok || typeof data.token !== "string")
+                throw new Error(typeof data.detail === "string" ? data.detail : "Could not connect the local helper.");
+              await navigator.clipboard.writeText(data.token);
+              setMessage("Connection token copied. Paste it into the local helper and choose Dawnstudy AI.");
+            })
+          }
+        >
+          Copy local-helper connection token
+        </button>
+      </section>
       <section className="social-card">
         <span className="eyebrow">ONLY ON YOUR DEVICE</span>
         <h2>Private chat keys</h2>

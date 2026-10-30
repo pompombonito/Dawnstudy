@@ -7,7 +7,9 @@ import base64
 import ipaddress
 import socket
 import http.client
+import threading
 import time
+from collections import defaultdict, deque
 from contextvars import ContextVar
 from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
@@ -27,7 +29,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from pypdf import PdfReader
 from pptx import Presentation
 from PIL import Image, ImageOps
@@ -37,6 +39,7 @@ import tesserocr
 from accounts import (
     StorageError,
     create_session,
+    create_local_helper_session,
     create_user,
     delete_study_set,
     find_user_by_email,
@@ -57,6 +60,7 @@ from accounts import (
     update_study_set,
     verify_google_credential,
     verify_session,
+    verify_local_helper_session,
 )
 
 app = FastAPI(title="Dawnstudy API", version="1.0.0")
@@ -158,6 +162,20 @@ class VoiceChatRequest(BaseModel):
     mode: Literal["multiple_choice", "identification", "open_ended", "enumeration"] = "open_ended"
 
 
+class LocalHelperLine(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: int = Field(ge=1)
+    text: str = Field(min_length=1, max_length=250)
+    box: list[int] = Field(min_length=4, max_length=4)
+
+
+class LocalHelperAnswerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    lines: list[LocalHelperLine] = Field(min_length=1, max_length=140)
+    multiple_answers: bool = False
+    expected_count: int | None = Field(default=None, ge=1, le=8)
+
+
 class MaterialSearchRequest(BaseModel):
     topic: str = Field(default="", max_length=180)
     subject: str = Field(default="", max_length=120)
@@ -233,6 +251,130 @@ def get_ai_models():
             for model_id, provider, _model, _key, label in configured_ai_models()
         ]
     }
+
+
+@app.post("/api/local-helper/connect")
+def connect_local_helper(user: dict[str, str] = Depends(onboarded_user)):
+    """Issue a scoped 30-day token for the desktop helper's answer endpoint."""
+    try:
+        token = create_local_helper_session(user["user_id"])
+    except StorageError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"token": token, "expires_in_days": 30}
+
+
+def local_helper_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Connect the local helper from your Dawnstudy profile first.")
+    user_id = verify_local_helper_session(credentials.credentials)
+    user = find_user_by_id(user_id) if user_id else None
+    if not user:
+        raise HTTPException(status_code=401, detail="This local-helper connection expired. Connect it again from your Dawnstudy profile.")
+    if not is_allowed_email(user.get("email", "")):
+        raise HTTPException(status_code=403, detail="Dawnstudy hosted models require a verified CEU account.")
+    from social_store import ready
+    try:
+        if not ready(user_id):
+            raise HTTPException(status_code=403, detail="Complete your Dawnstudy profile and user agreement first.")
+    except StorageError as exc:
+        raise storage_http_error(exc) from exc
+    return user
+
+
+_LOCAL_HELPER_CALLS = defaultdict(deque)
+_LOCAL_HELPER_LOCK = threading.Lock()
+
+
+def _limit_local_helper(user_id: str):
+    with _LOCAL_HELPER_LOCK:
+        calls = _LOCAL_HELPER_CALLS[user_id]
+        now = time.monotonic()
+        while calls and now - calls[0] >= 60:
+            calls.popleft()
+        if len(calls) >= 20:
+            raise HTTPException(status_code=429, detail="The local helper is being used too quickly. Wait a minute and try again.")
+        calls.append(now)
+
+
+def _parse_helper_answer(raw: str) -> dict[str, Any]:
+    stripped = raw.strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", stripped, flags=re.IGNORECASE | re.DOTALL)
+    if fenced:
+        stripped = fenced.group(1).strip()
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", stripped):
+        try:
+            value, _ = decoder.raw_decode(stripped, match.start())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    raise ValueError("model response did not contain a JSON object")
+
+
+@app.post("/api/local-helper/answer")
+def local_helper_answer(body: LocalHelperAnswerRequest, user: dict[str, str] = Depends(local_helper_user)):
+    _limit_local_helper(user["user_id"])
+    models = configured_ai_models()
+    if not models:
+        raise HTTPException(status_code=503, detail="No Dawnstudy AI provider is available right now.")
+    source = [line.model_dump() for line in body.lines]
+    source_json = json.dumps(source, ensure_ascii=False, separators=(",", ":"))
+    count_instruction = (
+        f"The quiz specifies exactly {body.expected_count} correct choices; return exactly that many."
+        if body.expected_count else ""
+    )
+    system_prompt = (
+        "You are a capable study-question solver. Solve the active question in the OCR lines for any academic subject. "
+        "Ignore browser tabs, addresses, navigation, page titles, progress counters, unrelated page text, and helper overlays. "
+        "Identify the main question and its answer choices from their line positions. Reason from the whole question, not keywords. "
+        "Return one JSON object only with fields question, question_line_ids, answer_text, correct_answers, confidence, "
+        "multiple_answers, needs_more_context, and explanation. question_line_ids and each answer's line_ids must use supplied IDs. "
+        "Copy the question and correct choice text exactly as shown. If answer choices are visible, return only correct choices. "
+        "For checkbox questions, multiple_answers is true and each correct option must be included. "
+        f"{count_instruction} If no choices are shown, put a concise direct answer in answer_text and use an empty correct_answers array. "
+        "Never invent line IDs. If the question/options are incomplete, set needs_more_context=true. "
+        "confidence is a number from 0 to 1. Keep the explanation to one short sentence."
+    )
+    message = (
+        f"Checkbox question: {body.multiple_answers}. Expected correct-choice count: {body.expected_count or 'not stated'}. "
+        f"OCR lines with screen positions: {source_json}"
+    )
+    primary_id, _reason = choose_auto_model(models, 0, len(source_json), 1)
+    primary = next((choice for choice in models if choice[0] == primary_id), models[0])
+    ordered = fallback_order(primary, [choice for choice in models if choice != primary])
+    pending_fallback = None
+    failures: list[ProviderError] = []
+    for model_id, provider, model, api_key, _label in ordered:
+        try:
+            raw = generate_voice_reply(provider, model, api_key, system_prompt, [], message, temperature=0.1, max_tokens=700)
+            answer = _parse_helper_answer(raw)
+            if not isinstance(answer.get("question"), str) or not isinstance(answer.get("correct_answers"), list):
+                raise ValueError("missing question or choices")
+            if not isinstance(answer.get("answer_text"), str) or not isinstance(answer.get("explanation"), str):
+                raise ValueError("missing answer text")
+            if not isinstance(answer.get("confidence"), (int, float)) or isinstance(answer.get("confidence"), bool):
+                raise ValueError("invalid confidence")
+            if not isinstance(answer.get("multiple_answers"), bool) or not isinstance(answer.get("needs_more_context"), bool):
+                raise ValueError("invalid response flags")
+            return {
+                **answer,
+                "model": model_id,
+                "fallback": {"from": pending_fallback, "to": model_id} if pending_fallback else None,
+            }
+        except ProviderError as exc:
+            failures.append(exc)
+            if pending_fallback is None:
+                pending_fallback = model_id
+            print(f"Local helper model {provider} ({model}) failed: HTTP {exc.status}" if exc.status else f"Local helper model {provider} ({model}) failed")
+        except (ValueError, TypeError) as exc:
+            failures.append(ProviderError(provider, model_id, None, "invalid local-helper answer"))
+            if pending_fallback is None:
+                pending_fallback = model_id
+            print(f"Local helper model {provider} ({model}) returned an invalid answer: {exc}")
+    if failures and all(failure.status == 429 for failure in failures):
+        raise HTTPException(status_code=429, detail="Dawnstudy's hosted model limits are busy. Wait a moment and retry.")
+    raise HTTPException(status_code=503, detail="Dawnstudy's hosted models could not answer this question right now. Try again shortly.")
 
 
 @app.post("/api/auth/google")
@@ -1563,7 +1705,16 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
     raise HTTPException(status_code=503, detail="The configured models could not produce usable questions. Try again shortly or choose another model.")
 
 
-def generate_voice_reply(provider: str, model: str, api_key: str, system_prompt: str, history: list[dict[str, str]], message: str) -> str:
+def generate_voice_reply(
+    provider: str,
+    model: str,
+    api_key: str,
+    system_prompt: str,
+    history: list[dict[str, str]],
+    message: str,
+    temperature: float = 0.65,
+    max_tokens: int = 350,
+) -> str:
     model_id = f"{provider}:{model}"
     try:
         if provider == "gemini":
@@ -1578,7 +1729,7 @@ def generate_voice_reply(provider: str, model: str, api_key: str, system_prompt:
                 payload={
                     "systemInstruction": {"parts": [{"text": system_prompt}]},
                     "contents": contents,
-                    "generationConfig": {"maxOutputTokens": 350},
+                    "generationConfig": {"maxOutputTokens": max_tokens, "temperature": temperature},
                 },
             )
         else:
@@ -1600,8 +1751,8 @@ def generate_voice_reply(provider: str, model: str, api_key: str, system_prompt:
                         *history,
                         {"role": "user", "content": message},
                     ],
-                    "temperature": 0.65,
-                    "max_tokens": 350,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
                 },
             )
     except requests.Timeout as exc:
