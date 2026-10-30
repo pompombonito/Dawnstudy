@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import "../../shared-ui.css";
 
 export const metadata: Metadata = {
   title: "Shared study set | Dawnstudy",

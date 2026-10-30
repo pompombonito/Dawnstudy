@@ -1,0 +1,14 @@
+.study-mascot{display:block;width:100%;height:auto;overflow:visible;isolation:isolate}
+.study-mascot-creature{transform-origin:100px 180px;animation:study-buddy-idle 4.8s ease-in-out infinite}
+.study-mascot-eyes{transform-box:fill-box;transform-origin:center;animation:study-buddy-blink 6.6s ease-in-out infinite}
+.study-mascot-shadow{transform-origin:101px 186px;animation:study-buddy-shadow 4.8s ease-in-out infinite}
+.study-mascot-star{transform-box:fill-box;transform-origin:center;animation:study-buddy-spark 5.6s ease-in-out infinite}
+.study-mascot--bunny .study-mascot-creature{animation-delay:-1.1s}
+.study-mascot--fox .study-mascot-eyes{animation-delay:-2.4s}
+.study-mascot--bear .study-mascot-eyes{animation-delay:-4.2s}
+:root[data-theme="dark"] .study-mascot-shadow{fill:#000;opacity:.25}
+@keyframes study-buddy-idle{0%,100%{transform:translateY(0) rotate(-1deg)}50%{transform:translateY(-4px) rotate(1deg)}}
+@keyframes study-buddy-blink{0%,38%,42%,80%,84%,100%{transform:scaleY(1)}40%,82%{transform:scaleY(.08)}}
+@keyframes study-buddy-shadow{0%,100%{transform:scaleX(1);opacity:.12}50%{transform:scaleX(.9);opacity:.08}}
+@keyframes study-buddy-spark{0%,100%{transform:translateY(0) rotate(-3deg);opacity:.75}50%{transform:translateY(-4px) rotate(5deg);opacity:1}}
+@media(prefers-reduced-motion:reduce){.study-mascot-creature,.study-mascot-eyes,.study-mascot-shadow,.study-mascot-star{animation:none}}

@@ -1,7 +1,4 @@
 import type { Metadata } from "next";
-import "./globals.css";
-import "./account.css";
-import "./theme.css";
 import "./dawn-ui.css";
 
 export const metadata: Metadata = {
