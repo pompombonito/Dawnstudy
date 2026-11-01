@@ -1,0 +1,35 @@
+name: Keep Dawnstudy API awake
+
+on:
+  schedule:
+    # Every five minutes, away from the top-of-hour rush. Scheduling is best effort.
+    - cron: '3-58/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dawnstudy-keep-alive
+  cancel-in-progress: false
+
+jobs:
+  health:
+    # Forks should explicitly opt in with both of their own deployment URLs.
+    if: github.repository == 'pompombonito/Dawnstudy' || (vars.KEEP_ALIVE_API_URL != '' && vars.KEEP_ALIVE_SITE_URL != '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/keep-alive.mjs
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check homepage and API health (including cold-start retries)
+        env:
+          KEEP_ALIVE_SITE_URL: ${{ vars.KEEP_ALIVE_SITE_URL || 'https://dawnstudy.vercel.app/' }}
+          KEEP_ALIVE_API_URL: ${{ vars.KEEP_ALIVE_API_URL || 'https://dawnstudy-api.onrender.com' }}
+        run: node scripts/keep-alive.mjs --once
