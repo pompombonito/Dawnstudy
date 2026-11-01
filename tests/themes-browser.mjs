@@ -9,7 +9,7 @@ const base = process.env.DAWNSTUDY_TEST_URL || "http://127.0.0.1:3044";
 const artifacts = join(tmpdir(), "dawnstudy-theme-qa");
 await mkdir(artifacts, { recursive: true });
 const browser = await chromium.launch({ executablePath: process.env.DAWNSTUDY_BROWSER || "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", headless: true });
-const characters = [["cinnamoroll", "Cinnamoroll"], ["pompompurin", "Pompompurin"], ["kuromi", "Kuromi"], ["hello-kitty", "Hello Kitty"], ["pochacco", "Pochacco"]];
+const characters = [["cinnamoroll", "Cinnamoroll"], ["pompompurin", "Pompompurin"], ["kuromi", "Kuromi"], ["hello-kitty", "Hello Kitty"], ["classic", "Classic"], ["ocean", "Ocean"], ["sepia", "Sepia"], ["forest", "Forest"]];
 const errors = [], savedThemes = [], metrics = [];
 let profile = { user_id: "theme-student", nickname: "June", avatar_id: "kuromi", gender: "prefer-not-to-say", theme: "dark", discoverable: false, companion_id: "cat", companion_name: "Miso", onboarded: true, terms_version: "2026-10-30", terms_accepted_at: "now", key_fingerprint: "", public_key: null };
 
@@ -58,6 +58,8 @@ async function open(p) {
 async function choose(p, name, mode) {
   await open(p);
   const panel = p.locator(".theme-picker-popover");
+  const classic = ["Classic", "Ocean", "Forest", "Sepia"].includes(name);
+  await panel.getByRole("tab", { name: classic ? "Classic" : "Characters", exact: true }).click();
   await panel.getByRole("radio", { name, exact: true }).locator("..").click();
   await panel.getByRole("radio", { name: mode === "light" ? "Light" : "Dark", exact: true }).locator("..").click();
 }
@@ -73,7 +75,7 @@ async function contrast(p) {
     canvas.width = canvas.height = 1;
     const rgba = value => { ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = value; ctx.fillRect(0, 0, 1, 1); return [...ctx.getImageData(0, 0, 1, 1).data]; };
     const lum = c => c.slice(0, 3).map(x => { const s = x / 255; return s <= .04045 ? s / 12.92 : ((s + .055) / 1.055) ** 2.4; }).reduce((a, x, i) => a + x * [.2126, .7152, .0722][i], 0);
-    return ["body", ".creator-heading h2", ".creator-prompt p", ".type-card", ".creator-next", ".theme-picker-heading strong", ".theme-mode-option.is-selected"].flatMap(selector => {
+    return ["body", ".creator-heading h2", ".creator-prompt p", ".type-card", ".creator-next", ".theme-picker-heading strong", ".theme-mode-option.is-selected", ".theme-mode-option:not(.is-selected)", ".theme-classic-description"].flatMap(selector => {
       const el = document.querySelector(selector);
       if (!el || !el.getClientRects().length) return [];
       let bg = el, color;
@@ -99,8 +101,13 @@ try {
     await choose(guest.p, name, mode);
     await themed(guest.p, `${id}-${mode}`);
     assert.equal(await guest.p.evaluate(() => localStorage.getItem("dawnstudy_guest_theme_v1")), `${id}-${mode}`);
-    const colors = await guest.p.evaluate(() => ({ paper: getComputedStyle(document.documentElement).getPropertyValue("--paper").trim(), ink: getComputedStyle(document.body).color }));
-    papers.add(colors.paper);
+    const colors = await guest.p.evaluate(() => ({ paper: getComputedStyle(document.documentElement).getPropertyValue("--paper").trim(), ink: getComputedStyle(document.body).color, accent: getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() }));
+    papers.add(JSON.stringify(colors));
+    if (["classic", "ocean", "forest", "sepia"].includes(id)) {
+      assert.equal(await guest.p.locator(".character-theme-mascot").count(), 0);
+      assert.equal(await guest.p.locator(".theme-trigger-avatar.ds-avatar").count(), 0);
+      assert.equal(await guest.p.locator(".theme-picker-popover .ds-avatar").count(), 0);
+    }
     const checks = await contrast(guest.p);
     for (const check of checks) assert.ok(check.ratio >= 4.5, `${id}-${mode} ${check.selector} contrast ${check.ratio}`);
     metrics.push({ id: `${id}-${mode}`, colors, contrast: checks });
@@ -108,9 +115,9 @@ try {
     await guest.p.keyboard.press("Escape");
     await guest.p.screenshot({ path: join(artifacts, `${id}-${mode}.png`), fullPage: true, animations: "disabled" });
   }
-  assert.equal(papers.size, 10);
+  assert.equal(papers.size, 16);
   await guest.p.reload();
-  await themed(guest.p, "pochacco-dark");
+  await themed(guest.p, "forest-dark");
   for (const width of [320, 390, 768, 1440]) {
     await guest.p.setViewportSize({ width, height: 900 });
     await open(guest.p);
@@ -121,7 +128,7 @@ try {
   }
   await guest.p.goto(`${base}/shared/theme-qa`);
   await guest.p.getByRole("heading", { name: "Shared biology" }).waitFor();
-  await themed(guest.p, "pochacco-dark");
+  await themed(guest.p, "forest-dark");
   await choose(guest.p, "Cinnamoroll", "light");
   await themed(guest.p, "cinnamoroll-light");
   const sharedPaper = await guest.p.locator(".shared-shell").evaluate(el => getComputedStyle(el).backgroundColor);
@@ -144,11 +151,11 @@ try {
   await signed.p.goto(`${base}/shared/theme-qa`);
   await signed.p.getByRole("heading", { name: "Shared biology" }).waitFor();
   await themed(signed.p, "hello-kitty-light");
-  await choose(signed.p, "Cinnamoroll", "dark");
+  await choose(signed.p, "Ocean", "dark");
   await signed.p.waitForTimeout(300);
-  assert.equal(profile.theme, "cinnamoroll-dark");
+  assert.equal(profile.theme, "ocean-dark");
   await signed.p.goto(base);
-  await themed(signed.p, "cinnamoroll-dark");
+  await themed(signed.p, "ocean-dark");
   await signed.p.getByRole("button", { name: "Sign out", exact: true }).first().click();
   await themed(signed.p, "pompompurin-light");
   await signed.p.reload();
@@ -158,8 +165,19 @@ try {
   await fresh.p.goto(base);
   await themed(fresh.p, "kuromi-dark");
   await fresh.c.close();
+  const legacy = await context({ dawnstudy_guest_theme_v1: "pochacco-dark" });
+  await legacy.p.goto(base);
+  await themed(legacy.p, "forest-dark");
+  await open(legacy.p);
+  await legacy.p.locator(".theme-picker-popover").getByRole("tab", { name: "Characters", exact: true }).click();
+  assert.equal(await legacy.p.getByRole("radio", { name: "Pochacco", exact: true }).count(), 0);
+  assert.equal(await legacy.p.locator(".theme-character-fieldset input").count(), 4);
+  await legacy.p.getByRole("tab", { name: "Characters", exact: true }).press("ArrowLeft");
+  assert.equal(await legacy.p.getByRole("tab", { name: "Classic", exact: true }).getAttribute("aria-selected"), "true");
+  await legacy.p.screenshot({ path: join(artifacts, "classic-picker-mobile.png"), fullPage: true, animations: "disabled" });
+  await legacy.c.close();
   assert.deepEqual(errors, []);
   await writeFile(join(artifacts, "theme-checks.json"), JSON.stringify(metrics, null, 2));
-  console.log("PASS all ten themes, contrast, account/guest persistence, shared pages, responsive picker and keyboard dismissal.");
+  console.log("PASS all sixteen themes, classic appearance without character graphics, Pochacco migration, persistence, contrast and responsive picker.");
   console.log(`Screenshots: ${artifacts}`);
 } finally { await browser.close(); }

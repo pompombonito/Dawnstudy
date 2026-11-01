@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./dawn-ui.css";
 import "./community/community.css";
 import "./character-themes.css";
+import "./classic-themes.css";
 import { themeBootstrapScript } from "./community/themes";
 
 export const metadata: Metadata = {

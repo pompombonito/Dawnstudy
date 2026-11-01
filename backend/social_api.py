@@ -40,10 +40,15 @@ class ProfileInput(BaseModel):
     avatar_id: str = Field(max_length=80)
     gender: Literal["male", "female", "gender-diverse", "prefer-not-to-say"]
     theme: Literal[
+        "classic-light", "classic-dark",
+        "ocean-light", "ocean-dark",
+        "forest-light", "forest-dark",
+        "sepia-light", "sepia-dark",
         "cinnamoroll-light", "cinnamoroll-dark",
         "pompompurin-light", "pompompurin-dark",
         "kuromi-light", "kuromi-dark",
         "hello-kitty-light", "hello-kitty-dark",
+        # Older clients may still send these; storage migrates them to Forest.
         "pochacco-light", "pochacco-dark",
         "light", "dark", "rose",
     ]

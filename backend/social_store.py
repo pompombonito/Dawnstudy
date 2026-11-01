@@ -8,14 +8,20 @@ import accounts
 TERMS_VERSION = "2026-10-30"
 LOCK = threading.RLock()
 THEME_IDS = (
+    "classic-light", "classic-dark",
+    "ocean-light", "ocean-dark",
+    "forest-light", "forest-dark",
+    "sepia-light", "sepia-dark",
     "cinnamoroll-light", "cinnamoroll-dark",
     "pompompurin-light", "pompompurin-dark",
     "kuromi-light", "kuromi-dark",
     "hello-kitty-light", "hello-kitty-dark",
-    "pochacco-light", "pochacco-dark",
 )
 DEFAULT_THEME = "kuromi-dark"
-LEGACY_THEMES = {"light": "cinnamoroll-light", "dark": "kuromi-dark", "rose": "hello-kitty-light"}
+LEGACY_THEMES = {
+    "light": "cinnamoroll-light", "dark": "kuromi-dark", "rose": "hello-kitty-light",
+    "pochacco-light": "forest-light", "pochacco-dark": "forest-dark",
+}
 
 
 def normalize_theme(value):

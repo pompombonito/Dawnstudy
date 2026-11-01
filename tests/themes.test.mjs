@@ -9,7 +9,7 @@ const javascript = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
 }).outputText;
 const {
-  CHARACTERS, THEMES, DEFAULT_THEME, THEME_STORAGE_KEY, GUEST_THEME_STORAGE_KEY,
+  CHARACTERS, CLASSICS, THEME_STYLES, THEMES, DEFAULT_THEME, THEME_STORAGE_KEY, GUEST_THEME_STORAGE_KEY,
   SESSION_STORAGE_KEY, normalizeTheme, getTheme, themeFor, setThemeCharacter,
   setThemeMode, readInitialTheme, applyTheme, themeBootstrapScript,
 } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
@@ -17,11 +17,12 @@ const {
 const storage = values => ({ getItem: key => values[key] ?? null });
 const root = () => ({ dataset: {}, style: {} });
 
-test("five characters each have exactly one canonical light and dark theme", () => {
-  assert.deepEqual(CHARACTERS.map(character => character.id), ["cinnamoroll", "pompompurin", "kuromi", "hello-kitty", "pochacco"]);
-  assert.equal(THEMES.length, 10);
-  assert.equal(new Set(THEMES.map(theme => theme.id)).size, 10);
-  for (const character of CHARACTERS) {
+test("four classics and four characters each have light and dark themes", () => {
+  assert.deepEqual(CHARACTERS.map(character => character.id), ["cinnamoroll", "pompompurin", "kuromi", "hello-kitty"]);
+  assert.deepEqual(CLASSICS.map(style => style.id), ["classic", "ocean", "forest", "sepia"]);
+  assert.equal(THEMES.length, 16);
+  assert.equal(new Set(THEMES.map(theme => theme.id)).size, 16);
+  for (const character of THEME_STYLES) {
     assert.deepEqual(THEMES.filter(theme => theme.character === character.id).map(theme => theme.mode).sort(), ["dark", "light"]);
     for (const mode of ["light", "dark"]) {
       const theme = getTheme(themeFor(character.id, mode));
@@ -29,6 +30,7 @@ test("five characters each have exactly one canonical light and dark theme", () 
       assert.equal(theme.colors.length, 3);
       assert.ok(theme.colors.every(color => /^#[0-9a-f]{6}$/i.test(color)));
       assert.ok(theme.name.includes(character.name));
+      assert.equal(theme.category, character.category);
     }
   }
 });
@@ -38,6 +40,9 @@ test("legacy preferences migrate deterministically and unknown values default to
   assert.equal(normalizeTheme("light"), "cinnamoroll-light");
   assert.equal(normalizeTheme("dark"), "kuromi-dark");
   assert.equal(normalizeTheme("rose"), "hello-kitty-light");
+  assert.equal(normalizeTheme("pochacco-light"), "forest-light");
+  assert.equal(normalizeTheme("pochacco-dark"), "forest-dark");
+  assert.ok(THEMES.every(theme => !theme.id.startsWith("pochacco")));
   assert.equal(normalizeTheme("  HELLO-KITTY-DARK  "), "hello-kitty-dark");
   for (const value of [undefined, null, "", "green", "constructor", "__proto__", 1, {}, ["cinnamoroll-light"]]) {
     assert.equal(normalizeTheme(value), DEFAULT_THEME);
@@ -46,7 +51,7 @@ test("legacy preferences migrate deterministically and unknown values default to
 
 test("changing characters preserves the current light or dark mode", () => {
   for (const current of THEMES) {
-    for (const character of CHARACTERS) {
+    for (const character of THEME_STYLES) {
       assert.equal(setThemeCharacter(current.id, character.id), `${character.id}-${current.mode}`);
     }
   }
@@ -62,7 +67,7 @@ test("changing modes preserves the selected character", () => {
 
 test("account preferences require a session and guest preferences stay separate", () => {
   assert.equal(readInitialTheme(storage({ [THEME_STORAGE_KEY]: "pompompurin-light" })), DEFAULT_THEME);
-  assert.equal(readInitialTheme(storage({ [THEME_STORAGE_KEY]: "rose", [GUEST_THEME_STORAGE_KEY]: "pochacco-dark" })), "pochacco-dark");
+  assert.equal(readInitialTheme(storage({ [THEME_STORAGE_KEY]: "rose", [GUEST_THEME_STORAGE_KEY]: "pochacco-dark" })), "forest-dark");
   assert.equal(readInitialTheme(storage({ [SESSION_STORAGE_KEY]: "session", [THEME_STORAGE_KEY]: "rose", [GUEST_THEME_STORAGE_KEY]: "pochacco-dark" })), "hello-kitty-light");
   assert.equal(readInitialTheme(storage({ [SESSION_STORAGE_KEY]: "session", [GUEST_THEME_STORAGE_KEY]: "pochacco-light" })), DEFAULT_THEME);
   assert.equal(readInitialTheme({ getItem() { throw new Error("Storage blocked"); } }), DEFAULT_THEME);
@@ -79,7 +84,7 @@ test("applying a theme maintains old CSS mode selectors and sets character ident
 });
 
 test("prepaint bootstrap matches runtime storage selection for every theme and alias", () => {
-  const values = [...THEMES.map(theme => theme.id), "light", "dark", "rose", "unknown", "__proto__", '";globalThis.injected=true;//', null];
+  const values = [...THEMES.map(theme => theme.id), "light", "dark", "rose", "pochacco-light", "pochacco-dark", "unknown", "__proto__", '";globalThis.injected=true;//', null];
   for (const value of values) {
     for (const hasSession of [false, true]) {
       const preferences = storage({

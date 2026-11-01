@@ -159,46 +159,6 @@
   --on-accent: #472536;
 }
 
-:root[data-character="pochacco"][data-theme="light"] {
-  --paper: #eef4ed;
-  --card: #fbfdf8;
-  --ink: #253b2b;
-  --ink-soft: #506653;
-  --muted: #677960;
-  --line: #d0ddcc;
-  --teal: #3b6d48;
-  --teal-dark: #2e593b;
-  --mint: #dce9d5;
-  --coral: #9c6145;
-  --accent: #accbad;
-  --sidebar: #e5eddf;
-  --deep: #2f4e37;
-  --field: #f2f7ee;
-  --sage: #d0e1c4;
-  --sun: #e8d699;
-  --on-accent: #253e2c;
-}
-
-:root[data-character="pochacco"][data-theme="dark"] {
-  --paper: #17221c;
-  --card: #223028;
-  --ink: #ecf6e9;
-  --ink-soft: #c1d4c0;
-  --muted: #a1b89c;
-  --line: #3c5443;
-  --teal: #add4af;
-  --teal-dark: #91b995;
-  --mint: #304b38;
-  --coral: #e3b094;
-  --accent: #afd4b3;
-  --sidebar: #1c2921;
-  --deep: #e4f1df;
-  --field: #1a281f;
-  --sage: #39563f;
-  --sun: #e3d29d;
-  --on-accent: #233d2c;
-}
-
 :root[data-character][data-theme="light"] {
   color-scheme: light;
   --success: #306b48;

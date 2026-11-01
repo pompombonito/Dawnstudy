@@ -83,7 +83,7 @@ Run `npm run stress-test -- --output docs/load-test-repeat.json` for a bounded p
 
 ## API
 
-Profiles, five character themes with light/dark modes, companion chat, friends, encrypted direct messages, live quizzes, YouTube materials and the agreement flow are documented in [Community features and operations](docs/community.md), including setup, encryption boundaries and regression checks. Kuromi dark is the default before sign-in.
+Profiles, classic and character themes with light/dark modes, companion chat, friends, encrypted direct messages, live quizzes, YouTube materials and the agreement flow are documented in [Community features and operations](docs/community.md), including setup, encryption boundaries and regression checks. Classic palettes are Classic, Ocean, Forest and Sepia; character themes are Cinnamoroll, Pompompurin, Kuromi and Hello Kitty. Kuromi dark is the default before sign-in.
 
 - `GET /api/health` reports API availability and the configured model fallback order; `GET /api/models` lists choices for manual selection.
 - `POST /api/material-search` searches for relevant learning resources using a topic, subject, book/article title, or tags. Results identify direct links to supported file formats when possible. It requires the same Tavily key as web enrichment and a bearer session token from an allowed Google account.

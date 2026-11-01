@@ -2,10 +2,12 @@ export type CharacterTheme =
   | "cinnamoroll"
   | "pompompurin"
   | "kuromi"
-  | "hello-kitty"
-  | "pochacco";
+  | "hello-kitty";
+export type ClassicTheme = "classic" | "ocean" | "forest" | "sepia";
+export type ThemeFamily = CharacterTheme | ClassicTheme;
+export type ThemeCategory = "classic" | "character";
 export type ThemeMode = "light" | "dark";
-export type Theme = `${CharacterTheme}-${ThemeMode}`;
+export type Theme = `${ThemeFamily}-${ThemeMode}`;
 export type ThemeColors = readonly [string, string, string];
 
 export const DEFAULT_THEME: Theme = "kuromi-dark";
@@ -38,22 +40,29 @@ export const CHARACTERS = [
     description: "Ribbon pinks and soft rose.",
     colors: { light: ["#fff1f4", "#fffafb", "#eda2b7"], dark: ["#281a23", "#37232f", "#eeabc0"] },
   },
-  {
-    id: "pochacco",
-    name: "Pochacco",
-    description: "Fresh greens and gentle sage.",
-    colors: { light: ["#eef4ed", "#fbfdf8", "#accbad"], dark: ["#17221c", "#223028", "#afd4b3"] },
-  },
 ] as const;
 
-export function themeFor(character: CharacterTheme, mode: ThemeMode): Theme {
+export const CLASSICS = [
+  { id: "classic", name: "Classic", description: "Clean neutrals and quiet charcoal.", colors: { light: ["#f3f4f6", "#ffffff", "#b9c3ce"], dark: ["#15181c", "#20252b", "#bdcad8"] } },
+  { id: "ocean", name: "Ocean", description: "Calm blue and deep navy.", colors: { light: ["#eef4f8", "#fbfdff", "#a1c9e5"], dark: ["#111c2a", "#1b2b3d", "#a6cff0"] } },
+  { id: "forest", name: "Forest", description: "Fresh greens and gentle sage.", colors: { light: ["#eef4ed", "#fbfdf8", "#accbad"], dark: ["#17221c", "#223028", "#afd4b3"] } },
+  { id: "sepia", name: "Sepia", description: "Warm paper and soft amber.", colors: { light: ["#f7f0e2", "#fffaf0", "#d8bc8b"], dark: ["#261f18", "#33291f", "#dec18f"] } },
+] as const;
+
+export const THEME_STYLES = [
+  ...CLASSICS.map(style => ({ ...style, category: "classic" as const })),
+  ...CHARACTERS.map(style => ({ ...style, category: "character" as const })),
+];
+
+export function themeFor(character: ThemeFamily, mode: ThemeMode): Theme {
   return `${character}-${mode}`;
 }
 
 export type ThemeDefinition = {
   id: Theme;
   name: string;
-  character: CharacterTheme;
+  character: ThemeFamily;
+  category: ThemeCategory;
   mode: ThemeMode;
   description: string;
   colors: ThemeColors;
@@ -61,11 +70,12 @@ export type ThemeDefinition = {
   label: string;
 };
 
-export const THEMES: readonly ThemeDefinition[] = CHARACTERS.flatMap(character =>
+export const THEMES: readonly ThemeDefinition[] = THEME_STYLES.flatMap(character =>
   (["light", "dark"] as const).map(mode => ({
     id: themeFor(character.id, mode),
     name: `${character.name} · ${mode === "light" ? "Light" : "Dark"}`,
     character: character.id,
+    category: character.category,
     mode,
     description: character.description,
     colors: character.colors[mode],
@@ -78,6 +88,8 @@ const LEGACY_ALIASES: Record<string, Theme> = {
   light: "cinnamoroll-light",
   dark: "kuromi-dark",
   rose: "hello-kitty-light",
+  "pochacco-light": "forest-light",
+  "pochacco-dark": "forest-dark",
 };
 const themeIds = new Set<string>(THEMES.map(theme => theme.id));
 
@@ -92,7 +104,7 @@ export function getTheme(value: unknown): ThemeDefinition {
   return THEMES.find(theme => theme.id === id)!;
 }
 
-export function setThemeCharacter(value: unknown, character: CharacterTheme): Theme {
+export function setThemeCharacter(value: unknown, character: ThemeFamily): Theme {
   return themeFor(character, getTheme(value).mode);
 }
 

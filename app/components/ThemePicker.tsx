@@ -2,13 +2,14 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { ChevronDown, Moon, Sun } from "lucide-react";
-import Avatar from "./Avatar";
+import ThemeEmblem from "./ThemeEmblem";
 import {
-  CHARACTERS,
+  THEME_STYLES,
   getTheme,
   setThemeCharacter,
   setThemeMode,
   type Theme,
+  type ThemeCategory,
 } from "../community/themes";
 
 export default function ThemePicker({
@@ -21,12 +22,17 @@ export default function ThemePicker({
   compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [category, setCategory] = useState<ThemeCategory>(() => getTheme(value).category);
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const selected = getTheme(value);
-  const character = CHARACTERS.find(item => item.id === selected.character)!;
+  const family = THEME_STYLES.find(item => item.id === selected.character)!;
+
+  useEffect(() => {
+    if (!open) setCategory(selected.category);
+  }, [open, selected.category]);
 
   useEffect(() => {
     if (!compact || !open) return;
@@ -56,13 +62,23 @@ export default function ThemePicker({
         <small>MAKE IT YOURS</small>
         <strong>Choose your study mood</strong>
       </div>
+      <div className="theme-collection-tabs" role="tablist" aria-label="Theme collection" onKeyDown={event => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const next = event.key === "Home" ? "classic" : event.key === "End" ? "character" : category === "classic" ? "character" : "classic";
+        setCategory(next);
+        event.currentTarget.querySelector<HTMLButtonElement>(`[data-collection="${next}"]`)?.focus();
+      }}>
+        {(["classic", "character"] as const).map(collection => <button key={collection} id={`${id}-${collection}-tab`} data-collection={collection} type="button" role="tab" tabIndex={category === collection ? 0 : -1} aria-selected={category === collection} aria-controls={`${id}-collection`} onClick={() => setCategory(collection)}>{collection === "classic" ? "Classic" : "Characters"}</button>)}
+      </div>
+      <div className="theme-collection-panel" id={`${id}-collection`} role="tabpanel" aria-labelledby={`${id}-${category}-tab`}>
       <fieldset className="theme-character-fieldset">
-        <legend>Character</legend>
-        <div className="theme-character-options">
-          {CHARACTERS.map(item => (
+        <legend>{category === "classic" ? "Palette" : "Character"}</legend>
+        <div className={category === "classic" ? "theme-classic-options" : "theme-character-options"}>
+          {THEME_STYLES.filter(item => item.category === category).map(item => (
             <label
               key={item.id}
-              className={`theme-character-choice${selected.character === item.id ? " is-selected" : ""}`}
+              className={`theme-character-choice${category === "classic" ? " theme-classic-choice" : ""}${selected.character === item.id ? " is-selected" : ""}`}
               data-character={item.id}
               data-mode={selected.mode}
             >
@@ -75,15 +91,17 @@ export default function ThemePicker({
                 checked={selected.character === item.id}
                 onChange={() => onChange(setThemeCharacter(value, item.id))}
               />
-              <Avatar id={item.id} className="theme-character-avatar" />
+              <ThemeEmblem family={item.id} className="theme-character-avatar" />
               <span className="theme-character-name">{item.name}</span>
-              <span className="theme-character-swatches" aria-hidden="true">
+              {category === "classic" && <small className="theme-classic-description">{item.description}</small>}
+              <span className={category === "classic" ? "theme-classic-preview" : "theme-character-swatches"} aria-hidden="true">
                 {item.colors[selected.mode].map(color => <i key={color} style={{ backgroundColor: color }} />)}
               </span>
             </label>
           ))}
         </div>
       </fieldset>
+      </div>
       <fieldset className="theme-mode-fieldset">
         <legend>Appearance</legend>
         <div className="theme-mode-options" role="radiogroup" aria-label="Color mode">
@@ -115,16 +133,16 @@ export default function ThemePicker({
           ref={trigger}
           className="theme-toggle"
           type="button"
-          onClick={() => setOpen(previous => !previous)}
+          onClick={() => { if (!open) setCategory(selected.category); setOpen(previous => !previous); }}
           aria-haspopup="dialog"
           aria-expanded={open}
           aria-controls={`theme-picker-${id}`}
-          aria-label={`Change theme. Current: ${character.name}, ${selected.mode} mode`}
-          title={`${character.name} · ${selected.mode === "light" ? "Light" : "Dark"}`}
+          aria-label={`Change theme. Current: ${family.name}, ${selected.mode} mode`}
+          title={`${family.name} · ${selected.mode === "light" ? "Light" : "Dark"}`}
         >
-          <Avatar id={selected.character} className="theme-trigger-avatar" />
+          <ThemeEmblem family={selected.character} className="theme-trigger-avatar" />
           <span className="theme-picker-current">
-            <span className="theme-picker-current-character">{character.name}</span>
+            <span className="theme-picker-current-character">{family.name}</span>
             <span className="theme-picker-current-mode">{selected.mode === "light" ? "Light" : "Dark"}</span>
           </span>
           <ChevronDown className="theme-picker-chevron" size={14} aria-hidden="true" />

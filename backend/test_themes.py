@@ -42,10 +42,19 @@ class ProfileThemeTests(unittest.TestCase):
     def body(theme):
         return {"nickname": "Student", "avatar_id": "kuromi", "gender": "prefer-not-to-say", "theme": theme, "companion_id": "cat", "companion_name": "Miso"}
 
-    def test_all_ten_themes_round_trip_to_storage_and_bootstrap(self):
-        self.assertEqual(len(store.THEME_IDS), 10)
+    def test_all_registered_themes_round_trip_to_storage_and_bootstrap(self):
+        self.assertEqual(len(store.THEME_IDS), 16)
+        self.assertEqual(len(set(store.THEME_IDS)), 16)
+        self.assertNotIn("pochacco-light", store.THEME_IDS)
+        self.assertNotIn("pochacco-dark", store.THEME_IDS)
+        for family in ("classic", "ocean", "forest", "sepia"):
+            self.assertIn(f"{family}-light", store.THEME_IDS)
+            self.assertIn(f"{family}-dark", store.THEME_IDS)
         for theme in store.THEME_IDS:
             with self.subTest(theme=theme):
+                # Each preference is an independent validation scenario; the
+                # profile rate limiter is tested separately from the catalog.
+                social_api.LIMITS.clear()
                 result = self.client.put("/api/community/profile", json=self.body(theme))
                 self.assertEqual(result.status_code, 200, result.text)
                 self.assertEqual(result.json()["theme"], theme)
@@ -79,6 +88,24 @@ class ProfileThemeTests(unittest.TestCase):
                 result = self.client.get("/api/community/bootstrap")
                 self.assertEqual(result.status_code, 200, result.text)
                 self.assertEqual(result.json()["profile"]["theme"], "kuromi-dark")
+
+    def test_pochacco_preferences_migrate_to_forest_without_changing_icons(self):
+        for mode in ("light", "dark"):
+            with self.subTest(mode=mode):
+                row = self.tables["Profiles"][0]
+                row.update(theme=f"pochacco-{mode}", avatar_id="pochacco", companion_id="pochacco")
+                self.assertEqual(store.profile("student")["theme"], f"forest-{mode}")
+                # Read-time compatibility must not mutate the stored preference.
+                self.assertEqual(row["theme"], f"pochacco-{mode}")
+                saved = store.save_profile("student", {"nickname": "Still me"})
+                self.assertEqual(saved["theme"], f"forest-{mode}")
+                self.assertEqual(saved["avatar_id"], "pochacco")
+                self.assertEqual(saved["companion_id"], "pochacco")
+                body = {**self.body(f"pochacco-{mode}"), "avatar_id": "pochacco", "companion_id": "pochacco"}
+                response = self.client.put("/api/community/profile", json=body)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["theme"], f"forest-{mode}")
+                self.assertEqual(self.tables["Profiles"][0]["theme"], f"forest-{mode}")
 
     def test_non_theme_profile_save_also_migrates_legacy_theme(self):
         self.tables["Profiles"][0]["theme"] = "rose"
