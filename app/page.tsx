@@ -14,7 +14,7 @@ import GameRoom from "./community/GameRoom";
 import CompanionDock from "./community/CompanionDock";
 import Agreement from "./community/Agreement";
 import { DawnArtwork, DawnMark } from "./components/DawnArtwork";
-import { findGenerationJob, GenerationJobError, pollGenerationJob, startGenerationJob, type GenerationJob, type GenerationStatus } from "./generation-jobs";
+import { cancelGenerationJob, findGenerationJob, GenerationCancelledError, GenerationJobError, pollGenerationJob, startGenerationJob, type GenerationJob, type GenerationStatus } from "./generation-jobs";
 import {
   AlarmClock, BookOpen, Check, CheckSquare, ChevronLeft, ChevronRight, CircleHelp, Clock3,
   CloudUpload, Copy, Cpu, ExternalLink, FileText, Flag, Globe2, GraduationCap, Layers3, LogOut, Menu, Mic,
@@ -226,6 +226,9 @@ export default function Home() {
   const [continueBusy, setContinueBusy] = useState(false);
   const [generationStatus, setGenerationStatus] = useState<GenerationStatus | null>(null);
   const [generationNeedsReconnect, setGenerationNeedsReconnect] = useState(false);
+  const [generationCancelRequested, setGenerationCancelRequested] = useState(false);
+  const [generationCancelBusy, setGenerationCancelBusy] = useState(false);
+  const [generationCancelError, setGenerationCancelError] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [result, setResult] = useState<StudySet | null>(null);
@@ -291,6 +294,9 @@ export default function Home() {
   const practicePanel = useRef<HTMLElement>(null);
   const voiceSessionId = useRef(0);
   const generationController = useRef<AbortController | null>(null);
+  const generationJobId = useRef<string | null>(null);
+  const generationCancelIntent = useRef(false);
+  const generationCancelPost = useRef<string | null>(null);
 
   async function loadAccountSets(token: string) {
     if (!API_BASE) return;
@@ -599,6 +605,67 @@ export default function Home() {
     return { baseUrl: API_BASE, token, signal: controller.signal };
   }
 
+  function resetGenerationCancellation() {
+    generationJobId.current = null;
+    generationCancelIntent.current = false;
+    generationCancelPost.current = null;
+    setGenerationCancelRequested(false);
+    setGenerationCancelBusy(false);
+    setGenerationCancelError("");
+  }
+
+  function updateGenerationStatus(status: GenerationStatus, controller: AbortController) {
+    if (controller.signal.aborted || generationController.current !== controller) return;
+    if (status.status === "cancelling" || status.status === "cancelled") {
+      generationCancelIntent.current = true;
+      setGenerationCancelRequested(true);
+      setGenerationCancelError("");
+    } else if (status.stage === "saving" || status.status === "complete") {
+      generationCancelIntent.current = false;
+      setGenerationCancelRequested(false);
+      setGenerationCancelError("");
+    }
+    setGenerationStatus((old) => status.completed < 0
+      ? { ...status, completed: old?.completed || 0, requested: old?.requested || 0, model: old?.model }
+      : status);
+  }
+
+  async function requestGenerationCancellation(jobId: string, token: string, controller: AbortController) {
+    if (controller.signal.aborted || generationController.current !== controller || generationCancelPost.current === jobId) return;
+    generationCancelPost.current = jobId;
+    setGenerationCancelBusy(true);
+    setGenerationCancelError("");
+    try {
+      const job = await cancelGenerationJob<GenerationResult>(jobId, generationOptions(token, controller));
+      if (controller.signal.aborted || generationController.current !== controller || generationJobId.current !== jobId) return;
+      updateGenerationStatus(job, controller);
+      return job;
+    } catch {
+      if (controller.signal.aborted || generationController.current !== controller || generationJobId.current !== jobId) return;
+      generationCancelPost.current = null;
+      generationCancelIntent.current = false;
+      setGenerationCancelRequested(false);
+      setGenerationCancelError("Could not confirm cancellation. We’re still checking this generation. Try Cancel generation again, or reconnect if progress pauses.");
+    } finally {
+      if (!controller.signal.aborted && generationController.current === controller) setGenerationCancelBusy(false);
+    }
+  }
+
+  async function cancelGeneration() {
+    if (!account || !authToken || !generationStatus || generationStatus.stage === "saving" || generationStatus.can_cancel === false
+      || generationCancelIntent.current || generationCancelBusy) return;
+    generationCancelIntent.current = true;
+    setGenerationCancelRequested(true);
+    setGenerationCancelError("");
+    const controller = generationController.current;
+    if (!controller) {
+      await restoreGeneration(authToken, account.id, true);
+    } else if (generationJobId.current) {
+      await requestGenerationCancellation(generationJobId.current, authToken, controller);
+    }
+    // A click during submission is remembered until the server returns its job ID.
+  }
+
   async function acknowledgeGeneration(jobId: string, token: string, signal: AbortSignal) {
     try {
       await fetch(API_BASE + "/api/generation-jobs/" + encodeURIComponent(jobId) + "/acknowledge", {
@@ -665,20 +732,23 @@ export default function Home() {
   }
 
   async function watchGeneration(job: GenerationJob<GenerationResult>, pending: PendingGeneration, token: string, userId: string, controller: AbortController) {
+    if (controller.signal.aborted || generationController.current !== controller) return;
+    generationJobId.current = job.job_id;
     rememberGeneration(userId, pending);
     setGenerationNeedsReconnect(false);
-    const data = await pollGenerationJob(job.job_id, generationOptions(token, controller), (status) => {
-      if (controller.signal.aborted) return;
-      setGenerationStatus((old) => status.completed < 0
-        ? { ...status, completed: old?.completed || 0, requested: old?.requested || 0, model: old?.model }
-        : status);
-    }, job);
+    updateGenerationStatus(job, controller);
+    let initial = job;
+    if (generationCancelIntent.current && (job.status === "queued" || job.status === "running") && job.stage !== "saving" && job.can_cancel !== false) {
+      initial = await requestGenerationCancellation(job.job_id, token, controller) || job;
+    }
+    const data = await pollGenerationJob(job.job_id, generationOptions(token, controller), (status) => updateGenerationStatus(status, controller), initial);
     const synced = await applyGenerationResult(data, token, controller.signal, pending.base);
     if (synced) {
       rememberGeneration(userId, null);
       await acknowledgeGeneration(job.job_id, token, controller.signal);
     }
     if (!controller.signal.aborted) {
+      if (synced) resetGenerationCancellation();
       setGenerationNeedsReconnect(!synced);
       setGenerationStatus(synced ? null : {
         status: "paused", stage: "saving", message: "Your questions are ready. Reconnect to retry saving them to your account.",
@@ -689,9 +759,20 @@ export default function Home() {
 
   async function generationFailure(caught: unknown, userId: string, token: string, controller: AbortController, jobId?: string) {
     if (controller.signal.aborted) return;
+    if (caught instanceof GenerationCancelledError) {
+      rememberGeneration(userId, null);
+      resetGenerationCancellation();
+      setGenerationStatus(null);
+      setGenerationNeedsReconnect(false);
+      setError("");
+      setNotice("Generation cancelled. Your materials are ready if you want to try again.");
+      if (jobId) await acknowledgeGeneration(jobId, token, controller.signal);
+      return;
+    }
     const message = caught instanceof Error ? caught.message : "Could not connect to the generation service.";
     setError(message);
     if (caught instanceof GenerationJobError && caught.terminal) {
+      resetGenerationCancellation();
       rememberGeneration(userId, null); setGenerationStatus(null); setGenerationNeedsReconnect(false);
       if (jobId) await acknowledgeGeneration(jobId, token, controller.signal);
     } else {
@@ -704,6 +785,7 @@ export default function Home() {
   function releaseGeneration(controller: AbortController) {
     if (generationController.current !== controller) return;
     generationController.current = null;
+    setGenerationCancelBusy(false);
     setBusy(false); setContinueBusy(false);
   }
 
@@ -711,6 +793,7 @@ export default function Home() {
     if (!account || !authToken || generationController.current) return;
     if (!API_BASE) { setError("The API address is not configured for this site."); setBusy(false); setContinueBusy(false); return; }
     const token = authToken, userId = account.id, controller = new AbortController();
+    resetGenerationCancellation();
     generationController.current = controller;
     setBusy(!base); setContinueBusy(Boolean(base)); setError(""); setNotice(""); setGenerationNeedsReconnect(false);
     let jobId: string | undefined;
@@ -724,9 +807,14 @@ export default function Home() {
     finally { releaseGeneration(controller); }
   }
 
-  async function restoreGeneration(token: string, userId: string) {
+  async function restoreGeneration(token: string, userId: string, cancelOnRestore = false) {
     if (!API_BASE || generationController.current) return;
     const controller = new AbortController();
+    resetGenerationCancellation();
+    if (cancelOnRestore) {
+      generationCancelIntent.current = true;
+      setGenerationCancelRequested(true);
+    }
     generationController.current = controller;
     setBusy(true); setGenerationNeedsReconnect(false); setError("");
     let jobId: string | undefined;
@@ -735,6 +823,7 @@ export default function Home() {
       let job = await findGenerationJob<GenerationResult>(generationOptions(token, controller));
       if (!job && previous) job = await findGenerationJob<GenerationResult>(generationOptions(token, controller), previous.job_id);
       if (!job) {
+        resetGenerationCancellation();
         rememberGeneration(userId, null); setGenerationStatus(null);
         if (previous) {
           setNotice("This generation is no longer running. Check My Library for its saved study set.");
@@ -861,6 +950,7 @@ export default function Home() {
     if (authToken && community.data?.profile?.onboarded) void communityApi(authToken, "/presence", undefined, "DELETE").catch(() => {});
     setActiveView("study");
     generationController.current?.abort(); generationController.current = null;
+    resetGenerationCancellation();
     setBusy(false); setContinueBusy(false); setGenerationStatus(null); setGenerationNeedsReconnect(false);
     localStorage.removeItem(TOKEN_KEY); setAuthToken(""); setAccount(null); setSets([]); setActiveShares([]); setResult(null); setProgress(null); setReviewActive(false); setReviewQueue([]);
     restoreGuestTheme();
@@ -1225,6 +1315,9 @@ export default function Home() {
 
   const FullscreenIcon = isFullscreen ? Minimize2 : Maximize2;
   const viewTitle: Record<WorkspaceView, string> = { study: "Study desk", library: "My Library", finder: "PDF Finder", voice: "Voice review", about: "About Dawnstudy", friends: "Friends", games: "Play together", profile: "My profile", agreement: "Agreement & privacy" };
+  const generationStopping = generationCancelRequested || generationStatus?.status === "cancelling" || generationStatus?.status === "cancelled";
+  const generationCanCancel = generationStatus && generationStatus.stage !== "saving" && generationStatus.can_cancel !== false
+    && generationStatus.status !== "complete" && generationStatus.status !== "error";
 
   return (
     <main className="shell studio-shell">
@@ -1250,10 +1343,22 @@ export default function Home() {
         </div>
       </aside>
       <section className="main-area" id="home">
-        <header className="topbar"><div className="topbar-left"><button className="mobile-brand" type="button" aria-label="Dawnstudy home" onClick={() => navigateTo("study")}><DawnMark/></button><div className="crumb"><span>YOUR SPACE</span><b>{viewTitle[activeView]}</b></div></div><div className="top-actions">{account && <button className="online-friends" title="Recently online friends" onClick={() => navigateTo("friends")} aria-label={`${community.data?.friends.filter(p => p.online).length || 0} friends online`}><span className="online-friend-faces">{community.data?.friends.filter(p => p.online).slice(0, 3).map(p => <Avatar key={p.id} id={p.avatar_id}/>)}</span><Users size={16}/><span>{community.data?.friends.filter(p => p.online).length || 0} online</span></button>}{generationStatus && <button className="activity-pill" onClick={() => navigateTo("study")}><span/>{generationNeedsReconnect ? "Reconnect" : "Generating"}</button>}<ThemePicker value={theme} onChange={chooseTheme}/><span className="workspace-label"><span/> CEU WORKSPACE</span><button className="top-account" onClick={() => account ? signOut() : setAuthOpen(true)} title={account ? "Sign out" : "Sign in"}>{account ? <LogOut size={18}/> : <UserRound size={18}/>}<span>{account ? "Sign out" : "Sign in"}</span></button></div></header>
+        <header className="topbar"><div className="topbar-left"><button className="mobile-brand" type="button" aria-label="Dawnstudy home" onClick={() => navigateTo("study")}><DawnMark/></button><div className="crumb"><span>YOUR SPACE</span><b>{viewTitle[activeView]}</b></div></div><div className="top-actions">{account && <button className="online-friends" title="Recently online friends" onClick={() => navigateTo("friends")} aria-label={`${community.data?.friends.filter(p => p.online).length || 0} friends online`}><span className="online-friend-faces">{community.data?.friends.filter(p => p.online).slice(0, 3).map(p => <Avatar key={p.id} id={p.avatar_id}/>)}</span><Users size={16}/><span>{community.data?.friends.filter(p => p.online).length || 0} online</span></button>}{generationStatus && <button className="activity-pill" onClick={() => navigateTo("study")}><span/>{generationNeedsReconnect ? "Reconnect" : generationStopping ? "Stopping" : "Generating"}</button>}<ThemePicker value={theme} onChange={chooseTheme}/><span className="workspace-label"><span/> CEU WORKSPACE</span><button className="top-account" onClick={() => account ? signOut() : setAuthOpen(true)} title={account ? "Sign out" : "Sign in"}>{account ? <LogOut size={18}/> : <UserRound size={18}/>}<span>{account ? "Sign out" : "Sign in"}</span></button></div></header>
         <div className="content">
           {(error || notice) && <div className="workspace-feedback" aria-live="polite">{error && <div className="error-box"><CircleHelp size={18}/><span>{error}</span><button className="plain-icon" aria-label="Dismiss error" onClick={() => setError("")}><X size={16}/></button></div>}{notice && <div className="notice-box"><Check size={18}/><span>{notice}</span><button className="plain-icon" aria-label="Dismiss message" onClick={() => setNotice("")}><X size={16}/></button></div>}</div>}
-          {generationStatus && <div className="generation-status" role="status" aria-live="polite"><span className="generation-status-pulse"/><div className="generation-status-copy"><strong>{generationStatus.message || "Preparing your study set…"}</strong><small>{generationStatus.model ? modelName(generationStatus.model) : generationStatus.stage === "queued" ? "Waiting for an available model" : "Dawnstudy generation service"}{generationStatus.requested > 0 && ` · ${generationStatus.completed} of ${generationStatus.requested} ready`}</small></div>{generationStatus.requested > 0 && <div className="generation-progress-track" aria-label={`${generationStatus.completed} of ${generationStatus.requested} questions ready`}><i style={{ width: `${Math.min(100, generationStatus.completed / generationStatus.requested * 100)}%` }}/></div>}{generationNeedsReconnect && account && <button type="button" className="generation-reconnect" disabled={busy || continueBusy} onClick={() => void restoreGeneration(authToken, account.id)}>Reconnect</button>}</div>}
+          {generationStatus && <div className="generation-status" role="status" aria-live="polite">
+            <span className="generation-status-pulse"/>
+            <div className="generation-status-copy">
+              <strong>{generationStopping ? generationNeedsReconnect ? "Stopping… Reconnect to confirm cancellation." : "Stopping… The current request may finish first." : generationStatus.message || "Preparing your study set…"}</strong>
+              <small>{generationStatus.model ? modelName(generationStatus.model) : generationStatus.stage === "queued" ? "Waiting for an available model" : "Dawnstudy generation service"}{generationStatus.requested > 0 && ` · ${generationStatus.completed} of ${generationStatus.requested} ready`}</small>
+              {generationCancelError && <span className="generation-cancel-error" role="alert">{generationCancelError}</span>}
+            </div>
+            {generationStatus.requested > 0 && <div className="generation-progress-track" aria-label={`${generationStatus.completed} of ${generationStatus.requested} questions ready`}><i style={{ width: `${Math.min(100, generationStatus.completed / generationStatus.requested * 100)}%` }}/></div>}
+            {account && <div className="generation-status-actions">
+              {generationNeedsReconnect && <button type="button" className="generation-reconnect" disabled={busy || continueBusy} onClick={() => void restoreGeneration(authToken, account.id)}>Reconnect</button>}
+              <button type="button" className="generation-cancel" disabled={!generationCanCancel || generationStopping || generationCancelBusy} title={generationStatus.stage === "saving" ? "Your questions are being saved." : undefined} onClick={() => void cancelGeneration()}>{generationStopping || generationCancelBusy ? "Stopping…" : "Cancel generation"}</button>
+            </div>}
+          </div>}
           {community.error && account && <div className="social-error" role="alert">{community.error} <button className="text-button" onClick={() => void community.refresh()}>Retry profile connection</button></div>}
           {activeView === "agreement" && <div className="workspace-view social-card agreement-page"><Agreement/></div>}
           {(["friends", "games", "profile"] as WorkspaceView[]).includes(activeView) && !community.data?.profile?.onboarded && <div className="social-card social-empty"><h2>{account ? "Getting your space ready…" : "A little better together."}</h2><p>{account ? "Complete your profile to join the community." : "Sign in with your CEU account to meet friends and play together."}</p><button className="social-button primary" onClick={() => account ? void community.refresh() : setAuthOpen(true)}>{account ? "Retry" : "Sign in"}</button></div>}

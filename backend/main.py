@@ -21,7 +21,7 @@ from uuid import uuid4
 from material_scope import selected_pages, focus_excerpt
 from study_quality import QUESTION_QUALITY_INSTRUCTIONS, is_source_lookup_question
 from public_fetch import pinned_public_connection
-from generation_jobs import GenerationAlreadyRunning, GenerationJobs, GenerationQueueFull, merge_continued_generation
+from generation_jobs import GenerationAlreadyRunning, GenerationCancelled, GenerationJobs, GenerationQueueFull, merge_continued_generation
 
 import requests
 from docx import Document
@@ -91,14 +91,34 @@ FORMATS = {"flashcards", "multiple_choice", "checkbox", "identification"}
 bearer = HTTPBearer(auto_error=False)
 _generation_progress: ContextVar[Any] = ContextVar("generation_progress", default=None)
 _persist_generation: ContextVar[bool] = ContextVar("persist_generation", default=False)
+_generation_cancel: ContextVar[Any] = ContextVar("generation_cancel", default=None)
+_generation_commit: ContextVar[Any] = ContextVar("generation_commit", default=None)
 generation_jobs = GenerationJobs()
 _generation_workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="study-generation")
+_generation_inputs: dict[str, list] = {}
+_generation_inputs_lock = threading.Lock()
 
 
 def generation_progress(stage: str, message: str, completed: int = 0, model: str | None = None):
+    check_generation_cancelled()
     callback = _generation_progress.get()
     if callback:
         callback({"stage": stage, "message": message, "completed": completed, "model": model})
+
+
+def check_generation_cancelled():
+    callback = _generation_cancel.get()
+    if callback:
+        callback()
+
+
+def begin_generation_commit():
+    check_generation_cancelled()
+    callback = _generation_commit.get()
+    if callback:
+        callback()
+
+
 AI_MODELS = {
     "groq:openai/gpt-oss-120b": ("groq", "openai/gpt-oss-120b", "GPT-OSS 120B"),
     "groq:openai/gpt-oss-20b": ("groq", "openai/gpt-oss-20b", "GPT-OSS 20B"),
@@ -1204,12 +1224,15 @@ def provider_error_diagnostics(response: requests.Response) -> tuple[str | None,
 def post_provider_json(url: str, headers: dict[str, str], payload: dict[str, Any]) -> requests.Response:
     """Send UTF-8 JSON without expanding every non-ASCII character into a unicode escape."""
     request_headers = {**headers, "Content-Type": "application/json; charset=utf-8"}
-    return requests.post(
+    check_generation_cancelled()
+    response = requests.post(
         url,
         headers=request_headers,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         timeout=60,
     )
+    check_generation_cancelled()
+    return response
 
 
 def compact_provider_prompt(prompt: str) -> str | None:
@@ -1331,6 +1354,7 @@ def parse_study_set_json(content: Any) -> dict[str, Any]:
 
 
 def generate_with_provider(provider: str, model: str, api_key: str, prompt: str, schema: dict[str, Any], max_tokens: int) -> dict[str, Any]:
+    check_generation_cancelled()
     """Call one provider and normalize its JSON response."""
     model_id = f"{provider}:{model}"
     strict_json_models = {
@@ -1652,6 +1676,7 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
     title, fallback, pending = "", None, None
     deadline, attempts = time.monotonic() + 300, 0
     for model_id, provider, model, api_key, label in ordered:
+        check_generation_cancelled()
         empty_attempts = 0
         while len(completed) < question_count and attempts < 32 and time.monotonic() < deadline:
             attempts += 1
@@ -1671,13 +1696,16 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
                 try:
                     payload = generate_with_provider(provider, model, api_key, prompt, model_schema, max(3500, 1000 + batch * 550))
                 except ProviderError as exc:
+                    check_generation_cancelled()
                     compacted = compact_provider_prompt(prompt) if exc.status == 413 else None
                     if not compacted:
                         raise
                     payload = generate_with_provider(provider, model, api_key, compacted, model_schema, max(3500, 1000 + batch * 550))
+                check_generation_cancelled()
                 title = title or str(payload.get("title") or "").strip()
                 candidates = safe_model_items(payload.get("items"))
             except ProviderError as exc:
+                check_generation_cancelled()
                 failures.append(exc)
                 failed = exc
                 candidates = safe_model_items(exc.partial_items)
@@ -2117,6 +2145,7 @@ def generate(
     }
 
     if _persist_generation.get():
+        begin_generation_commit()
         generation_progress("saving", "Saving your study set…", len(result["items"]))
         try:
             saved = add_study_set(SavedStudySet(**result), user)
@@ -2125,6 +2154,7 @@ def generate(
             # Return generated questions even when Sheets is temporarily
             # unavailable so the user can study them and the client can retry sync.
             result["persistence_error"] = str(exc.detail)
+    check_generation_cancelled()
     return result
 
 
@@ -2193,35 +2223,65 @@ async def start_generation_job(
         update({**event, "status": "running"})
 
     def run():
-        uploads = [UploadFile(filename=name, file=BytesIO(raw)) for name, raw in raw_files]
+        uploads = []
         progress_token = _generation_progress.set(progress)
         persist_token = _persist_generation.set(not bool(existing_questions) and base_set is None)
+        cancel_token = _generation_cancel.set(lambda: generation_jobs.raise_if_cancelled(job_id))
+        commit_token = _generation_commit.set(lambda: generation_jobs.begin_commit(job_id))
         try:
+            check_generation_cancelled()
             update({"status": "running"})
+            with _generation_inputs_lock:
+                captured = _generation_inputs.pop(job_id, [])
+                uploads = [UploadFile(filename=name, file=BytesIO(raw)) for name, raw in captured]
+                captured.clear()
+            check_generation_cancelled()
             result = generate(file=None, files=uploads, source_url=source_url, page_ranges=page_ranges, focus_topic=focus_topic, format=format, use_web=use_web, model=model, question_count=question_count, difficulty=difficulty, existing_questions=existing_questions, expected_material_fingerprint=expected_material_fingerprint, user=user)
             if base_set:
                 result = merge_continued_generation(base_set, result)
+                begin_generation_commit()
                 update({"stage": "saving", "message": "Saving your updated study set…", "completed": len(result["items"])})
                 try:
                     result.update(extend_study_set(study_set_id, SavedStudySet(**result), user))
                 except HTTPException as exc:
                     result["persistence_error"] = str(exc.detail)
+            begin_generation_commit()
             update({"status": "complete", "stage": "complete",
                     "message": "Your questions are saved. Continue when ready." if result.get("incomplete") else "Your study set is ready.",
                     "completed": len(result["items"]), "result": result})
+        except GenerationCancelled:
+            generation_jobs.finish_cancelled(job_id)
         except HTTPException as exc:
-            update({"status": "error", "message": exc.detail, "error_status": exc.status_code})
+            if generation_jobs.is_cancelled(job_id):
+                generation_jobs.finish_cancelled(job_id)
+            else:
+                update({"status": "error", "message": exc.detail, "error_status": exc.status_code})
         except Exception as exc:
-            print(f"Generation job failed: {type(exc).__name__}: {exc}")
-            update({"status": "error", "message": "Generation could not finish. Please try again shortly.", "error_status": 503})
+            if generation_jobs.is_cancelled(job_id):
+                generation_jobs.finish_cancelled(job_id)
+            else:
+                print(f"Generation job failed: {type(exc).__name__}: {exc}")
+                update({"status": "error", "message": "Generation could not finish. Please try again shortly.", "error_status": 503})
         finally:
+            with _generation_inputs_lock:
+                _generation_inputs.pop(job_id, []).clear()
+            _generation_cancel.reset(cancel_token)
+            _generation_commit.reset(commit_token)
             _generation_progress.reset(progress_token)
             _persist_generation.reset(persist_token)
             for upload in uploads:
                 upload.file.close()
+            # A cancel can race the error handler's state check. Always release
+            # its admission slot after the worker has actually stopped.
+            if generation_jobs.is_cancelled(job_id):
+                generation_jobs.finish_cancelled(job_id)
+    with _generation_inputs_lock:
+        _generation_inputs[job_id] = raw_files
     try:
         _generation_workers.submit(run)
     except RuntimeError:
+        with _generation_inputs_lock:
+            _generation_inputs.pop(job_id, []).clear()
         update({"status": "error", "message": "The generation queue is restarting. Please try again.", "error_status": 503})
     return generation_jobs.get(job_id, user["user_id"])
 
@@ -2244,6 +2304,17 @@ def acknowledge_generation_job(job_id: str, user: dict[str, str] = Depends(authe
     if not generation_jobs.acknowledge(job_id, user["user_id"]):
         raise HTTPException(status_code=404, detail="Generation not found.")
     return {"ok": True}
+
+
+@app.post("/api/generation-jobs/{job_id}/cancel")
+def cancel_generation_job(job_id: str, user: dict[str, str] = Depends(authenticated_user)):
+    job = generation_jobs.cancel(job_id, user["user_id"])
+    if not job:
+        raise HTTPException(status_code=404, detail="Generation not found.")
+    if job["status"] == "cancelled":
+        with _generation_inputs_lock:
+            _generation_inputs.pop(job_id, []).clear()
+    return job
 
 
 @app.post("/api/voice/chat")

@@ -7,7 +7,7 @@ const source = readFileSync(new URL("../app/generation-jobs.ts", import.meta.url
 const javascript = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
 }).outputText;
-const { findGenerationJob, startGenerationJob, pollGenerationJob, GenerationJobError } =
+const { findGenerationJob, startGenerationJob, cancelGenerationJob, pollGenerationJob, GenerationJobError, GenerationCancelledError } =
   await import("data:text/javascript;base64," + Buffer.from(javascript).toString("base64"));
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -102,4 +102,138 @@ test("expired monitoring remains reconnectable, while missing jobs are terminal"
     pollGenerationJob("job-1", options(async () => json({ detail: "Missing" }, 404)), () => {}),
     error => error instanceof GenerationJobError && error.terminal,
   );
+});
+
+test("cancelling sends one authenticated POST to the exact encoded job and returns its state", async () => {
+  const calls = [];
+  const controller = new AbortController();
+  const job = { ...running, job_id: "job/1?", status: "cancelling", stage: "cancelling", can_cancel: false };
+  const config = options(async (url, request) => { calls.push([url, request]); return json(job); }, controller);
+  assert.deepEqual(await cancelGenerationJob(job.job_id, config), job);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], "https://api.example/api/generation-jobs/job%2F1%3F/cancel");
+  assert.equal(calls[0][1].method, "POST");
+  assert.deepEqual(calls[0][1].headers, { Authorization: "Bearer own-account-token" });
+  assert.equal(calls[0][1].signal, controller.signal);
+  assert.equal(calls[0][1].cache, "no-store");
+  assert.equal(calls[0][1].body, undefined);
+  assert.equal(controller.signal.aborted, false, "Requesting cancellation must not abort monitoring");
+});
+
+test("a queued job cancelled immediately is a dedicated terminal outcome without further polling", async () => {
+  const cancelled = { ...running, status: "cancelled", stage: "cancelled", message: "Generation cancelled.", can_cancel: false };
+  const calls = [];
+  const config = options(async (url, request) => {
+    calls.push([url, request.method]);
+    if (request.method !== "POST") assert.fail("Cancelled queue entry must not be polled again");
+    return json(cancelled);
+  });
+  const acknowledged = await cancelGenerationJob("job-1", config);
+  const statuses = [];
+  await assert.rejects(pollGenerationJob("job-1", config, status => statuses.push(status), acknowledged), error => {
+    assert.ok(error instanceof GenerationCancelledError);
+    assert.ok(error instanceof GenerationJobError);
+    assert.equal(error.name, "GenerationCancelledError");
+    assert.equal(error.terminal, true);
+    assert.equal(error.cancelled, true);
+    assert.equal(error.message, "Generation cancelled.");
+    return true;
+  });
+  assert.deepEqual(statuses.map(status => status.status), ["cancelled"]);
+  assert.equal(calls.length, 1);
+});
+
+test("running cancellation keeps polling until the worker acknowledges cancellation", async () => {
+  const cancelling = { ...running, status: "cancelling", stage: "cancelling", message: "Stopping generation…", can_cancel: false };
+  const requests = [], statuses = [];
+  const config = options(async (url, request) => {
+    requests.push([url, request.method || "GET"]);
+    if (request.method === "POST") return json(cancelling);
+    return json({ ...cancelling, status: "cancelled", stage: "cancelled", message: "Stopped before another provider request." });
+  });
+  const acknowledged = await cancelGenerationJob("job-1", config);
+  await assert.rejects(pollGenerationJob("job-1", config, status => statuses.push(status), acknowledged), error => error instanceof GenerationCancelledError);
+  assert.deepEqual(statuses.map(status => status.status), ["cancelling", "cancelled"]);
+  assert.equal(statuses[0].completed, 8);
+  assert.deepEqual(requests.map(([, method]) => method), ["POST", "GET"]);
+});
+
+test("temporary polling failure keeps a pending cancellation visible until confirmation", async () => {
+  let calls = 0;
+  const statuses = [];
+  const cancelling = { ...running, status: "cancelling", stage: "cancelling", can_cancel: false };
+  const config = options(async () => {
+    calls++;
+    return calls === 1 ? json({ detail: "Temporary outage" }, 503) : json({ ...cancelling, status: "cancelled", message: "Cancelled" });
+  });
+  await assert.rejects(pollGenerationJob("job-1", config, status => statuses.push(status), cancelling), error => error instanceof GenerationCancelledError);
+  assert.deepEqual(statuses.map(status => status.status), ["cancelling", "cancelling", "cancelled"]);
+  assert.equal(statuses[1].stage, "cancelling");
+  assert.equal(statuses[1].can_cancel, false);
+  assert.match(statuses[1].message, /confirm cancellation/i);
+});
+
+test("an already completed job returned by cancellation retains its saved result", async () => {
+  const complete = { ...running, status: "complete", result, can_cancel: false };
+  let calls = 0;
+  const config = options(async (_url, request) => {
+    calls++;
+    assert.equal(request.method, "POST");
+    return json(complete);
+  });
+  const acknowledged = await cancelGenerationJob("job-1", config);
+  assert.deepEqual(await pollGenerationJob("job-1", config, () => {}, acknowledged), result);
+  assert.equal(calls, 1);
+});
+
+test("a cancellation that arrives during durable saving follows the authoritative save state", async () => {
+  const saving = { ...running, stage: "saving", message: "Saving your questions…", can_cancel: false };
+  const statuses = [];
+  const config = options(async (_url, request) => request.method === "POST" ? json(saving) : json({ ...saving, status: "complete", result }));
+  const acknowledged = await cancelGenerationJob("job-1", config);
+  assert.equal(acknowledged.status, "running");
+  assert.equal(acknowledged.can_cancel, false);
+  assert.deepEqual(await pollGenerationJob("job-1", config, status => statuses.push(status), acknowledged), result);
+  assert.deepEqual(statuses.map(status => status.status), ["running", "complete"]);
+});
+
+for (const status of [401, 403, 404]) {
+  test(`cancel HTTP ${status} preserves its authorization or missing-job explanation`, async () => {
+    const config = options(async () => json({ detail: `Cannot cancel: ${status}` }, status));
+    await assert.rejects(cancelGenerationJob("job-1", config), error => error instanceof GenerationJobError && error.terminal && error.message === `Cannot cancel: ${status}`);
+  });
+}
+
+for (const status of [429, 503]) {
+  test(`cancel HTTP ${status} remains reconnectable and does not resubmit generation`, async () => {
+    let calls = 0;
+    const config = options(async (url, request) => {
+      calls++;
+      assert.ok(url.endsWith("/job-1/cancel"));
+      assert.equal(request.method, "POST");
+      return json({ detail: "Please retry cancellation" }, status);
+    });
+    await assert.rejects(cancelGenerationJob("job-1", config), error => error instanceof GenerationJobError && !error.terminal);
+    assert.equal(calls, 1);
+  });
+}
+
+test("a lost cancel response never submits new work or assumes the worker has stopped", async () => {
+  const calls = [];
+  const config = options(async (url, request) => { calls.push([url, request]); throw new TypeError("Failed to fetch"); });
+  await assert.rejects(cancelGenerationJob("job-1", config), error => error instanceof GenerationJobError && !error.terminal && /confirm cancellation/.test(error.message));
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0][0].endsWith("/job-1/cancel"));
+});
+
+test("an aborted cancellation request sends no network request", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(cancelGenerationJob("job-1", options(async () => assert.fail("Cancelled request must not run"), controller)), error => error.name === "AbortError");
+});
+
+test("unreadable or mismatched cancel replies require reconnecting to the original job", async () => {
+  for (const response of [new Response("not JSON"), json({ ...running, job_id: "another-job" })]) {
+    await assert.rejects(cancelGenerationJob("job-1", options(async () => response)), error => error instanceof GenerationJobError && !error.terminal && /same (?:generation|job)/.test(error.message));
+  }
 });

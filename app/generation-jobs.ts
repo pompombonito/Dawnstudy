@@ -1,8 +1,10 @@
+export type GenerationJobState = "queued" | "running" | "cancelling" | "cancelled" | "complete" | "error";
+
 export type GenerationStatus = {
-  status: string; stage: string; message: string; completed: number; requested: number; model?: string | null;
+  status: GenerationJobState | "paused" | "reconnecting"; stage: string; message: string; completed: number; requested: number; model?: string | null; can_cancel?: boolean;
 };
 
-export type GenerationJob<Result> = GenerationStatus & { job_id: string; result?: Result; error_status?: number };
+export type GenerationJob<Result> = Omit<GenerationStatus, "status"> & { status: GenerationJobState; job_id: string; result?: Result; error_status?: number };
 type RequestOptions = { baseUrl: string; token: string; signal: AbortSignal; fetcher?: typeof fetch };
 type PollOptions = RequestOptions & { intervalMs?: number; timeoutMs?: number };
 
@@ -12,6 +14,14 @@ export class GenerationJobError extends Error {
     super(message);
     this.name = "GenerationJobError";
     this.terminal = terminal;
+  }
+}
+
+export class GenerationCancelledError extends GenerationJobError {
+  readonly cancelled = true;
+  constructor(message = "Generation cancelled.") {
+    super(message, true);
+    this.name = "GenerationCancelledError";
   }
 }
 
@@ -62,6 +72,29 @@ export async function startGenerationJob<Result>(form: FormData, options: Reques
     requested: Number(form.get("question_count")) || 0, ...body };
 }
 
+export async function cancelGenerationJob<Result>(jobId: string, options: RequestOptions): Promise<GenerationJob<Result>> {
+  options.signal.throwIfAborted();
+  let response: Response;
+  try {
+    response = await (options.fetcher || fetch)(options.baseUrl + "/api/generation-jobs/" + encodeURIComponent(jobId) + "/cancel", {
+      method: "POST", headers: { Authorization: "Bearer " + options.token }, signal: options.signal, cache: "no-store",
+    });
+  } catch (error) {
+    if (options.signal.aborted) throw error;
+    // The cancellation may have reached the API. Poll/reconnect to this job;
+    // never submit a replacement generation to resolve an uncertain response.
+    throw new GenerationJobError("Could not confirm cancellation. Reconnect to check the same generation.");
+  }
+  if (!response.ok) throw new GenerationJobError(await errorMessage(response), response.status < 500 && response.status !== 429);
+  let body: GenerationJob<Result>;
+  try { body = await response.json(); }
+  catch { throw new GenerationJobError("The cancellation response could not be read. Reconnect to check the same generation."); }
+  if (body.job_id !== jobId) throw new GenerationJobError("The cancellation response did not identify this generation. Reconnect to check the same job.");
+  // Saving may already have started, or the job may have finished. Its current
+  // state is authoritative; a successful POST alone does not mean cancelled.
+  return body;
+}
+
 function pause(milliseconds: number, signal: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
     if (signal.aborted) { reject(new DOMException("Generation monitoring stopped.", "AbortError")); return; }
@@ -77,6 +110,7 @@ export async function pollGenerationJob<Result>(
   const deadline = Date.now() + (options.timeoutMs ?? 12 * 60 * 1000);
   let current = initial;
   let failures = 0;
+  let cancellationPending = false;
   while (Date.now() < deadline) {
     if (options.signal.aborted) throw new DOMException("Generation monitoring stopped.", "AbortError");
     try {
@@ -84,15 +118,20 @@ export async function pollGenerationJob<Result>(
       current = undefined;
       if (!job) throw new GenerationJobError("This generation is no longer available. Check My Library for its saved questions.", true);
       failures = 0;
+      cancellationPending = job.status === "cancelling";
       onStatus(job);
+      if (job.status === "cancelled") throw new GenerationCancelledError(job.message || undefined);
       if (job.status === "error") throw new GenerationJobError(job.message || "Generation could not finish. Please try again.", true);
       if (job.status === "complete" && job.result) return job.result;
     } catch (error) {
       if (options.signal.aborted || (error instanceof GenerationJobError && error.terminal)) throw error;
       failures += 1;
       onStatus({
-        status: "reconnecting", stage: "reconnecting", message: "Reconnecting to your generation. Your job is still running…",
+        status: cancellationPending ? "cancelling" : "reconnecting",
+        stage: cancellationPending ? "cancelling" : "reconnecting",
+        message: cancellationPending ? "Reconnecting to confirm cancellation…" : "Reconnecting to your generation. Checking its latest status…",
         completed: -1, requested: 0,
+        ...(cancellationPending ? { can_cancel: false } : {}),
       });
     }
     await pause(Math.min(5000, (options.intervalMs ?? 1100) * Math.max(1, failures)), options.signal);

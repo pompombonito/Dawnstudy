@@ -1,7 +1,9 @@
+import json
+import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
-from generation_jobs import GenerationAlreadyRunning, GenerationJobs, GenerationQueueFull, merge_continued_generation
+from generation_jobs import GenerationAlreadyRunning, GenerationCancelled, GenerationJobs, GenerationQueueFull, merge_continued_generation
 
 
 class GenerationRecoveryTests(unittest.TestCase):
@@ -73,6 +75,140 @@ class GenerationRecoveryTests(unittest.TestCase):
         store.update(job_id, status="complete", result={"items": ["original"]})
         store.get(job_id, "alice")["result"]["items"].append("changed")
         self.assertEqual(store.get(job_id, "alice")["result"]["items"], ["original"])
+
+
+class GenerationCancellationTests(unittest.TestCase):
+    def setUp(self):
+        self.now = [100.0]
+        self.store = GenerationJobs(capacity=1, clock=lambda: self.now[0])
+
+    def test_only_the_owner_can_cancel_and_private_state_is_not_exposed(self):
+        job_id = self.store.start("alice", 10)
+        self.assertIsNone(self.store.cancel(job_id, "bob"))
+        self.assertIsNone(self.store.cancel("missing", "alice"))
+        self.assertFalse(self.store.is_cancelled(job_id))
+        public = self.store.get(job_id, "alice")
+        self.assertTrue(public["can_cancel"])
+        for private in ("user_id", "_cancel_event", "_committing", "updated", "acknowledged"):
+            self.assertNotIn(private, public)
+        json.dumps(public)  # Thread primitives must never reach API JSON/deepcopy.
+
+    def test_queued_cancellation_stops_work_and_releases_its_slot_immediately(self):
+        job_id = self.store.start("alice", 10)
+        cancelled = self.store.cancel(job_id, "alice")
+        self.assertEqual((cancelled["status"], cancelled["stage"]), ("cancelled", "cancelled"))
+        self.assertFalse(cancelled["can_cancel"])
+        self.assertTrue(self.store.is_cancelled(job_id))
+        with self.assertRaises(GenerationCancelled):
+            self.store.raise_if_cancelled(job_id)
+        self.assertFalse(self.store.update(job_id, status="running", stage="generating"))
+        self.assertEqual(self.store.get(job_id, "alice")["status"], "cancelled")
+        self.assertEqual(self.store.cancel(job_id, "alice"), cancelled)
+        replacement = self.store.start("alice", 10)
+        self.assertNotEqual(replacement, job_id)
+        self.assertEqual(self.store.recover("alice")["job_id"], replacement)
+
+    def test_running_cancellation_keeps_capacity_until_worker_acknowledges(self):
+        job_id = self.store.start("alice", 10)
+        self.store.update(job_id, status="running", stage="generating", completed=3)
+        cancelling = self.store.cancel(job_id, "alice")
+        self.assertEqual(cancelling["status"], "cancelling")
+        self.assertFalse(cancelling["can_cancel"])
+        self.assertEqual(self.store.cancel(job_id, "alice")["status"], "cancelling")
+        with self.assertRaises(GenerationAlreadyRunning):
+            self.store.start("alice", 10)
+        with self.assertRaises(GenerationQueueFull):
+            self.store.start("bob", 10)
+        # Late provider callbacks retain useful counts without undoing cancellation.
+        self.assertFalse(self.store.update(job_id, status="running", stage="generating", completed=5))
+        self.assertEqual(self.store.get(job_id, "alice")["stage"], "cancelling")
+        self.assertEqual(self.store.get(job_id, "alice")["completed"], 5)
+        self.assertFalse(self.store.update(job_id, status="complete", result={"items": ["late"]}))
+        self.assertEqual(self.store.get(job_id, "alice")["status"], "cancelling")
+        self.assertEqual(self.store.finish_cancelled(job_id)["status"], "cancelled")
+        self.assertNotIn("result", self.store.get(job_id, "alice"))
+        self.store.start("bob", 10)
+
+    def test_cancel_before_commit_prevents_saving(self):
+        job_id = self.store.start("alice", 10)
+        self.store.update(job_id, status="running")
+        self.store.cancel(job_id, "alice")
+        with self.assertRaises(GenerationCancelled):
+            self.store.begin_commit(job_id)
+        self.assertEqual(self.store.finish_cancelled(job_id)["status"], "cancelled")
+
+    def test_commit_fence_preserves_durable_work_when_cancel_arrives_late(self):
+        job_id = self.store.start("alice", 10)
+        self.store.update(job_id, status="running")
+        self.assertTrue(self.store.begin_commit(job_id))
+        self.assertTrue(self.store.begin_commit(job_id))  # Safe for nested save paths.
+        saving = self.store.cancel(job_id, "alice")
+        self.assertEqual((saving["status"], saving["stage"]), ("running", "saving"))
+        self.assertFalse(saving["can_cancel"])
+        self.assertFalse(self.store.is_cancelled(job_id))
+        self.store.raise_if_cancelled(job_id)
+        self.assertEqual(self.store.finish_cancelled(job_id)["stage"], "saving")
+        self.assertTrue(self.store.update(job_id, status="complete", stage="complete", result={"id": "saved"}))
+        self.assertEqual(self.store.cancel(job_id, "alice")["result"], {"id": "saved"})
+        self.assertFalse(self.store.update(job_id, status="error", message="late exception"))
+        self.assertEqual(self.store.get(job_id, "alice")["status"], "complete")
+
+    def test_cancel_and_commit_are_mutually_exclusive_under_race(self):
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            for _ in range(24):
+                store = GenerationJobs(capacity=1)
+                job_id = store.start("alice", 10)
+                store.update(job_id, status="running")
+                barrier = threading.Barrier(2)
+
+                def commit():
+                    barrier.wait()
+                    try:
+                        store.begin_commit(job_id)
+                        return "committed"
+                    except GenerationCancelled:
+                        return "cancelled"
+
+                def cancel():
+                    barrier.wait()
+                    return store.cancel(job_id, "alice")
+
+                commit_result = pool.submit(commit)
+                cancel_result = pool.submit(cancel)
+                outcome = commit_result.result()
+                cancellation = cancel_result.result()
+                if outcome == "committed":
+                    self.assertEqual(cancellation["stage"], "saving")
+                    self.assertFalse(store.is_cancelled(job_id))
+                else:
+                    self.assertEqual(cancellation["status"], "cancelling")
+                    self.assertTrue(store.is_cancelled(job_id))
+                    self.assertEqual(store.finish_cancelled(job_id)["status"], "cancelled")
+
+    def test_cancelled_jobs_support_recovery_acknowledgement_and_expiry(self):
+        job_id = self.store.start("alice", 10)
+        self.store.cancel(job_id, "alice")
+        self.assertEqual(self.store.recover("alice")["status"], "cancelled")
+        self.assertFalse(self.store.acknowledge(job_id, "bob"))
+        self.assertTrue(self.store.acknowledge(job_id, "alice"))
+        self.assertIsNone(self.store.recover("alice"))
+        self.now[0] += 901
+        self.assertIsNone(self.store.get(job_id, "alice"))
+        self.assertTrue(self.store.is_cancelled(job_id))
+        with self.assertRaises(GenerationCancelled):
+            self.store.raise_if_cancelled(job_id)
+        self.assertIsNone(self.store.finish_cancelled(job_id))
+
+    def test_cancelling_job_does_not_expire_while_provider_is_still_running(self):
+        job_id = self.store.start("alice", 10)
+        self.store.update(job_id, status="running")
+        self.store.cancel(job_id, "alice")
+        self.now[0] += 901
+        self.assertEqual(self.store.recover("alice")["status"], "cancelling")
+        self.assertTrue(self.store.acknowledge(job_id, "alice"))
+        self.assertEqual(self.store.recover("alice")["status"], "cancelling")
+        with self.assertRaises(GenerationQueueFull):
+            self.store.start("bob", 10)
 
 
 class ContinuedGenerationTests(unittest.TestCase):
