@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
-const { chromium } = await import(pathToFileURL(process.env.DAWNSTUDY_PLAYWRIGHT_PATH || "C:/Users/daqui/AppData/Local/Temp/dawn-qa/node_modules/playwright-core/index.mjs").href);
+const { chromium } = await import(process.env.DAWNSTUDY_PLAYWRIGHT_PATH ? pathToFileURL(process.env.DAWNSTUDY_PLAYWRIGHT_PATH).href : "playwright-core");
 const browser = await chromium.launch({ executablePath: process.env.DAWNSTUDY_BROWSER || "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", headless: true });
 const base = process.env.DAWNSTUDY_TEST_URL || "http://127.0.0.1:3044";
 const profile = { user_id: "cancel-student", nickname: "Student", avatar_id: "cat", theme: "kuromi-dark", gender: "prefer-not-to-say", companion_id: "cat", companion_name: "Miso", onboarded: true, terms_version: "2026-10-30", public_key: null, key_fingerprint: "" };

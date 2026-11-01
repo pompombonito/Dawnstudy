@@ -20,6 +20,7 @@ import {
   type SafetyInfo,
 } from "./companion-safety";
 import CompanionSafetyCard from "./CompanionSafetyCard";
+import { animeCompanionBubble, companionNameAfterSelection, findAnimeCharacter } from "./anime-companions";
 
 type Turn = {
   role: "user" | "assistant";
@@ -63,6 +64,7 @@ export default function CompanionDock({
     running = useRef(false);
   const request = useRef<AbortController | null>(null);
   const sequence = useRef(0);
+  const bubbleSequence = useRef(0);
   const [showHelp, setShowHelp] = useState(false);
   useEffect(
     () => () => {
@@ -81,7 +83,7 @@ export default function CompanionDock({
       /* Use defaults. */
     }
     const chosenId = p?.companion_id || local?.id || "cat",
-      chosenName = p?.companion_name || local?.name || "Miso";
+      chosenName = p?.companion_name || local?.name || findAnimeCharacter(chosenId)?.name || "Miso";
     setId(chosenId);
     setName(chosenName);
     setDraftId(chosenId);
@@ -130,13 +132,20 @@ export default function CompanionDock({
         ?.scrollIntoView({ block: "start", behavior: "instant" });
   }, [showHelp]);
   useEffect(() => {
-    if (open || quiet) return;
+    setBubble("");
+    bubbleSequence.current = 0;
+  }, [id]);
+  useEffect(() => {
+    if (open || quiet) {
+      setBubble("");
+      return;
+    }
     const timer = setInterval(() => {
       if (!document.hidden)
-        setBubble(lines[Math.floor(Math.random() * lines.length)]);
+        setBubble(animeCompanionBubble(id, bubbleSequence.current++)?.text || lines[Math.floor(Math.random() * lines.length)]);
     }, 150000);
     return () => clearInterval(timer);
-  }, [open, quiet]);
+  }, [open, quiet, id]);
   useEffect(() => {
     if (!bubble) return;
     const timer = setTimeout(
@@ -321,7 +330,11 @@ export default function CompanionDock({
                   placeholder="Your buddy's name"
                 />
               </label>
-              <AvatarPicker value={draftId} onChange={setDraftId} companions />
+              <AvatarPicker value={draftId} onChange={(nextId) => {
+                setDraftName((currentName) => companionNameAfterSelection(currentName, draftId, nextId));
+                setDraftId(nextId);
+                setSaved("");
+              }} companions />
               <label className="checkline">
                 <input
                   type="checkbox"

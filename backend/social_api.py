@@ -6,6 +6,7 @@ import secrets
 import threading
 import time
 from collections import defaultdict, deque
+from pathlib import Path
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,6 +18,9 @@ PRESENCE = {}
 LIMITS = defaultdict(deque)
 RATE_LOCK = threading.Lock()
 ANIMALS = {"cat", "fox", "bunny", "bear", "dog", "owl", "panda", "capybara", "penguin", "duck", "pompompurin", "cinnamoroll", "kuromi", "hello-kitty", "my-melody", "keroppi", "pochacco", "tuxedosam", "badtz-maru"}
+with Path(__file__).with_name("anime-characters.json").open(encoding="utf-8") as catalog_file:
+    ANIME = frozenset(character["id"] for character in json.load(catalog_file))
+COMPANIONS = ANIMALS | ANIME
 
 
 def limited(user, action, count=20, seconds=60):
@@ -161,9 +165,9 @@ def create_router(authenticated_user, reply):
         name = body.companion_name.strip()
         if len(nickname) < 2 or not name or any(ord(c) < 32 for c in nickname + name):
             raise HTTPException(422, "Use a nickname of 2–24 characters and a companion name without control characters.")
-        if body.avatar_id not in ANIMALS and not re.fullmatch(r"portrait-(?:male|female)-(?:daily|clinical|lab|scrubs|sport|formal)-[0-7]", body.avatar_id):
+        if body.avatar_id not in COMPANIONS and not re.fullmatch(r"portrait-(?:male|female)-(?:daily|clinical|lab|scrubs|sport|formal)-[0-7]", body.avatar_id):
             raise HTTPException(422, "Choose an available profile icon.")
-        if body.companion_id not in ANIMALS:
+        if body.companion_id not in COMPANIONS:
             raise HTTPException(422, "Choose an available companion.")
         changes = body.model_dump(exclude={"accept_terms", "terms_version"})
         changes.update(nickname=nickname, companion_name=name, discoverable=str(body.discoverable).lower())

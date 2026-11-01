@@ -2,6 +2,7 @@
 import { useState } from "react";
 import Avatar from "../components/Avatar";
 import { animals, portraits } from "./catalog";
+import { animeCharacters, animeSeries, filterAnimeCharacters, findAnimeCharacter } from "./anime-companions";
 import ThemePicker from "../components/ThemePicker";
 import { DEFAULT_THEME } from "./themes";
 import type { ProfileInput, Theme } from "./types";
@@ -33,15 +34,23 @@ export function AvatarPicker({
   onChange: (id: string) => void;
   companions?: boolean;
 }) {
-  const [filter, setFilter] = useState("animals");
+  const [filter, setFilter] = useState(findAnimeCharacter(value) ? "anime" : "animals");
   const [outfit, setOutfit] = useState("all");
+  const [series, setSeries] = useState("all");
+  const [search, setSearch] = useState("");
   const [limit, setLimit] = useState(24);
   const choices =
     filter === "animals"
       ? animals.slice(0, 10).map(([id, label]) => ({ id, label }))
       : filter === "characters"
         ? animals.slice(10).map(([id, label]) => ({ id, label }))
-        : portraits.filter(
+        : filter === "anime"
+          ? filterAnimeCharacters(series, search).map((character) => ({
+              id: character.id,
+              label: character.name,
+              series: character.series,
+            }))
+          : portraits.filter(
             (p) =>
               p.id.includes(`-${filter}-`) &&
               (outfit === "all" || p.id.includes(`-${outfit}-`)),
@@ -53,6 +62,7 @@ export function AvatarPicker({
           ...[
             ["animals", "Animals"],
             ["characters", "Characters"],
+            ["anime", "Anime"],
           ],
           ...(!companions
             ? [
@@ -74,6 +84,38 @@ export function AvatarPicker({
           </button>
         ))}
       </div>
+      {filter === "anime" && (
+        <div className="anime-filters">
+          <label className="outfit-filter">
+            Anime series
+            <select
+              aria-label="Anime series"
+              value={series}
+              onChange={(event) => {
+                setSeries(event.target.value);
+                setLimit(24);
+              }}
+            >
+              <option value="all">All series</option>
+              {animeSeries.map((title) => <option key={title} value={title}>{title}</option>)}
+            </select>
+          </label>
+          <label className="outfit-filter">
+            Search anime characters
+            <input
+              aria-label="Search anime characters"
+              type="search"
+              value={search}
+              onChange={(event) => {
+                setSearch(event.target.value);
+                setLimit(24);
+              }}
+              placeholder="Character or series"
+            />
+          </label>
+          <small className="subtle" role="status">{choices.length} {choices.length === 1 ? "character" : "characters"}</small>
+        </div>
+      )}
       {!companions && ["male", "female"].includes(filter) && (
         <label className="outfit-filter">
           Study outfit
@@ -100,8 +142,8 @@ export function AvatarPicker({
             type="button"
             key={choice.id}
             className={value === choice.id ? "chosen" : ""}
-            title={choice.label}
-            aria-label={choice.label}
+            title={"series" in choice ? `${choice.label} · ${choice.series}` : choice.label}
+            aria-label={"series" in choice ? `${choice.label} · ${choice.series}` : choice.label}
             aria-pressed={value === choice.id}
             onClick={() => onChange(choice.id)}
           >
@@ -109,9 +151,11 @@ export function AvatarPicker({
             <small>
               {choice.label.split(" · ").slice(1).join(" · ") || choice.label}
             </small>
+            {"series" in choice && <small>{String(choice.series)}</small>}
           </button>
         ))}
       </div>
+      {choices.length === 0 && <p className="subtle">No characters match. Try another name or series.</p>}
       {limit < choices.length && (
         <button
           className="social-button"
@@ -190,7 +234,7 @@ export default function ProfileEditor({
         </span>
       </label>
       <h3>
-        Find your look <span className="subtle">115 icons</span>
+        Find your look <span className="subtle">{animals.length + portraits.length + animeCharacters.length} icons</span>
       </h3>
       <AvatarPicker
         value={value.avatar_id}

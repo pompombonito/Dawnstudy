@@ -2061,6 +2061,59 @@
 .source-mode-toggle {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
+
+.anime-filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.anime-filters .outfit-filter {
+  display: grid !important;
+  align-items: start;
+  justify-content: stretch;
+  gap: 6px !important;
+  min-width: 0;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+}
+.anime-filters .outfit-filter select,
+.anime-filters .outfit-filter input {
+  width: 100% !important;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 44px !important;
+  padding: 9px 10px !important;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--field);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 400;
+}
+.anime-filters > .subtle { grid-column: 1 / -1; font-size: 11px; }
+.avatar-picker:has(.anime-filters) .avatar-grid {
+  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+  gap: 9px;
+}
+.avatar-picker:has(.anime-filters) .avatar-grid button { padding: 8px 5px; }
+.avatar-picker:has(.anime-filters) .avatar-grid button.chosen { padding: 7px 4px; }
+.avatar-picker:has(.anime-filters) .avatar-grid small:first-of-type {
+  color: var(--ink);
+  font-size: 11px;
+  line-height: 1.4;
+  font-weight: 600;
+}
+.avatar-picker:has(.anime-filters) .avatar-grid small + small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+.anime-avatar { border-radius: 24%; overflow: hidden; }
+@media (max-width: 700px) {
+  .anime-filters { grid-template-columns: minmax(0, 1fr); }
+  .anime-filters .outfit-filter input { font-size: 16px; }
+}
 @media (max-width: 700px) {
   .source-mode-toggle {
     grid-template-columns: 1fr;

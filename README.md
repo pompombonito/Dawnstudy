@@ -13,6 +13,10 @@ Supported materials are PDF, PowerPoint (`.pptx`), DOCX, TXT, Markdown, and PNG/
 
 Page/slide selection accepts a blank field, `All pages`, `All slides`, `all`, or `*` for the whole document, ignoring capitalization and extra spacing. Numbered selections support inputs such as `1-5, 8`, `pages 1 to 5; 8`, Unicode dashes, and line-separated lists. Duplicate page numbers are combined, and trailing separators are tolerated. Invalid, reversed or out-of-bounds ranges still return a clear error rather than selecting unexpected material. The same parser handles uploads, direct document links and saved selections reused for continuation.
 
+Question generation runs as an account-scoped background job that can be recovered after a refresh. **Cancel generation** stops queued work immediately and requests cooperative cancellation of running work. A provider request already in flight can finish first; no further batches or saves begin after cancellation is acknowledged. The final save is protected once it starts. Cancelling preserves the selected materials and any existing study set being continued.
+
+Profiles offer 190 icons, including **75 anime chibis across 15 series**. Choose **Anime** in the profile icon picker or in **Customize companion**; filter by series or search by character name. All 75 also work as companions. Occasional bubbles alternate original study encouragement with verified short signature lines where available, every 150 seconds while the page is visible and the dock is closed. Quiet mode pauses bubbles. The [character roster and references](docs/anime-companions.md) distinguish quoted dialogue from original study encouragement.
+
 ## Deploy
 
 ### API on Render

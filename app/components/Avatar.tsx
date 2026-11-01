@@ -1,5 +1,7 @@
 "use client";
 import StudyMascot from "./StudyMascot";
+import AnimeAvatar from "./AnimeAvatar";
+import { findAnimeCharacter } from "../community/anime-companions";
 
 export default function Avatar({
   id = "cat",
@@ -10,6 +12,8 @@ export default function Avatar({
   className?: string;
   label?: string;
 }) {
+  const animeCharacter = findAnimeCharacter(id);
+  if (animeCharacter) return <AnimeAvatar character={animeCharacter} className={className} label={label}/>;
   if (["cat", "fox", "bunny", "bear"].includes(id))
     return (
       <span
