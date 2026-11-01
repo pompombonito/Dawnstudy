@@ -51,3 +51,11 @@ Original study encouragement is separate from these quotations and is never pres
 ## Implementation
 
 The single catalog lives in `backend/anime-characters.json` so it is included by Render’s backend root directory. Frontend pickers and backend profile validation consume the same IDs. Both avatar and companion IDs persist with the profile. Original study lines and short excerpts run locally and do not make AI calls. Companion AI chat and its existing help behavior are unchanged.
+
+## Expression and transparency revision
+
+All 75 portraits now have individual eye contours, iris/pupil proportions, brows, mouths, jaw shapes, and selective blush. Stern, sleepy, anxious and masked characters retain those distinctions. SVG background tiles, circles, sparkles and borders have been removed; the icons have transparent surroundings.
+
+Visual audits: [Black Clover through Tokyo Revengers](chibi-reference-a.md), [Slime through Naruto](chibi-reference-b.md), [JJK through Yona](chibi-reference-c.md). These link actual licensed chibi references and explicitly identify the few character-sheet fallbacks.
+
+The follow-up art direction also uses the user's three supplied style references: a chibi expression chart, a colored deadpan hoodie chibi, and broad-cheek line art. The revised SVGs keep character colors, use flatter fills and clearer dark outlines, and omit decorative backgrounds. The references guide proportions and expression readability rather than replacing individual character traits.

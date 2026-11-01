@@ -12,7 +12,26 @@
     "accessory": "headband",
     "reference": "https://bclover-movie.jp/character/",
     "quote": "My magic is never giving up!",
-    "quoteSource": "https://blackclover.fandom.com/wiki/Asta"
+    "quoteSource": "https://blackclover.fandom.com/wiki/Asta",
+    "face": {
+      "eyes": "round",
+      "eyeWidth": 13.0,
+      "eyeHeight": 12.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.57,
+      "pupilScale": 0.53,
+      "eyeTilt": 4.0,
+      "gazeX": 0,
+      "brow": "angry",
+      "mouth": "toothy",
+      "faceShape": "round",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": true
+    },
+    "chibiReference": "https://bclover.jp/season1/goods/item.php?id=1017628",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-yuno",
@@ -20,12 +39,31 @@
     "series": "Black Clover",
     "studyLine": "Try explaining that idea in your own words. You might know more than you think.",
     "hair": "#202830",
-    "eyes": "#c99b47",
+    "eyes": "#b69347",
     "outfit": "#ece9dc",
     "bg": "#e4ecd9",
     "style": "spiky",
     "accessory": "pendant",
-    "reference": "https://bclover-movie.jp/character/"
+    "reference": "https://bclover-movie.jp/character/",
+    "face": {
+      "eyes": "half-lidded",
+      "eyeWidth": 13.0,
+      "eyeHeight": 9.0,
+      "eyeSpacing": 26.88,
+      "irisScale": 0.61,
+      "pupilScale": 0.42,
+      "eyeTilt": 1.0,
+      "gazeX": 0,
+      "brow": "flat",
+      "mouth": "neutral",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false
+    },
+    "chibiReference": "https://bclover.jp/season1/goods/item.php?id=1017628",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-noelle",
@@ -38,7 +76,26 @@
     "bg": "#e4ecd9",
     "style": "twintails",
     "accessory": "ribbon",
-    "reference": "https://bclover-movie.jp/character/"
+    "reference": "https://bclover-movie.jp/character/",
+    "face": {
+      "eyes": "almond",
+      "eyeWidth": 14.0,
+      "eyeHeight": 12.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.72,
+      "pupilScale": 0.5,
+      "eyeTilt": 6.0,
+      "gazeX": 0,
+      "brow": "arched",
+      "mouth": "pout",
+      "faceShape": "pointed",
+      "blush": 0.1,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": true
+    },
+    "chibiReference": "https://bclover.jp/season1/goods/item.php?id=1017628",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-yami",
@@ -51,7 +108,28 @@
     "bg": "#e4ecd9",
     "style": "messy",
     "accessory": "stubble",
-    "reference": "https://bclover-movie.jp/character/"
+    "reference": "https://bclover-movie.jp/character/",
+    "face": {
+      "eyes": "sleepy",
+      "eyeWidth": 14.0,
+      "eyeHeight": 8.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.43,
+      "pupilScale": 0.4,
+      "eyeTilt": -2.0,
+      "gazeX": -0.4,
+      "brow": "tired",
+      "mouth": "neutral",
+      "faceShape": "square",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "undereye": true,
+      "browWeight": 2.1
+    },
+    "chibiReference": "https://bclover.jp/season1/goods/item.php?id=1017628",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-charmy",
@@ -64,7 +142,27 @@
     "bg": "#e4ecd9",
     "style": "bun",
     "accessory": "snack",
-    "reference": "https://bclover-movie.jp/character/"
+    "reference": "https://bclover-movie.jp/character/",
+    "face": {
+      "eyes": "round",
+      "eyeWidth": 13.0,
+      "eyeHeight": 14.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.78,
+      "pupilScale": 0.64,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "raised",
+      "mouth": "open-smile",
+      "faceShape": "round",
+      "blush": 0.3,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": true,
+      "mouthScale": 1.15
+    },
+    "chibiReference": "https://bclover.jp/season1/goods/item.php?id=1023833",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-eren",
@@ -77,7 +175,27 @@
     "bg": "#dce4db",
     "style": "swept",
     "accessory": "cloak",
-    "reference": "https://shingeki.tv/season2/character/"
+    "reference": "https://shingeki.tv/season2/character/",
+    "face": {
+      "eyes": "angular",
+      "eyeWidth": 14.0,
+      "eyeHeight": 12.0,
+      "eyeSpacing": 26.88,
+      "irisScale": 0.52,
+      "pupilScale": 0.48,
+      "eyeTilt": 5.0,
+      "gazeX": 0,
+      "brow": "angry",
+      "mouth": "frown",
+      "faceShape": "square",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "browWeight": 2.4
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/4095/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-mikasa",
@@ -90,7 +208,26 @@
     "bg": "#dce4db",
     "style": "bob",
     "accessory": "red-scarf",
-    "reference": "https://shingeki.tv/season2/character/"
+    "reference": "https://shingeki.tv/season2/character/",
+    "face": {
+      "eyes": "almond",
+      "eyeWidth": 13.0,
+      "eyeHeight": 10.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.62,
+      "pupilScale": 0.55,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "flat",
+      "mouth": "neutral",
+      "faceShape": "oval",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/4048/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-levi",
@@ -106,7 +243,28 @@
     "reference": "https://shingeki.tv/season2/character/",
     "quote": "Choose the path you'll regret least.",
     "quoteSource": "https://kyodonewsprwire.jp/prwfile/release/M105003/201807065759/_prw_OR1fl_sA5ZYWGt.pdf",
-    "quoteNote": "English translation of the Japanese line in the licensed Attack campaign."
+    "quoteNote": "English translation of the Japanese line in the licensed Attack campaign.",
+    "face": {
+      "eyes": "half-lidded",
+      "eyeWidth": 14.0,
+      "eyeHeight": 7.0,
+      "eyeSpacing": 26.88,
+      "irisScale": 0.53,
+      "pupilScale": 0.42,
+      "eyeTilt": 1.0,
+      "gazeX": 0,
+      "brow": "tired",
+      "mouth": "frown",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "undereye": true,
+      "mouthScale": 0.8
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/4167/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-armin",
@@ -119,7 +277,27 @@
     "bg": "#dce4db",
     "style": "bob",
     "accessory": "cloak",
-    "reference": "https://shingeki.tv/season2/character/"
+    "reference": "https://shingeki.tv/season2/character/",
+    "face": {
+      "eyes": "round",
+      "eyeWidth": 12.0,
+      "eyeHeight": 15.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.8,
+      "pupilScale": 0.6,
+      "eyeTilt": -2.0,
+      "gazeX": 0,
+      "brow": "worried",
+      "mouth": "wavy",
+      "faceShape": "round",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": true,
+      "mouthScale": 0.65
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/4474/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-hange",
@@ -127,12 +305,32 @@
     "series": "Attack on Titan",
     "studyLine": "Mistakes are clues. Check what happened, then try once more.",
     "hair": "#5c4036",
-    "eyes": "#9a684c",
+    "eyes": "#9b4d38",
     "outfit": "#627451",
     "bg": "#dce4db",
     "style": "ponytail",
     "accessory": "glasses",
-    "reference": "https://shingeki.tv/season2/character/"
+    "reference": "https://shingeki.tv/season2/character/",
+    "face": {
+      "eyes": "wide",
+      "eyeWidth": 14.0,
+      "eyeHeight": 13.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.64,
+      "pupilScale": 0.56,
+      "eyeTilt": 2.0,
+      "gazeX": 0,
+      "brow": "raised",
+      "mouth": "open-smile",
+      "faceShape": "oval",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": true,
+      "mouthScale": 1.2
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/8251/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-ichigo",
@@ -147,7 +345,27 @@
     "accessory": "kimono",
     "reference": "https://bleach-anime.com/en/character/",
     "quote": "Bankai!",
-    "quoteSource": "https://cpg.viz.com/brands/bleach-tybw"
+    "quoteSource": "https://cpg.viz.com/brands/bleach-tybw",
+    "face": {
+      "eyes": "angular",
+      "eyeWidth": 14.0,
+      "eyeHeight": 8.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.43,
+      "pupilScale": 0.46,
+      "eyeTilt": 7.0,
+      "gazeX": 0,
+      "brow": "angry",
+      "mouth": "smirk",
+      "faceShape": "square",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "browWeight": 2.4
+    },
+    "chibiReference": "https://gashapon.jp/products/detail.php?jan_code=4549660971078000",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-rukia",
@@ -162,7 +380,27 @@
     "accessory": "kimono",
     "reference": "https://bleach-anime.com/en/character/",
     "quote": "Bankai!",
-    "quoteSource": "https://cpg.viz.com/brands/bleach-tybw"
+    "quoteSource": "https://cpg.viz.com/brands/bleach-tybw",
+    "face": {
+      "eyes": "narrow",
+      "eyeWidth": 14.0,
+      "eyeHeight": 9.0,
+      "eyeSpacing": 26.88,
+      "irisScale": 0.61,
+      "pupilScale": 0.44,
+      "eyeTilt": 4.0,
+      "gazeX": 0,
+      "brow": "flat",
+      "mouth": "frown",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": false,
+      "mouthScale": 0.65
+    },
+    "chibiReference": "https://gashapon.jp/products/detail.php?jan_code=4549660971078000",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-orihime",
@@ -170,12 +408,31 @@
     "series": "Bleach",
     "studyLine": "A water break and a deep breath can help the next question feel easier.",
     "hair": "#c86a35",
-    "eyes": "#a8a1b4",
+    "eyes": "#716679",
     "outfit": "#edf0f8",
     "bg": "#e4dff2",
     "style": "long",
     "accessory": "flower-clips",
-    "reference": "https://bleach-anime.com/en/character/"
+    "reference": "https://bleach-anime.com/en/character/",
+    "face": {
+      "eyes": "soft",
+      "eyeWidth": 13.0,
+      "eyeHeight": 14.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.83,
+      "pupilScale": 0.62,
+      "eyeTilt": 1.0,
+      "gazeX": 0,
+      "brow": "soft",
+      "mouth": "open-smile",
+      "faceShape": "round",
+      "blush": 0.2,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": true
+    },
+    "chibiReference": "https://gashapon.jp/products/detail.php?jan_code=4549660971078000",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-renji",
@@ -188,7 +445,28 @@
     "bg": "#e4dff2",
     "style": "ponytail",
     "accessory": "forehead-marks",
-    "reference": "https://bleach-anime.com/en/character/"
+    "reference": "https://bleach-anime.com/en/character/",
+    "face": {
+      "eyes": "angular",
+      "eyeWidth": 14.0,
+      "eyeHeight": 8.5,
+      "eyeSpacing": 26.88,
+      "irisScale": 0.4,
+      "pupilScale": 0.43,
+      "eyeTilt": 7.0,
+      "gazeX": 0,
+      "brow": "angry",
+      "mouth": "shout",
+      "faceShape": "square",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "browWeight": 2.3,
+      "mouthScale": 0.7
+    },
+    "chibiReference": "https://gashapon.jp/products/detail.php?jan_code=4549660971078000",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-toshiro",
@@ -201,7 +479,28 @@
     "bg": "#e4dff2",
     "style": "spiky",
     "accessory": "kimono",
-    "reference": "https://bleach-anime.com/en/character/"
+    "reference": "https://bleach-anime.com/en/character/",
+    "face": {
+      "eyes": "narrow",
+      "eyeWidth": 14.0,
+      "eyeHeight": 8.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.5,
+      "pupilScale": 0.39,
+      "eyeTilt": 8.0,
+      "gazeX": 0,
+      "brow": "angry",
+      "mouth": "neutral",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "browWeight": 2.2,
+      "mouthScale": 0.75
+    },
+    "chibiReference": "https://gashapon.jp/products/detail.php?jan_code=4549660971078000",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-kaneki",
@@ -216,7 +515,29 @@
     "accessory": "ghoul-mask",
     "reference": "https://en.bandainamcoent.eu/tokyo-ghoul/news/tokyo-ghoulre-call-exist-reveals-5-new-characters-and-new-game-mechanics",
     "quote": "What's 1000 minus 7?",
-    "quoteSource": "https://epjapanesey.com/ken-kanekis-quote-what-is-1000-minus-7/"
+    "quoteSource": "https://epjapanesey.com/ken-kanekis-quote-what-is-1000-minus-7/",
+    "face": {
+      "eyes": "half-lidded",
+      "eyeWidth": 13.0,
+      "eyeHeight": 9.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.52,
+      "pupilScale": 0.35,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "tired",
+      "mouth": "hidden",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "red-ghoul",
+      "highlights": false,
+      "undereye": true,
+      "leftEyeColor": "#82858e",
+      "rightEyeColor": "#bd3046"
+    },
+    "chibiReference": "https://www.marv.jp/special/tokyoghoul/first/goods.html",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-touka",
@@ -229,7 +550,29 @@
     "bg": "#e8dce4",
     "style": "side-bob",
     "accessory": "apron",
-    "reference": "https://en.bandainamcoent.eu/tokyo-ghoul/news/tokyo-ghoulre-call-exist-reveals-5-new-characters-and-new-game-mechanics"
+    "reference": "https://en.bandainamcoent.eu/tokyo-ghoul/news/tokyo-ghoulre-call-exist-reveals-5-new-characters-and-new-game-mechanics",
+    "face": {
+      "eyes": "narrow",
+      "eyeWidth": 14.0,
+      "eyeHeight": 9.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.64,
+      "pupilScale": 0.4,
+      "eyeTilt": 1.0,
+      "gazeX": 0,
+      "brow": "tired",
+      "mouth": "frown",
+      "faceShape": "oval",
+      "blush": 0,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": false,
+      "undereye": true,
+      "hiddenEye": "right",
+      "mouthScale": 0.75
+    },
+    "chibiReference": "https://www.marv.jp/special/tokyoghoul/first/goods.html",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-juuzou",
@@ -242,7 +585,28 @@
     "bg": "#e8dce4",
     "style": "bob",
     "accessory": "stitches",
-    "reference": "https://en.bandainamcoent.eu/tokyo-ghoul/news/tokyo-ghoulre-call-exist-reveals-5-new-characters-and-new-game-mechanics"
+    "reference": "https://en.bandainamcoent.eu/tokyo-ghoul/news/tokyo-ghoulre-call-exist-reveals-5-new-characters-and-new-game-mechanics",
+    "face": {
+      "eyes": "wide",
+      "eyeWidth": 14.0,
+      "eyeHeight": 15.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.8,
+      "pupilScale": 0.4,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "raised",
+      "mouth": "surprised",
+      "faceShape": "round",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": true,
+      "undereye": true,
+      "mouthScale": 0.65
+    },
+    "chibiReference": "https://www.marv.jp/special/tokyoghoul/first/goods.html",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-hide",
@@ -255,7 +619,27 @@
     "bg": "#e8dce4",
     "style": "messy",
     "accessory": "headphones",
-    "reference": "https://en.bandainamcoent.eu/tokyo-ghoul/news/tokyo-ghoulre-call-exist-reveals-5-new-characters-and-new-game-mechanics"
+    "reference": "https://en.bandainamcoent.eu/tokyo-ghoul/news/tokyo-ghoulre-call-exist-reveals-5-new-characters-and-new-game-mechanics",
+    "face": {
+      "eyes": "closed",
+      "eyeWidth": 13.0,
+      "eyeHeight": 10.0,
+      "eyeSpacing": 29.12,
+      "irisScale": 0.64,
+      "pupilScale": 0.5,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "raised",
+      "mouth": "open-smile",
+      "faceShape": "round",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": true,
+      "mouthScale": 1.15
+    },
+    "chibiReference": "https://www.marv.jp/special/tokyoghoul/first/chara_04.html",
+    "chibiReferenceKind": "official-cast-fallback"
   },
   {
     "id": "anime-rize",
@@ -268,7 +652,26 @@
     "bg": "#e8dce4",
     "style": "long",
     "accessory": "glasses",
-    "reference": "https://en.bandainamcoent.eu/tokyo-ghoul/news/tokyo-ghoulre-call-exist-reveals-5-new-characters-and-new-game-mechanics"
+    "reference": "https://en.bandainamcoent.eu/tokyo-ghoul/news/tokyo-ghoulre-call-exist-reveals-5-new-characters-and-new-game-mechanics",
+    "face": {
+      "eyes": "cat",
+      "eyeWidth": 14.0,
+      "eyeHeight": 9.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.66,
+      "pupilScale": 0.35,
+      "eyeTilt": 5.0,
+      "gazeX": 0.6,
+      "brow": "arched",
+      "mouth": "smirk",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": true
+    },
+    "chibiReference": "https://www.marv.jp/special/tokyoghoul/first/goods.html",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-takemichi",
@@ -283,7 +686,27 @@
     "accessory": "brow-scar",
     "reference": "https://tokyo-revengers-anime.com/character/",
     "quote": "I won’t give up!",
-    "quoteSource": "https://gamenode.jp/2022/10/16/takemichi-hanagaki-quotes-from-tokyo-revengers/?noamp=available"
+    "quoteSource": "https://gamenode.jp/2022/10/16/takemichi-hanagaki-quotes-from-tokyo-revengers/?noamp=available",
+    "face": {
+      "eyes": "round",
+      "eyeWidth": 13.0,
+      "eyeHeight": 14.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.59,
+      "pupilScale": 0.5,
+      "eyeTilt": -2.0,
+      "gazeX": 0,
+      "brow": "worried",
+      "mouth": "wavy",
+      "faceShape": "round",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": true,
+      "mouthScale": 0.75
+    },
+    "chibiReference": "https://gashapon.jp/products/detail.php?jan_code=4549660727057000",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-mikey",
@@ -296,7 +719,27 @@
     "bg": "#ece2d6",
     "style": "curtains",
     "accessory": "gold-trim",
-    "reference": "https://tokyo-revengers-anime.com/character/"
+    "reference": "https://tokyo-revengers-anime.com/character/",
+    "face": {
+      "eyes": "half-lidded",
+      "eyeWidth": 14.0,
+      "eyeHeight": 11.0,
+      "eyeSpacing": 26.88,
+      "irisScale": 0.86,
+      "pupilScale": 0.77,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "flat",
+      "mouth": "neutral",
+      "faceShape": "oval",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "mouthScale": 0.6
+    },
+    "chibiReference": "https://gashapon.jp/products/detail.php?jan_code=4549660727057000",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-draken",
@@ -309,7 +752,26 @@
     "bg": "#ece2d6",
     "style": "braid",
     "accessory": "dragon-temple",
-    "reference": "https://tokyo-revengers-anime.com/character/"
+    "reference": "https://tokyo-revengers-anime.com/character/",
+    "face": {
+      "eyes": "narrow",
+      "eyeWidth": 14.0,
+      "eyeHeight": 8.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.47,
+      "pupilScale": 0.5,
+      "eyeTilt": -1.0,
+      "gazeX": 0.4,
+      "brow": "arched",
+      "mouth": "smirk",
+      "faceShape": "square",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false
+    },
+    "chibiReference": "https://gashapon.jp/products/detail.php?jan_code=4549660727057000",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-chifuyu",
@@ -322,7 +784,27 @@
     "bg": "#ece2d6",
     "style": "undercut",
     "accessory": "earring",
-    "reference": "https://tokyo-revengers-anime.com/character/"
+    "reference": "https://tokyo-revengers-anime.com/character/",
+    "face": {
+      "eyes": "almond",
+      "eyeWidth": 14.0,
+      "eyeHeight": 11.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.58,
+      "pupilScale": 0.4,
+      "eyeTilt": 2.0,
+      "gazeX": -0.3,
+      "brow": "raised",
+      "mouth": "small-smile",
+      "faceShape": "oval",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": true,
+      "mouthScale": 0.8
+    },
+    "chibiReference": "https://gashapon.jp/products/detail.php?jan_code=4549660727057000",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-baji",
@@ -335,7 +817,27 @@
     "bg": "#ece2d6",
     "style": "long",
     "accessory": "fang",
-    "reference": "https://tokyo-revengers-anime.com/character/"
+    "reference": "https://tokyo-revengers-anime.com/character/",
+    "face": {
+      "eyes": "angular",
+      "eyeWidth": 14.0,
+      "eyeHeight": 8.0,
+      "eyeSpacing": 26.88,
+      "irisScale": 0.43,
+      "pupilScale": 0.35,
+      "eyeTilt": 8.0,
+      "gazeX": 0,
+      "brow": "angry",
+      "mouth": "toothy",
+      "faceShape": "square",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "browWeight": 2.6
+    },
+    "chibiReference": "https://gashapon.jp/products/detail.php?jan_code=4549660727057000",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-rimuru",
@@ -350,7 +852,27 @@
     "accessory": "fur-scarf",
     "reference": "https://www.ten-sura.com/character",
     "quote": "I'm not a bad slime!",
-    "quoteSource": "https://www.crunchyroll.com/hi/news/guides/2021/1/10/feature-every-thing-you-need-to-know-about-that-time-i-got-reincarnated-as-a-slime-before-season-2"
+    "quoteSource": "https://www.crunchyroll.com/hi/news/guides/2021/1/10/feature-every-thing-you-need-to-know-about-that-time-i-got-reincarnated-as-a-slime-before-season-2",
+    "face": {
+      "eyes": "almond",
+      "eyeWidth": 14.0,
+      "eyeHeight": 11.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.72,
+      "pupilScale": 0.34,
+      "eyeTilt": 3.0,
+      "gazeX": 0,
+      "brow": "flat",
+      "mouth": "smirk",
+      "faceShape": "oval",
+      "blush": 0,
+      "lashes": true,
+      "irisDetail": "ring",
+      "highlights": true,
+      "mouthScale": 0.85
+    },
+    "chibiReference": "https://www.charaon.jp/SHOP/AZTSU225.html",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-milim",
@@ -363,7 +885,27 @@
     "bg": "#dbedf2",
     "style": "twintails",
     "accessory": "ribbons",
-    "reference": "https://www.ten-sura.com/character"
+    "reference": "https://www.ten-sura.com/character",
+    "face": {
+      "eyes": "wide",
+      "eyeWidth": 14.0,
+      "eyeHeight": 15.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.81,
+      "pupilScale": 0.53,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "raised",
+      "mouth": "toothy",
+      "faceShape": "round",
+      "blush": 0.2,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": true,
+      "mouthScale": 1.1
+    },
+    "chibiReference": "https://www.charaon.jp/SHOP/AZTSU225.html",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-benimaru",
@@ -371,12 +913,32 @@
     "series": "That Time I Got Reincarnated as a Slime",
     "studyLine": "A water break and a deep breath can help the next question feel easier.",
     "hair": "#bf3642",
-    "eyes": "#d8ac45",
+    "eyes": "#c38f37",
     "outfit": "#a33136",
     "bg": "#dbedf2",
     "style": "messy",
     "accessory": "horns",
-    "reference": "https://www.ten-sura.com/character"
+    "reference": "https://www.ten-sura.com/character",
+    "face": {
+      "eyes": "angular",
+      "eyeWidth": 14.0,
+      "eyeHeight": 8.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.5,
+      "pupilScale": 0.35,
+      "eyeTilt": 7.0,
+      "gazeX": 0,
+      "brow": "angry",
+      "mouth": "smirk",
+      "faceShape": "square",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "browWeight": 2.1
+    },
+    "chibiReference": "https://www.charaon.jp/SHOP/AZTSU225.html",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-shuna",
@@ -384,12 +946,32 @@
     "series": "That Time I Got Reincarnated as a Slime",
     "studyLine": "Let's give this chapter ten focused minutes, then take a little break.",
     "hair": "#f1bfd8",
-    "eyes": "#b16f9e",
+    "eyes": "#cf6d91",
     "outfit": "#e9b2ca",
     "bg": "#dbedf2",
     "style": "long",
     "accessory": "small-horns",
-    "reference": "https://www.ten-sura.com/character"
+    "reference": "https://www.ten-sura.com/character",
+    "face": {
+      "eyes": "soft",
+      "eyeWidth": 13.0,
+      "eyeHeight": 13.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.78,
+      "pupilScale": 0.52,
+      "eyeTilt": 1.0,
+      "gazeX": 0,
+      "brow": "soft",
+      "mouth": "small-smile",
+      "faceShape": "oval",
+      "blush": 0.1,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": true,
+      "mouthScale": 0.7
+    },
+    "chibiReference": "https://www.charaon.jp/SHOP/AZTSU225.html",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-shion",
@@ -397,12 +979,32 @@
     "series": "That Time I Got Reincarnated as a Slime",
     "studyLine": "Mistakes are clues. Check what happened, then try once more.",
     "hair": "#9982c6",
-    "eyes": "#b3a54c",
+    "eyes": "#8f68bc",
     "outfit": "#514079",
     "bg": "#dbedf2",
     "style": "ponytail",
     "accessory": "one-horn",
-    "reference": "https://www.ten-sura.com/character"
+    "reference": "https://www.ten-sura.com/character",
+    "face": {
+      "eyes": "cat",
+      "eyeWidth": 14.0,
+      "eyeHeight": 11.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.69,
+      "pupilScale": 0.45,
+      "eyeTilt": 5.0,
+      "gazeX": 0,
+      "brow": "arched",
+      "mouth": "open-smile",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": true,
+      "mouthScale": 0.95
+    },
+    "chibiReference": "https://www.charaon.jp/SHOP/AZTSU225.html",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-deku",
@@ -417,7 +1019,27 @@
     "accessory": "freckles",
     "reference": "https://heroaca.com/character/",
     "quote": "Plus Ultra!",
-    "quoteSource": "https://quotegeek.com/anime/my-hero-academia/plus-ultra/"
+    "quoteSource": "https://quotegeek.com/anime/my-hero-academia/plus-ultra/",
+    "face": {
+      "eyes": "wide",
+      "eyeWidth": 15.0,
+      "eyeHeight": 15.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.39,
+      "pupilScale": 0.46,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "worried",
+      "mouth": "frown",
+      "faceShape": "round",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": true,
+      "browWeight": 2.4
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/5994/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-bakugo",
@@ -430,7 +1052,27 @@
     "bg": "#e0ecdc",
     "style": "spiky",
     "accessory": "hero-mask",
-    "reference": "https://heroaca.com/character/"
+    "reference": "https://heroaca.com/character/",
+    "face": {
+      "eyes": "angular",
+      "eyeWidth": 14.0,
+      "eyeHeight": 6.5,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.3,
+      "pupilScale": 0.4,
+      "eyeTilt": 10.0,
+      "gazeX": 0,
+      "brow": "angry",
+      "mouth": "toothy",
+      "faceShape": "square",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "browWeight": 2.7
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/6107/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-todoroki",
@@ -443,7 +1085,29 @@
     "bg": "#e0ecdc",
     "style": "split",
     "accessory": "red-scar",
-    "reference": "https://heroaca.com/character/"
+    "reference": "https://heroaca.com/character/",
+    "face": {
+      "eyes": "half-lidded",
+      "eyeWidth": 14.0,
+      "eyeHeight": 9.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.51,
+      "pupilScale": 0.4,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "flat",
+      "mouth": "neutral",
+      "faceShape": "oval",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "leftEyeColor": "#8a929e",
+      "rightEyeColor": "#63a5b4",
+      "mouthScale": 0.7
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/8187/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-ochaco",
@@ -456,7 +1120,26 @@
     "bg": "#e0ecdc",
     "style": "bob",
     "accessory": "pink-earpieces",
-    "reference": "https://heroaca.com/character/"
+    "reference": "https://heroaca.com/character/",
+    "face": {
+      "eyes": "round",
+      "eyeWidth": 13.0,
+      "eyeHeight": 14.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.63,
+      "pupilScale": 0.65,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "raised",
+      "mouth": "open-smile",
+      "faceShape": "round",
+      "blush": 0.58,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": true
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/8420/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-all-might",
@@ -471,7 +1154,30 @@
     "accessory": "hero-suit",
     "reference": "https://heroaca.com/character/",
     "quote": "I am here!",
-    "quoteSource": "https://myheroacademia.fandom.com/wiki/Toshinori_Yagi"
+    "quoteSource": "https://myheroacademia.fandom.com/wiki/Toshinori_Yagi",
+    "face": {
+      "eyes": "angular",
+      "eyeWidth": 14.0,
+      "eyeHeight": 6.0,
+      "eyeSpacing": 29.12,
+      "irisScale": 0.23,
+      "pupilScale": 0.2,
+      "eyeTilt": 7.0,
+      "gazeX": 0,
+      "brow": "angry",
+      "mouth": "grin",
+      "faceShape": "square",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "eyeShadow": true,
+      "browWeight": 3.2,
+      "squareGrin": true,
+      "mouthScale": 1.15
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/8972/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-sakamoto",
@@ -487,7 +1193,26 @@
     "reference": "https://sakamotodays.jp/1st/character/",
     "quote": "No killing.",
     "quoteSource": "https://www.gamesradar.com/entertainment/anime-shows/one-of-netflixs-most-anticipated-anime-shows-of-2025-about-a-retired-hitman-just-got-an-emotional-new-trailer/",
-    "quoteAttribution": "Sakamoto family rule"
+    "quoteAttribution": "Sakamoto family rule",
+    "face": {
+      "eyes": "blank",
+      "eyeWidth": 12.0,
+      "eyeHeight": 7.0,
+      "eyeSpacing": 29.12,
+      "irisScale": 0.6,
+      "pupilScale": 0.5,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "flat",
+      "mouth": "hidden",
+      "faceShape": "round",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false
+    },
+    "chibiReference": "https://en.megahobby.jp/products/rubber-mascot-buddy-collection-sakamoto-days",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-shin",
@@ -500,7 +1225,27 @@
     "bg": "#e7ebd9",
     "style": "messy",
     "accessory": "headphones",
-    "reference": "https://sakamotodays.jp/1st/character/"
+    "reference": "https://sakamotodays.jp/1st/character/",
+    "face": {
+      "eyes": "angular",
+      "eyeWidth": 14.0,
+      "eyeHeight": 9.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.38,
+      "pupilScale": 0.4,
+      "eyeTilt": 7.0,
+      "gazeX": 0,
+      "brow": "angry",
+      "mouth": "frown",
+      "faceShape": "oval",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "browWeight": 2
+    },
+    "chibiReference": "https://en.megahobby.jp/products/rubber-mascot-buddy-collection-sakamoto-days",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-lu",
@@ -513,7 +1258,27 @@
     "bg": "#e7ebd9",
     "style": "twintails",
     "accessory": "hair-buns",
-    "reference": "https://sakamotodays.jp/1st/character/"
+    "reference": "https://sakamotodays.jp/1st/character/",
+    "face": {
+      "eyes": "wide",
+      "eyeWidth": 13.0,
+      "eyeHeight": 13.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.65,
+      "pupilScale": 0.5,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "raised",
+      "mouth": "toothy",
+      "faceShape": "round",
+      "blush": 0.1,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": true,
+      "wink": "left"
+    },
+    "chibiReference": "https://en.megahobby.jp/products/rubber-mascot-buddy-collection-sakamoto-days",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-nagumo",
@@ -526,7 +1291,27 @@
     "bg": "#e7ebd9",
     "style": "swept",
     "accessory": "collar-marks",
-    "reference": "https://sakamotodays.jp/1st/character/"
+    "reference": "https://sakamotodays.jp/1st/character/",
+    "face": {
+      "eyes": "closed",
+      "eyeWidth": 14.0,
+      "eyeHeight": 10.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.62,
+      "pupilScale": 0.5,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "soft",
+      "mouth": "open-smile",
+      "faceShape": "oval",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": true,
+      "mouthScale": 1.1
+    },
+    "chibiReference": "https://en.megahobby.jp/products/rubber-mascot-buddy-collection-sakamoto-days",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-osaragi",
@@ -539,7 +1324,27 @@
     "bg": "#e7ebd9",
     "style": "long",
     "accessory": "veil",
-    "reference": "https://sakamotodays.jp/1st/character/"
+    "reference": "https://sakamotodays.jp/1st/character/",
+    "face": {
+      "eyes": "half-lidded",
+      "eyeWidth": 14.0,
+      "eyeHeight": 8.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.42,
+      "pupilScale": 0.5,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "flat",
+      "mouth": "surprised",
+      "faceShape": "oval",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "mouthScale": 0.55
+    },
+    "chibiReference": "https://en.megahobby.jp/products/rubber-mascot-buddy-collection-sakamoto-days",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-luffy",
@@ -554,7 +1359,28 @@
     "accessory": "straw-hat",
     "reference": "https://one-piece.com/character/",
     "quote": "I’m gonna be King of the Pirates!",
-    "quoteSource": "https://onepiece.fandom.com/wiki/Episode_1"
+    "quoteSource": "https://onepiece.fandom.com/wiki/Episode_1",
+    "face": {
+      "eyes": "round",
+      "eyeWidth": 13.0,
+      "eyeHeight": 12.0,
+      "eyeSpacing": 29.12,
+      "irisScale": 0.25,
+      "pupilScale": 0.9,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "raised",
+      "mouth": "grin",
+      "faceShape": "round",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "squareGrin": true,
+      "mouthScale": 1.12
+    },
+    "chibiReference": "https://english.megahobby.jp/products/item/2039/?dmode=pc",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-zoro",
@@ -567,7 +1393,28 @@
     "bg": "#f3e4cf",
     "style": "cropped",
     "accessory": "triple-earring",
-    "reference": "https://one-piece.com/character/"
+    "reference": "https://one-piece.com/character/",
+    "face": {
+      "eyes": "narrow",
+      "eyeWidth": 14.0,
+      "eyeHeight": 7.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.3,
+      "pupilScale": 0.5,
+      "eyeTilt": 7.0,
+      "gazeX": 0,
+      "brow": "angry",
+      "mouth": "frown",
+      "faceShape": "square",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "wink": "right",
+      "browWeight": 2.5
+    },
+    "chibiReference": "https://english.megahobby.jp/products/item/2039/?dmode=pc",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-nami",
@@ -580,7 +1427,26 @@
     "bg": "#f3e4cf",
     "style": "long",
     "accessory": "tangerine",
-    "reference": "https://one-piece.com/character/"
+    "reference": "https://one-piece.com/character/",
+    "face": {
+      "eyes": "almond",
+      "eyeWidth": 14.0,
+      "eyeHeight": 12.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.77,
+      "pupilScale": 0.6,
+      "eyeTilt": 5.0,
+      "gazeX": 0,
+      "brow": "arched",
+      "mouth": "smirk",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": true
+    },
+    "chibiReference": "https://www.megahobby.jp/products/item/4428/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-sanji",
@@ -588,12 +1454,33 @@
     "series": "One Piece",
     "studyLine": "Let's give this chapter ten focused minutes, then take a little break.",
     "hair": "#e4c267",
-    "eyes": "#6694bb",
+    "eyes": "#434550",
     "outfit": "#2b3d54",
     "bg": "#f3e4cf",
     "style": "side-bob",
     "accessory": "curly-brow",
-    "reference": "https://one-piece.com/character/"
+    "reference": "https://one-piece.com/character/",
+    "face": {
+      "eyes": "half-lidded",
+      "eyeWidth": 14.0,
+      "eyeHeight": 9.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.43,
+      "pupilScale": 0.5,
+      "eyeTilt": 1.0,
+      "gazeX": 0,
+      "brow": "arched",
+      "mouth": "neutral",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "hiddenEye": "left",
+      "mouthScale": 0.8
+    },
+    "chibiReference": "https://www.megahobby.jp/products/item/4429/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-chopper",
@@ -606,7 +1493,27 @@
     "bg": "#f3e4cf",
     "style": "reindeer",
     "accessory": "chopper-hat",
-    "reference": "https://one-piece.com/character/"
+    "reference": "https://one-piece.com/character/",
+    "face": {
+      "eyes": "dot",
+      "eyeWidth": 11.0,
+      "eyeHeight": 12.0,
+      "eyeSpacing": 29.12,
+      "irisScale": 0.7,
+      "pupilScale": 0.8,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "raised",
+      "mouth": "surprised",
+      "faceShape": "round",
+      "blush": 0.24,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": true,
+      "mouthScale": 0.85
+    },
+    "chibiReference": "https://english.megahobby.jp/products/item/2039/?dmode=pc",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-naruto",
@@ -621,7 +1528,29 @@
     "accessory": "leaf-whiskers",
     "reference": "https://naruto-official.com/en/anime/naruto1",
     "quote": "Believe it!",
-    "quoteSource": "https://naruto-official.com/en/anime/naruto1"
+    "quoteSource": "https://naruto-official.com/en/anime/naruto1",
+    "face": {
+      "eyes": "round",
+      "eyeWidth": 13.0,
+      "eyeHeight": 12.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.56,
+      "pupilScale": 0.55,
+      "eyeTilt": 3.0,
+      "gazeX": 0,
+      "brow": "angry",
+      "mouth": "grin",
+      "faceShape": "round",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": true,
+      "squareGrin": true,
+      "mouthScale": 0.95,
+      "browWeight": 2
+    },
+    "chibiReference": "https://special.goodsmile.info/naruto/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-sasuke",
@@ -634,7 +1563,28 @@
     "bg": "#e6e4ed",
     "style": "spiky",
     "accessory": "leaf-band",
-    "reference": "https://naruto-official.com/en/anime/naruto1"
+    "reference": "https://naruto-official.com/en/anime/naruto1",
+    "face": {
+      "eyes": "half-lidded",
+      "eyeWidth": 14.0,
+      "eyeHeight": 9.0,
+      "eyeSpacing": 26.88,
+      "irisScale": 0.6,
+      "pupilScale": 0.6,
+      "eyeTilt": 4.0,
+      "gazeX": 0,
+      "brow": "angry",
+      "mouth": "frown",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "browWeight": 1.7,
+      "mouthScale": 0.8
+    },
+    "chibiReference": "https://special.goodsmile.info/naruto/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-sakura",
@@ -647,7 +1597,28 @@
     "bg": "#e6e4ed",
     "style": "bob",
     "accessory": "diamond",
-    "reference": "https://naruto-official.com/en/anime/naruto1"
+    "reference": "https://naruto-official.com/en/anime/naruto1",
+    "face": {
+      "eyes": "angular",
+      "eyeWidth": 14.0,
+      "eyeHeight": 10.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.4,
+      "pupilScale": 0.44,
+      "eyeTilt": 7.0,
+      "gazeX": 0,
+      "brow": "angry",
+      "mouth": "shout",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "browWeight": 1.9,
+      "mouthScale": 1.2
+    },
+    "chibiReference": "https://special.goodsmile.info/naruto/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-kakashi",
@@ -660,7 +1631,27 @@
     "bg": "#e6e4ed",
     "style": "spiky",
     "accessory": "ninja-mask",
-    "reference": "https://naruto-official.com/en/anime/naruto1"
+    "reference": "https://naruto-official.com/en/anime/naruto1",
+    "face": {
+      "eyes": "sleepy",
+      "eyeWidth": 14.0,
+      "eyeHeight": 7.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.38,
+      "pupilScale": 0.55,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "tired",
+      "mouth": "hidden",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "hiddenEye": "right"
+    },
+    "chibiReference": "https://special.goodsmile.info/naruto/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-hinata",
@@ -673,7 +1664,27 @@
     "bg": "#e6e4ed",
     "style": "long",
     "accessory": "pale-eyes",
-    "reference": "https://naruto-official.com/en/anime/naruto1"
+    "reference": "https://naruto-official.com/en/anime/naruto1",
+    "face": {
+      "eyes": "soft",
+      "eyeWidth": 13.0,
+      "eyeHeight": 14.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.84,
+      "pupilScale": 0.0,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "worried",
+      "mouth": "pout",
+      "faceShape": "round",
+      "blush": 0.28,
+      "lashes": true,
+      "irisDetail": "pale",
+      "highlights": true,
+      "mouthScale": 0.75
+    },
+    "chibiReference": "https://special.goodsmile.info/naruto/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-gojo",
@@ -688,7 +1699,26 @@
     "accessory": "blindfold",
     "reference": "https://jujutsukaisen.jp/character/",
     "quote": "Nah, I’d win.",
-    "quoteSource": "https://comicbook.com/anime/news/jujutsu-kaisen-manga-translation-gojo-return/"
+    "quoteSource": "https://comicbook.com/anime/news/jujutsu-kaisen-manga-translation-gojo-return/",
+    "face": {
+      "eyes": "narrow",
+      "eyeWidth": 14.0,
+      "eyeHeight": 10.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.77,
+      "pupilScale": 0.3,
+      "eyeTilt": 3.0,
+      "gazeX": 0,
+      "brow": "arched",
+      "mouth": "smirk",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "ring",
+      "highlights": true
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/10491/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-yuji",
@@ -701,7 +1731,27 @@
     "bg": "#e3e1f0",
     "style": "cropped",
     "accessory": "red-hood",
-    "reference": "https://jujutsukaisen.jp/character/"
+    "reference": "https://jujutsukaisen.jp/character/",
+    "face": {
+      "eyes": "angular",
+      "eyeWidth": 14.0,
+      "eyeHeight": 12.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.44,
+      "pupilScale": 0.5,
+      "eyeTilt": 2.0,
+      "gazeX": 0,
+      "brow": "raised",
+      "mouth": "toothy",
+      "faceShape": "round",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": true,
+      "undereye": true
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/10173/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-megumi",
@@ -714,7 +1764,28 @@
     "bg": "#e3e1f0",
     "style": "spiky",
     "accessory": "high-collar",
-    "reference": "https://jujutsukaisen.jp/character/"
+    "reference": "https://jujutsukaisen.jp/character/",
+    "face": {
+      "eyes": "half-lidded",
+      "eyeWidth": 14.0,
+      "eyeHeight": 8.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.55,
+      "pupilScale": 0.44,
+      "eyeTilt": 2.0,
+      "gazeX": 0,
+      "brow": "flat",
+      "mouth": "frown",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "mouthScale": 0.75,
+      "browWeight": 2.2
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/10413/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-nobara",
@@ -727,7 +1798,28 @@
     "bg": "#e3e1f0",
     "style": "bob",
     "accessory": "hammer-pin",
-    "reference": "https://jujutsukaisen.jp/character/"
+    "reference": "https://jujutsukaisen.jp/character/",
+    "face": {
+      "eyes": "almond",
+      "eyeWidth": 14.0,
+      "eyeHeight": 12.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.65,
+      "pupilScale": 0.52,
+      "eyeTilt": 4.0,
+      "gazeX": 0,
+      "brow": "flat",
+      "mouth": "frown",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": true,
+      "mouthScale": 0.65,
+      "browWeight": 1.8
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/10648/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-nanami",
@@ -740,7 +1832,28 @@
     "bg": "#e3e1f0",
     "style": "swept",
     "accessory": "goggles",
-    "reference": "https://jujutsukaisen.jp/character/"
+    "reference": "https://jujutsukaisen.jp/character/",
+    "face": {
+      "eyes": "half-lidded",
+      "eyeWidth": 13.0,
+      "eyeHeight": 7.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.4,
+      "pupilScale": 0.4,
+      "eyeTilt": 3.0,
+      "gazeX": 0,
+      "brow": "angry",
+      "mouth": "wavy",
+      "faceShape": "square",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "mouthScale": 0.8,
+      "browWeight": 2
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/12289/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-gon",
@@ -748,14 +1861,34 @@
     "series": "Hunter x Hunter",
     "studyLine": "One small step today is how a big adventure begins.",
     "hair": "#284b3b",
-    "eyes": "#ad864c",
+    "eyes": "#8b4f2f",
     "outfit": "#4f985a",
     "bg": "#e0ecdf",
     "style": "tall-spikes",
     "accessory": "red-piping",
     "reference": "https://www.ntv.co.jp/hunterhunter/character/",
     "quote": "Jajanken!",
-    "quoteSource": "https://hunterhunter-ni.bushiroad.com/en/character/gon/"
+    "quoteSource": "https://hunterhunter-ni.bushiroad.com/en/character/gon/",
+    "face": {
+      "eyes": "round",
+      "eyeWidth": 12.0,
+      "eyeHeight": 16.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.88,
+      "pupilScale": 0.68,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "raised",
+      "mouth": "small-smile",
+      "faceShape": "round",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "ring",
+      "highlights": true,
+      "browWeight": 1.6
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/8650/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-killua",
@@ -763,12 +1896,32 @@
     "series": "Hunter x Hunter",
     "studyLine": "Try explaining that idea in your own words. You might know more than you think.",
     "hair": "#e6edf5",
-    "eyes": "#78a5d4",
+    "eyes": "#497fba",
     "outfit": "#8e9cc3",
     "bg": "#e0ecdf",
     "style": "messy",
     "accessory": "high-collar",
-    "reference": "https://www.ntv.co.jp/hunterhunter/character/"
+    "reference": "https://www.ntv.co.jp/hunterhunter/character/",
+    "face": {
+      "eyes": "cat",
+      "eyeWidth": 14.0,
+      "eyeHeight": 11.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.73,
+      "pupilScale": 0.58,
+      "eyeTilt": 4.0,
+      "gazeX": 0,
+      "brow": "flat",
+      "mouth": "toothy",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "ring",
+      "highlights": true,
+      "mouthScale": 0.8
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/8658/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-kurapika",
@@ -781,7 +1934,27 @@
     "bg": "#e0ecdf",
     "style": "bob",
     "accessory": "chain",
-    "reference": "https://www.ntv.co.jp/hunterhunter/character/"
+    "reference": "https://www.ntv.co.jp/hunterhunter/character/",
+    "face": {
+      "eyes": "almond",
+      "eyeWidth": 13.0,
+      "eyeHeight": 14.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.81,
+      "pupilScale": 0.62,
+      "eyeTilt": 2.0,
+      "gazeX": 0,
+      "brow": "flat",
+      "mouth": "neutral",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": true,
+      "mouthScale": 0.7
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/8686/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-leorio",
@@ -794,7 +1967,27 @@
     "bg": "#e0ecdf",
     "style": "pompadour",
     "accessory": "round-glasses",
-    "reference": "https://www.ntv.co.jp/hunterhunter/character/"
+    "reference": "https://www.ntv.co.jp/hunterhunter/character/",
+    "face": {
+      "eyes": "angular",
+      "eyeWidth": 14.0,
+      "eyeHeight": 11.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.45,
+      "pupilScale": 0.57,
+      "eyeTilt": 5.0,
+      "gazeX": 0,
+      "brow": "angry",
+      "mouth": "smirk",
+      "faceShape": "square",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": true,
+      "browWeight": 2.1
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/14955/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-hisoka",
@@ -807,7 +2000,27 @@
     "bg": "#e0ecdf",
     "style": "swept",
     "accessory": "star-tear",
-    "reference": "https://www.ntv.co.jp/hunterhunter/character/"
+    "reference": "https://www.ntv.co.jp/hunterhunter/character/",
+    "face": {
+      "eyes": "narrow",
+      "eyeWidth": 15.0,
+      "eyeHeight": 8.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.53,
+      "pupilScale": 0.25,
+      "eyeTilt": 6.0,
+      "gazeX": 0,
+      "brow": "arched",
+      "mouth": "smirk",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": false,
+      "lipColor": "#aa746b"
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/14789/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-yumeko",
@@ -822,7 +2035,27 @@
     "accessory": "school-bow",
     "reference": "https://kakegurui-anime.com/1st/character/",
     "quote": "Let’s get our gambling freak on!",
-    "quoteSource": "https://www.dexerto.com/cosplay/kakegurui-cosplayer-shows-off-jaw-dropping-take-on-yumeko-jabami-1349984/"
+    "quoteSource": "https://www.dexerto.com/cosplay/kakegurui-cosplayer-shows-off-jaw-dropping-take-on-yumeko-jabami-1349984/",
+    "face": {
+      "eyes": "almond",
+      "eyeWidth": 15.0,
+      "eyeHeight": 14.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.9,
+      "pupilScale": 0.65,
+      "eyeTilt": 2.0,
+      "gazeX": 0,
+      "brow": "arched",
+      "mouth": "small-smile",
+      "faceShape": "oval",
+      "blush": 0.13,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": true,
+      "mouthScale": 0.8
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/7030/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-mary",
@@ -830,12 +2063,31 @@
     "series": "Kakegurui",
     "studyLine": "Try explaining that idea in your own words. You might know more than you think.",
     "hair": "#e9ca7d",
-    "eyes": "#87a7b7",
+    "eyes": "#8b654f",
     "outfit": "#b83f4b",
     "bg": "#ecdce4",
     "style": "twintails",
     "accessory": "school-bow",
-    "reference": "https://kakegurui-anime.com/1st/character/"
+    "reference": "https://kakegurui-anime.com/1st/character/",
+    "face": {
+      "eyes": "half-lidded",
+      "eyeWidth": 14.0,
+      "eyeHeight": 11.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.83,
+      "pupilScale": 0.6,
+      "eyeTilt": 3.0,
+      "gazeX": 0,
+      "brow": "arched",
+      "mouth": "smirk",
+      "faceShape": "pointed",
+      "blush": 0.12,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": true
+    },
+    "chibiReference": "https://www.goodsmile.info/en/product/12864/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-kirari",
@@ -848,7 +2100,28 @@
     "bg": "#ecdce4",
     "style": "braids",
     "accessory": "blue-lips",
-    "reference": "https://kakegurui-anime.com/1st/character/"
+    "reference": "https://kakegurui-anime.com/1st/character/",
+    "face": {
+      "eyes": "narrow",
+      "eyeWidth": 15.0,
+      "eyeHeight": 10.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.66,
+      "pupilScale": 0.35,
+      "eyeTilt": 4.0,
+      "gazeX": 0,
+      "brow": "arched",
+      "mouth": "smirk",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": false,
+      "lipColor": "#658cb3",
+      "mouthScale": 0.85
+    },
+    "chibiReference": "https://kakegurui-anime.com/character/group02.php",
+    "chibiReferenceKind": "official-cast-fallback"
   },
   {
     "id": "anime-ririka",
@@ -861,7 +2134,26 @@
     "bg": "#ecdce4",
     "style": "long",
     "accessory": "white-mask",
-    "reference": "https://kakegurui-anime.com/1st/character/"
+    "reference": "https://kakegurui-anime.com/1st/character/",
+    "face": {
+      "eyes": "blank",
+      "eyeWidth": 13.0,
+      "eyeHeight": 10.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.8,
+      "pupilScale": 0.5,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "worried",
+      "mouth": "hidden",
+      "faceShape": "oval",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": true
+    },
+    "chibiReference": "https://kakegurui-anime.com/character/group02.php",
+    "chibiReferenceKind": "official-cast-fallback"
   },
   {
     "id": "anime-ryota",
@@ -874,7 +2166,27 @@
     "bg": "#ecdce4",
     "style": "swept",
     "accessory": "school-tie",
-    "reference": "https://kakegurui-anime.com/1st/character/"
+    "reference": "https://kakegurui-anime.com/1st/character/",
+    "face": {
+      "eyes": "wide",
+      "eyeWidth": 13.0,
+      "eyeHeight": 13.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.57,
+      "pupilScale": 0.58,
+      "eyeTilt": -2.0,
+      "gazeX": 0,
+      "brow": "worried",
+      "mouth": "wavy",
+      "faceShape": "round",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": true,
+      "mouthScale": 0.7
+    },
+    "chibiReference": "https://kakegurui-anime.com/character/group01.php",
+    "chibiReferenceKind": "official-cast-fallback"
   },
   {
     "id": "anime-satoko",
@@ -889,7 +2201,27 @@
     "accessory": "camellia",
     "reference": "https://hotaru-anime.com/character/",
     "quote": "Marry me.",
-    "quoteSource": "https://www.indiatimes.com/trending/firefly-wedding-episode-1-recap-can-satoko-escape-death-after-a-dangerous-encounter-turns-her-life-upside-down/articleshow/134847515.html"
+    "quoteSource": "https://www.indiatimes.com/trending/firefly-wedding-episode-1-recap-can-satoko-escape-death-after-a-dangerous-encounter-turns-her-life-upside-down/articleshow/134847515.html",
+    "face": {
+      "eyes": "half-lidded",
+      "eyeWidth": 14.0,
+      "eyeHeight": 11.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.7,
+      "pupilScale": 0.59,
+      "eyeTilt": -2.0,
+      "gazeX": 0,
+      "brow": "worried",
+      "mouth": "neutral",
+      "faceShape": "oval",
+      "blush": 0.12,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": true,
+      "mouthScale": 0.6
+    },
+    "chibiReference": "https://www.youtube.com/watch?v=A2ZuZt01_Po",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-shinpei",
@@ -902,7 +2234,28 @@
     "bg": "#f0e4df",
     "style": "messy",
     "accessory": "kimono",
-    "reference": "https://hotaru-anime.com/character/"
+    "reference": "https://hotaru-anime.com/character/",
+    "face": {
+      "eyes": "narrow",
+      "eyeWidth": 15.0,
+      "eyeHeight": 8.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.36,
+      "pupilScale": 0.35,
+      "eyeTilt": 5.0,
+      "gazeX": 0,
+      "brow": "arched",
+      "mouth": "toothy",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "mouthScale": 1.15,
+      "undereye": true
+    },
+    "chibiReference": "https://hotaru-anime.com/character/",
+    "chibiReferenceKind": "official-cast-fallback"
   },
   {
     "id": "anime-kotaro",
@@ -915,7 +2268,27 @@
     "bg": "#f0e4df",
     "style": "swept",
     "accessory": "haori",
-    "reference": "https://hotaru-anime.com/character/"
+    "reference": "https://hotaru-anime.com/character/",
+    "face": {
+      "eyes": "half-lidded",
+      "eyeWidth": 14.0,
+      "eyeHeight": 9.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.45,
+      "pupilScale": 0.45,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "flat",
+      "mouth": "neutral",
+      "faceShape": "square",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "mouthScale": 0.75
+    },
+    "chibiReference": "https://www.youtube.com/watch?v=A2ZuZt01_Po",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-asagiri",
@@ -928,7 +2301,28 @@
     "bg": "#f0e4df",
     "style": "updo",
     "accessory": "hairpins",
-    "reference": "https://hotaru-anime.com/character/"
+    "reference": "https://hotaru-anime.com/character/",
+    "face": {
+      "eyes": "almond",
+      "eyeWidth": 14.0,
+      "eyeHeight": 10.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.63,
+      "pupilScale": 0.5,
+      "eyeTilt": 5.0,
+      "gazeX": 0,
+      "brow": "arched",
+      "mouth": "small-smile",
+      "faceShape": "oval",
+      "blush": 0,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": true,
+      "lipColor": "#a85065",
+      "mouthScale": 0.8
+    },
+    "chibiReference": "https://www.viz.com/firefly-wedding",
+    "chibiReferenceKind": "official-cast-fallback"
   },
   {
     "id": "anime-mitsueda",
@@ -941,7 +2335,27 @@
     "bg": "#f0e4df",
     "style": "swept",
     "accessory": "stubble",
-    "reference": "https://hotaru-anime.com/character/"
+    "reference": "https://hotaru-anime.com/character/",
+    "face": {
+      "eyes": "narrow",
+      "eyeWidth": 14.0,
+      "eyeHeight": 7.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.37,
+      "pupilScale": 0.4,
+      "eyeTilt": -2.0,
+      "gazeX": 0,
+      "brow": "tired",
+      "mouth": "smirk",
+      "faceShape": "square",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "undereye": true
+    },
+    "chibiReference": "https://hotaru-anime.com/character/",
+    "chibiReferenceKind": "official-cast-fallback"
   },
   {
     "id": "anime-yona",
@@ -956,7 +2370,26 @@
     "accessory": "hairpin",
     "reference": "https://www.marv.jp/special/yona/story.html",
     "quote": "I want to become stronger.",
-    "quoteSource": "https://subs.yakuaru.com/books/yona-of-the-dawn/page/e7-gods-will-Tb2"
+    "quoteSource": "https://subs.yakuaru.com/books/yona-of-the-dawn/page/e7-gods-will-Tb2",
+    "face": {
+      "eyes": "soft",
+      "eyeWidth": 14.0,
+      "eyeHeight": 15.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.86,
+      "pupilScale": 0.62,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "raised",
+      "mouth": "open-smile",
+      "faceShape": "round",
+      "blush": 0.17,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": true
+    },
+    "chibiReference": "https://news.pierrot.jp/yona-graffart-cafe/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-hak",
@@ -969,7 +2402,27 @@
     "bg": "#e8e5dc",
     "style": "messy",
     "accessory": "blue-sash",
-    "reference": "https://www.marv.jp/special/yona/story.html"
+    "reference": "https://www.marv.jp/special/yona/story.html",
+    "face": {
+      "eyes": "half-lidded",
+      "eyeWidth": 15.0,
+      "eyeHeight": 8.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.49,
+      "pupilScale": 0.42,
+      "eyeTilt": 2.0,
+      "gazeX": 0,
+      "brow": "flat",
+      "mouth": "smirk",
+      "faceShape": "square",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": false,
+      "browWeight": 1.8
+    },
+    "chibiReference": "https://news.pierrot.jp/yona-graffart-cafe/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-kija",
@@ -982,7 +2435,27 @@
     "bg": "#e8e5dc",
     "style": "swept",
     "accessory": "dragon-hand",
-    "reference": "https://www.marv.jp/special/yona/story.html"
+    "reference": "https://www.marv.jp/special/yona/story.html",
+    "face": {
+      "eyes": "round",
+      "eyeWidth": 13.0,
+      "eyeHeight": 14.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.82,
+      "pupilScale": 0.58,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "soft",
+      "mouth": "neutral",
+      "faceShape": "oval",
+      "blush": 0,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": true,
+      "mouthScale": 0.75
+    },
+    "chibiReference": "https://news.pierrot.jp/yona-graffart-cafe/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-shin-ah",
@@ -990,12 +2463,32 @@
     "series": "Yona of the Dawn",
     "studyLine": "Let's give this chapter ten focused minutes, then take a little break.",
     "hair": "#5485aa",
-    "eyes": "#c0b65b",
+    "eyes": "#c59b4f",
     "outfit": "#738ba7",
     "bg": "#e8e5dc",
     "style": "long",
     "accessory": "dragon-mask",
-    "reference": "https://www.marv.jp/special/yona/story.html"
+    "reference": "https://www.marv.jp/special/yona/story.html",
+    "face": {
+      "eyes": "almond",
+      "eyeWidth": 14.0,
+      "eyeHeight": 12.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.75,
+      "pupilScale": 0.42,
+      "eyeTilt": 0.0,
+      "gazeX": 0,
+      "brow": "flat",
+      "mouth": "neutral",
+      "faceShape": "oval",
+      "blush": 0,
+      "lashes": false,
+      "irisDetail": "plain",
+      "highlights": true,
+      "mouthScale": 0.65
+    },
+    "chibiReference": "https://news.pierrot.jp/yona-graffart-cafe/",
+    "chibiReferenceKind": "licensed-chibi"
   },
   {
     "id": "anime-jae-ha",
@@ -1008,6 +2501,26 @@
     "bg": "#e8e5dc",
     "style": "ponytail",
     "accessory": "earring",
-    "reference": "https://www.marv.jp/special/yona/story.html"
+    "reference": "https://www.marv.jp/special/yona/story.html",
+    "face": {
+      "eyes": "half-lidded",
+      "eyeWidth": 15.0,
+      "eyeHeight": 9.0,
+      "eyeSpacing": 28.0,
+      "irisScale": 0.62,
+      "pupilScale": 0.44,
+      "eyeTilt": 1.0,
+      "gazeX": 0,
+      "brow": "tired",
+      "mouth": "neutral",
+      "faceShape": "pointed",
+      "blush": 0,
+      "lashes": true,
+      "irisDetail": "plain",
+      "highlights": false,
+      "mouthScale": 0.7
+    },
+    "chibiReference": "https://news.pierrot.jp/yona-graffart-cafe/",
+    "chibiReferenceKind": "licensed-chibi"
   }
 ]
