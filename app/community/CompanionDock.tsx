@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   LifeBuoy,
   MessageCircle,
@@ -53,6 +53,7 @@ export default function CompanionDock({
     [open, setOpen] = useState(false),
     [settings, setSettings] = useState(false),
     [bubble, setBubble] = useState(""),
+    [bubbleSource, setBubbleSource] = useState(""),
     [text, setText] = useState(""),
     [turns, setTurns] = useState<Turn[]>([]),
     [busy, setBusy] = useState(false),
@@ -64,7 +65,11 @@ export default function CompanionDock({
     running = useRef(false);
   const request = useRef<AbortController | null>(null);
   const sequence = useRef(0);
-  const bubbleSequence = useRef(0);
+  // Signature dialogue comes first; hover never consumes the automatic sequence.
+  const bubbleSequence = useRef(1);
+  const lastHoverAt = useRef<number | null>(null);
+  const lastLineAt = useRef<number | null>(null);
+  const lineId = useId();
   const [showHelp, setShowHelp] = useState(false);
   useEffect(
     () => () => {
@@ -133,27 +138,83 @@ export default function CompanionDock({
   }, [showHelp]);
   useEffect(() => {
     setBubble("");
-    bubbleSequence.current = 0;
+    setBubbleSource("");
+    bubbleSequence.current = 1;
+    lastHoverAt.current = null;
+    lastLineAt.current = null;
   }, [id]);
   useEffect(() => {
     if (open || quiet) {
+      if (open) lastHoverAt.current = null;
       setBubble("");
+      setBubbleSource("");
       return;
     }
-    const timer = setInterval(() => {
-      if (!document.hidden)
-        setBubble(animeCompanionBubble(id, bubbleSequence.current++)?.text || lines[Math.floor(Math.random() * lines.length)]);
-    }, 150000);
-    return () => clearInterval(timer);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const clearTimer = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      timer = undefined;
+    };
+    const schedule = (delay: number) => {
+      clearTimer();
+      if (document.hidden) return;
+      timer = setTimeout(() => {
+        if (document.hidden) return;
+        // Give a manually requested line time to finish before another appears.
+        if (lastLineAt.current === null || Date.now() - lastLineAt.current >= 18000) {
+          const line = animeCompanionBubble(id, bubbleSequence.current++);
+          setBubble(line?.text || lines[Math.floor(Math.random() * lines.length)]);
+          setBubbleSource(line?.quoteSource || "");
+          lastLineAt.current = Date.now();
+        }
+        schedule(120000);
+      }, delay);
+    };
+    const visibilityChanged = () => {
+      clearTimer();
+      if (document.hidden) {
+        setBubble("");
+        setBubbleSource("");
+      } else schedule(30000);
+    };
+    schedule(30000);
+    document.addEventListener("visibilitychange", visibilityChanged);
+    return () => {
+      clearTimer();
+      document.removeEventListener("visibilitychange", visibilityChanged);
+    };
   }, [open, quiet, id]);
   useEffect(() => {
     if (!bubble) return;
-    const timer = setTimeout(
-      () => setBubble(""),
-      Math.min(18000, Math.max(9000, bubble.length * 80)),
-    );
-    return () => clearTimeout(timer);
+    const dismiss = () => {
+      setBubble("");
+      setBubbleSource("");
+    };
+    const timer = setTimeout(dismiss, Math.min(18000, Math.max(9000, bubble.length * 80)));
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") dismiss();
+    };
+    const hideWhenBackgrounded = () => {
+      if (document.hidden) dismiss();
+    };
+    document.addEventListener("keydown", escape);
+    document.addEventListener("visibilitychange", hideWhenBackgrounded);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("keydown", escape);
+      document.removeEventListener("visibilitychange", hideWhenBackgrounded);
+    };
   }, [bubble]);
+  function showSignatureLine() {
+    if (open || document.hidden) return;
+    const now = Date.now();
+    if (lastHoverAt.current !== null && now - lastHoverAt.current < 15000) return;
+    lastHoverAt.current = now;
+    lastLineAt.current = now;
+    const line = animeCompanionBubble(id, 1);
+    setBubble(line?.text || lines[Math.floor(Math.random() * lines.length)]);
+    setBubbleSource(line?.quoteSource || "");
+  }
   async function save() {
     if (!draftName.trim()) {
       setError("Give your companion a name first.");
@@ -262,17 +323,24 @@ export default function CompanionDock({
       aria-label="Your AI study companion"
     >
       {bubble && !open && (
-        <button
-          className="buddy-bubble"
-          onClick={() => setBubble("")}
-          aria-label={`${name}: ${bubble}. Tap to dismiss.`}
-        >
-          <Sparkles className="bubble-sparkles" size={18} />
-          <strong>{name}</strong>
-          <span>{bubble}</span>
-          <small>Tap to dismiss ✧</small>
-          <i className="bubble-star">✦</i>
-        </button>
+        <div className="buddy-bubble-stack" role="status" aria-live="polite" aria-atomic="true">
+          <button
+            id={lineId}
+            className="buddy-bubble"
+            onClick={() => {
+              setBubble("");
+              setBubbleSource("");
+            }}
+            aria-label={`${name}: ${bubble}. Tap to dismiss.`}
+          >
+            <Sparkles className="bubble-sparkles" size={18} />
+            <strong>{name}</strong>
+            <span>{bubble}</span>
+            <small>Tap or press Escape to dismiss ✧</small>
+            <i className="bubble-star">✦</i>
+          </button>
+          {bubbleSource && <a className="buddy-quote-source" href={bubbleSource} target="_blank" rel="noopener noreferrer">Quote source ↗</a>}
+        </div>
       )}
       {open && (
         <section className="buddy-panel">
@@ -330,6 +398,7 @@ export default function CompanionDock({
                   placeholder="Your buddy's name"
                 />
               </label>
+              <p className="buddy-line-hint">Hover over your companion or focus it with Tab for a line. Quiet mode pauses automatic lines.</p>
               <AvatarPicker value={draftId} onChange={(nextId) => {
                 setDraftName((currentName) => companionNameAfterSelection(currentName, draftId, nextId));
                 setDraftId(nextId);
@@ -346,6 +415,7 @@ export default function CompanionDock({
                       String(e.target.checked),
                     );
                     setBubble("");
+                    setBubbleSource("");
                   }}
                 />
                 <span>Quiet mode · pause occasional bubbles</span>
@@ -485,12 +555,20 @@ export default function CompanionDock({
         className="buddy-launcher"
         aria-expanded={open}
         aria-label={`${name}, ${open ? "close" : "open"} companion chat`}
+        aria-describedby={bubble && !open ? lineId : undefined}
+        onPointerEnter={(event) => {
+          if (event.pointerType === "mouse") showSignatureLine();
+        }}
+        onFocus={(event) => {
+          if (event.currentTarget.matches(":focus-visible")) showSignatureLine();
+        }}
         onClick={() => {
           setOpen((v) => !v);
           setBubble("");
+          setBubbleSource("");
         }}
       >
-        <Avatar id={id} />
+        <Avatar id={id} hoverLine={false} />
         <span>✧</span>
       </button>
     </aside>

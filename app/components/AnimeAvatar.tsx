@@ -2,7 +2,7 @@
 
 import { useId } from "react";
 import { characterMotionStyle } from "./character-motion";
-import type { AnimeCharacter } from "../community/anime-companions";
+import { animeCompanionBubble, type AnimeCharacter } from "../community/anime-companions";
 import AnimeFace, { AnimeMouth, faceDesign, faceOutline } from "./AnimeFace";
 
 type Visual = AnimeCharacter;
@@ -40,6 +40,8 @@ function Bow({ x, y, color = ink, size = 1 }: { x: number; y: number; color?: st
 
 function HairBack({ c }: { c: Visual }) {
   const h = c.hair, dark = ink;
+  // Sasuke has a rounded crown with rear ducktail spikes, rather than a star-shaped fringe.
+  if (c.id === "anime-sasuke") return <g fill={h} stroke={dark} strokeWidth="1.2" strokeLinejoin="round"><path d="M26 28 19 24l3 12-10-2 8 11-7 5 10 2-5 11 11-4 6 10h30l6-10 11 4-5-11 10-2-7-5 8-11-10 2 3-12-8 4Z"/><path d="m20 44 8 5m52-5-8 5" fill="none" stroke={tint(h,.14)} strokeWidth=".8"/></g>;
   if (c.id === "anime-kaoruko") return <g fill={h} stroke={dark} strokeWidth="1.2"><path d="M24 29Q13 35 18 52q-7 12 1 20-8 13 2 19l6-8q9 8 15-10h16q7 17 18 9l5 9q9-9 1-20 7-10 0-21 4-18-9-24Z"/><path d="M24 43q-5 11 0 21t0 16m52-37q5 11 0 21t0 16" fill="none" stroke={tint(h,.18)} strokeWidth="1"/></g>;
   if (c.id === "anime-subaru") return <g fill={h} stroke={dark} strokeWidth="1.2"><path d="M65 20q3-16 16-11 16 4 8 24l-6 16 9 27q-20-3-20-24l-2-20-10-6Z"/><path d="M78 18q10 9 0 30l6 20" fill="none" stroke={tint(h,-.24)} strokeWidth="1"/><path d="m67 20 10 4-2 5-9-4Z" fill="#66616f"/></g>;
   if (c.id === "anime-mitsueda") return <g fill={h} stroke={dark} strokeWidth="1"><path d="M24 32q-8 20 2 49l7-13-2-29m45-7q8 20-2 49l-7-13 2-29"/><path d="m26 48 2 20m46-20-2 20" stroke={tint(h,.2)} fill="none"/></g>;
@@ -74,7 +76,7 @@ const spikyHair: Record<string, string> = {
   "anime-toshiro": "M19 40 9 30l14-4-4-14 18 9L45 5l11 15L70 8l2 17 15 3-10 12 9 8-16-2-10-15-7 11-7-11-8 13-8-8-5 13Z",
   "anime-bakugo": "M20 42 8 36l9-9-8-9 18 2-4-15 17 13 9-16 8 16L73 6l-1 16 17-3-8 12 12 6-16 6-5 9-9-18-6 9-7-12-7 12-8-11-7 19Z",
   "anime-naruto": "M20 41 11 30l12-6-4-12 17 5L43 5l11 13L67 7l3 15 13-2-5 14 9 6-15 8-9-15-11 8-10-10-9 12-8-7Z",
-  "anime-sasuke": "M21 47 9 38l12-7-4-15 16 5L44 7l12 12 16-4-2 13 14 7-5 24-13-27-7 26-8-17-6 13-7-22-13 24Z",
+  "anime-sasuke": "M22 44Q15 19 35 13q14-6 28-1l12-3-5 7 10-1-6 8q8 9 5 20l-3 16-7 7 1-25-6-14q-15 5-28 0l-6 14 1 25-7-8Z",
   "anime-kakashi": "M20 38 11 31l14-7-3-11 17 4L47 5l8 11L70 4l-1 14 14-5-5 15 12 3-15 13-12-14-11 13-9-13-11 14-4-7Z",
   "anime-gojo": "M19 43 10 34l12-7-5-12 17 6L41 7l12 13L68 6l2 14 15-8-4 17 10 6-13 14-13-11-8 7-8-13-7 12-9-8-8 12Z",
   "anime-megumi": "M19 43 7 31l17-1-6-19 19 11 6-20 12 19L73 5l-2 19 19-7-9 16 13 7-17 9-11-18-9 14-7-16-9 18-9-12-6 18Z",
@@ -256,7 +258,7 @@ function Chopper({ c }: { c: Visual }) {
 }
 
 /** Original, compact vector portraits: shared proportions, individual hair, costume and signature details. */
-export default function AnimeAvatar({ character: c, className = "", label }: { character: Visual; className?: string; label?: string }) {
+export default function AnimeAvatar({ character: c, className = "", label, hoverLine = true }: { character: Visual; className?: string; label?: string; hoverLine?: boolean }) {
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const clip = `anime-clip-${uid}`;
   const face = faceDesign((c as unknown as { face?: unknown }).face);
@@ -266,6 +268,7 @@ export default function AnimeAvatar({ character: c, className = "", label }: { c
   if (c.id === "anime-kirari" && !face.lipColor) face.lipColor = "#6a90b5";
   const complexion = ["anime-yami","anime-mitsueda","anime-hak"].includes(c.id) ? "#e7b494" : "#ffdcc3";
   return <svg className={`ds-avatar anime-avatar motion-avatar ${className}`} style={characterMotionStyle(c.id)} data-character={c.id} data-transparent="true" data-animated="true" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" role={label ? "img" : undefined} aria-label={label} aria-hidden={!label || undefined}>
+    {hoverLine && <title>{animeCompanionBubble(c.id, 1)?.text || c.name}</title>}
     <defs>
       <clipPath id={clip}><rect width="100" height="100"/></clipPath>
     </defs>
@@ -277,8 +280,9 @@ export default function AnimeAvatar({ character: c, className = "", label }: { c
         <path d={faceOutline(face)} fill={complexion} stroke={ink} strokeWidth="1.8"/>
         {c.accessory === "red-scar" && <path d="M55 37q15-5 19 9l-3 13-12-1-5-10Z" fill="#bd6c70" opacity=".65"/>}
         <AnimeFace design={face} eyeColor={c.eyes} browColor={tint(c.hair,-.55)} uid={uid} characterId={c.id}/>
+        {c.id === "anime-sasuke" && <g transform="translate(50 0) scale(1.12 1) translate(-50 0)"><g className="anime-headwear"><Accessories c={c}/></g></g>}
         <g transform={`translate(50 0) scale(${frontScale} 1) translate(-50 0)`}><g className="anime-hair-front"><HairFront c={c}/></g></g>
-        {!heldProp && <g transform="translate(50 0) scale(1.12 1) translate(-50 0)"><g className={movingHeadwear.has(c.accessory) ? "anime-headwear" : undefined}><Accessories c={c}/></g></g>}
+        {!heldProp && c.id !== "anime-sasuke" && <g transform="translate(50 0) scale(1.12 1) translate(-50 0)"><g className={movingHeadwear.has(c.accessory) ? "anime-headwear" : undefined}><Accessories c={c}/></g></g>}
       </>}
     </g>
   </svg>;

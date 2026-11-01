@@ -12,7 +12,7 @@ const base = process.env.DAWNSTUDY_TEST_URL || "http://127.0.0.1:3044";
 let profile = { user_id: "anime-student", nickname: "Student", avatar_id: "cat", theme: "kuromi-dark", gender: "prefer-not-to-say", companion_id: "cat", companion_name: "Miso", onboarded: true, terms_version: "2026-10-30", public_key: null, key_fingerprint: "" };
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
 await context.addInitScript(() => localStorage.setItem("dawnstudy_session_v1", "test-token"));
-await context.route("http://localhost:8000/**", async route => {
+await context.route(`${process.env.DAWNSTUDY_TEST_API_URL || "http://localhost:8000"}/**`, async route => {
   const req = route.request(), path = new URL(req.url()).pathname;
   const headers = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "*" };
   if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers });
@@ -31,6 +31,7 @@ page.on("pageerror", error => errors.push(error.message));
 async function noOverflow() { assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false); }
 try {
   await page.goto(base); await page.waitForLoadState("networkidle");
+  if (!process.env.DAWNSTUDY_DIALOGUE_ONLY) {
   await page.locator(".sidebar").getByRole("button", { name: "My profile", exact: true }).click();
   await page.getByText(`${115 + catalog.length} icons`, { exact: true }).waitFor();
   await page.getByRole("button", { name: "Anime", exact: true }).click();
@@ -41,6 +42,9 @@ try {
     for (const character of catalog.filter(character => character.series === series)) {
       const option = picker.getByRole("button", { name: `${character.name} · ${series}`, exact: true });
       assert.equal(await option.locator(`svg[data-character="${character.id}"]`).count(), 1, character.name);
+      const hoverTitle = await option.getAttribute("title");
+      assert.ok(hoverTitle.includes("“") && hoverTitle.includes("—"), `${character.name} has a line in the picker hover title`);
+      assert.equal(await option.locator("svg > title").count(), 1, `${character.name} has a line on its portrait`);
     }
   }
   await picker.getByLabel("Anime series", { exact: true }).selectOption("all");
@@ -195,6 +199,7 @@ try {
     await page.locator(".profile-settings").getByLabel("Anime series", { exact: true }).selectOption("That Time I Got Reincarnated as a Slime");
     await noOverflow();
   }
+  }
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "Miso, open companion chat", exact: true }).click();
   await page.getByRole("button", { name: "Customize companion", exact: true }).click();
@@ -209,26 +214,70 @@ try {
   assert.equal(profile.companion_id, "anime-naruto");
   await noOverflow();
   await page.screenshot({ path: join(artifacts, "mobile-anime-companion.png"), fullPage: true });
-  await page.clock.install();
+  await page.clock.install({ time: new Date("2026-11-02T00:00:00Z") });
+  await page.clock.pauseAt(new Date("2026-11-02T00:00:01Z"));
   await page.getByRole("button", { name: "Close companion", exact: true }).click();
-  await page.clock.fastForward(150001);
-  assert.ok(await page.locator(".buddy-bubble").isVisible());
+  await page.mouse.move(0, 0);
+  await page.clock.fastForward(29999);
+  assert.equal(await page.locator(".buddy-bubble").count(), 0);
+  await page.clock.fastForward(2);
+  assert.ok((await page.locator(".buddy-bubble").innerText()).includes("Believe it!"));
+  assert.equal(await page.locator(".buddy-quote-source").getAttribute("href"), catalog.find(character => character.id === "anime-naruto").quoteSource);
+  await page.locator(".buddy-bubble").click();
+  await page.clock.fastForward(120001);
   assert.equal(await page.locator(".buddy-bubble span").innerText(), catalog.find(character => character.id === "anime-naruto").studyLine);
   await page.locator(".buddy-bubble").click();
-  await page.clock.fastForward(150001);
+  const launcher = page.locator(".buddy-launcher");
+  assert.equal(await launcher.locator("svg > title").count(), 0, "Custom bubble replaces the native tooltip on the floating companion");
+  await launcher.hover();
   assert.ok((await page.locator(".buddy-bubble").innerText()).includes("Believe it!"));
-  await page.locator(".buddy-bubble").click();
-  await page.getByRole("button", { name: "Naruto Uzumaki, open companion chat", exact: true }).click();
+  assert.equal(await launcher.getAttribute("aria-expanded"), "false", "Hover never opens chat");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator(".buddy-bubble").count(), 0);
+  await page.mouse.move(0, 0); await launcher.hover();
+  assert.equal(await page.locator(".buddy-bubble").count(), 0, "Repeated hover observes its cooldown");
+  await page.mouse.move(0, 0); await page.clock.fastForward(15001);
+  await page.keyboard.press("Escape"); await launcher.focus();
+  assert.ok((await page.locator(".buddy-bubble").innerText()).includes("Believe it!"), "Keyboard focus has the same line as hover");
+  await page.keyboard.press("Escape");
+  await launcher.click();
+  await page.getByRole("button", { name: "Close companion", exact: true }).click();
+  await page.mouse.move(0, 0); await launcher.hover();
+  assert.ok((await page.locator(".buddy-bubble").innerText()).includes("Believe it!"), "Closing chat restores manual hover immediately");
+  await launcher.click();
   await buddy.getByLabel(/Quiet mode/).check();
   await buddy.getByLabel("Companion name", { exact: true }).fill("My custom buddy");
-  await buddy.getByLabel("Anime series", { exact: true }).selectOption("Jujutsu Kaisen");
-  await buddy.getByRole("button", { name: "Satoru Gojo · Jujutsu Kaisen", exact: true }).click();
+  await buddy.getByLabel("Anime series", { exact: true }).selectOption("Naruto");
+  await buddy.getByRole("button", { name: "Sasuke Uchiha · Naruto", exact: true }).click();
   assert.equal(await buddy.getByLabel("Companion name", { exact: true }).inputValue(), "My custom buddy");
+  await buddy.getByRole("button", { name: "Save companion", exact: true }).click();
+  await page.getByText("Saved. Your buddy has a new look!", { exact: true }).waitFor();
+  assert.equal(profile.companion_id, "anime-sasuke");
   await page.getByRole("button", { name: "Close companion", exact: true }).click();
+  await page.mouse.move(0, 0);
   await page.clock.fastForward(300001);
-  assert.equal(await page.locator(".buddy-bubble").count(), 0);
+  assert.equal(await page.locator(".buddy-bubble").count(), 0, "Quiet mode pauses automatic lines");
+  await launcher.hover();
+  const sasuke = catalog.find(character => character.id === "anime-sasuke");
+  assert.equal(await page.locator(".buddy-bubble span").innerText(), `“${sasuke.quote}” — ${sasuke.name}`);
+  assert.equal(await page.locator(".buddy-quote-source").getAttribute("href"), sasuke.quoteSource);
+  await noOverflow();
+  await page.screenshot({ path: join(artifacts, "sasuke-hover-line-mobile.png"), animations: "disabled" });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.screenshot({ path: join(artifacts, "sasuke-hover-line-desktop.png"), animations: "disabled" });
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  assert.equal(await page.locator(".buddy-bubble").count(), 0, "A line requested in quiet mode still hides with its tab");
+  await page.evaluate(() => { delete document.hidden; document.dispatchEvent(new Event("visibilitychange")); });
+  await launcher.dispatchEvent("pointerenter", { pointerType: "touch" });
+  assert.equal(await page.locator(".buddy-bubble").count(), 0, "Touch does not trigger hover dialogue");
+  await launcher.click();
+  assert.equal(await launcher.getAttribute("aria-expanded"), "true", "Tap/click still opens chat");
+  await page.getByRole("button", { name: "Close companion", exact: true }).click();
   assert.deepEqual(errors, []);
-  console.log("PASS companion persistence, automatic/custom naming, timed signature quote, quiet mode and mobile layouts.");
+  console.log("PASS first quote at30s, two-minute encouragement, hover, keyboard focus, dismissal, cooldown, quiet-mode manual lines, hidden-tab cleanup and touch/click behavior.");
   console.log(`Screenshots: ${artifacts}`);
 } catch (error) {
   console.error("Browser errors:", errors);

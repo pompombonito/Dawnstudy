@@ -2,7 +2,7 @@
 import { useState } from "react";
 import Avatar from "../components/Avatar";
 import { animals, portraits } from "./catalog";
-import { animeCharacters, animeSeries, filterAnimeCharacters, findAnimeCharacter } from "./anime-companions";
+import { animeCharacters, animeSeries, animeCompanionBubble, filterAnimeCharacters, findAnimeCharacter } from "./anime-companions";
 import ThemePicker from "../components/ThemePicker";
 import { DEFAULT_THEME } from "./themes";
 import type { ProfileInput, Theme } from "./types";
@@ -142,7 +142,7 @@ export function AvatarPicker({
             type="button"
             key={choice.id}
             className={value === choice.id ? "chosen" : ""}
-            title={"series" in choice ? `${choice.label} · ${choice.series}` : choice.label}
+            title={"series" in choice ? `${choice.label} · ${choice.series}\n${animeCompanionBubble(choice.id, 1)?.text || ""}` : choice.label}
             aria-label={"series" in choice ? `${choice.label} · ${choice.series}` : choice.label}
             aria-pressed={value === choice.id}
             onClick={() => onChange(choice.id)}

@@ -1584,7 +1584,10 @@
       "mouthScale": 0.8
     },
     "chibiReference": "https://special.goodsmile.info/naruto/",
-    "chibiReferenceKind": "licensed-chibi"
+    "chibiReferenceKind": "licensed-chibi",
+    "quote": "...But what I do have is determination.",
+    "quoteSource": "https://naruto-official.com/en/news/01_1856",
+    "quoteNote": "Short excerpt from Sasuke's introduction in Naruto volume 1, chapter 4, reproduced by the official birthday column. Letter case normalized from the manga capitals."
   },
   {
     "id": "anime-sakura",
@@ -1618,7 +1621,10 @@
       "mouthScale": 1.2
     },
     "chibiReference": "https://special.goodsmile.info/naruto/",
-    "chibiReferenceKind": "licensed-chibi"
+    "chibiReferenceKind": "licensed-chibi",
+    "quote": "Now it's your turn...to watch my back!!",
+    "quoteSource": "https://naruto-official.com/en/news/01_1743",
+    "quoteNote": "Short excerpt from Sakura in Naruto volume 6, chapter 53, reproduced by the official birthday column. Line-break ellipses and letter case normalized for one-line display."
   },
   {
     "id": "anime-kakashi",
@@ -1651,7 +1657,10 @@
       "hiddenEye": "right"
     },
     "chibiReference": "https://special.goodsmile.info/naruto/",
-    "chibiReferenceKind": "licensed-chibi"
+    "chibiReferenceKind": "licensed-chibi",
+    "quote": "What is even more important now is teamwork!",
+    "quoteSource": "https://naruto-official.com/en/news/01_1903",
+    "quoteNote": "Short excerpt from Kakashi in Naruto volume 2, chapter 8, reproduced by the official birthday column. Letter case normalized from the manga capitals."
   },
   {
     "id": "anime-hinata",
@@ -1684,7 +1693,10 @@
       "mouthScale": 0.75
     },
     "chibiReference": "https://special.goodsmile.info/naruto/",
-    "chibiReferenceKind": "licensed-chibi"
+    "chibiReferenceKind": "licensed-chibi",
+    "quote": "I'm here because I want to be.",
+    "quoteSource": "https://naruto-official.com/en/news/01_1668",
+    "quoteNote": "Short excerpt from Hinata in Naruto volume 47, chapter 437, reproduced by the official birthday column. Letter case normalized from the manga capitals."
   },
   {
     "id": "anime-gojo",

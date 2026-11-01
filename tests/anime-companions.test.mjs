@@ -86,3 +86,12 @@ test("every companion can share a sourced signature line from its own series", (
   const yuno = helper.animeCompanionBubble("anime-yuno", 1);
   assert.ok(yuno.text.endsWith("— Asta"), "A shared line keeps the actual speaker’s name");
 });
+
+test("Naruto companions use their own sourced lines instead of another character's dialogue", () => {
+  for (const id of ["anime-naruto", "anime-sasuke", "anime-sakura", "anime-kakashi", "anime-hinata"]) {
+    const character = helper.findAnimeCharacter(id), bubble = helper.animeCompanionBubble(id, 1);
+    assert.ok(character.quote && character.quoteSource, id);
+    assert.equal(bubble.text, `“${character.quote}” — ${character.name}`);
+    assert.equal(bubble.quoteSource, character.quoteSource);
+  }
+});

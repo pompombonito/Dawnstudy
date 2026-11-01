@@ -889,6 +889,26 @@
 .buddy-launcher:hover {
   transform: translateY(-4px);
 }
+.buddy-bubble-stack {
+  display: grid;
+  gap: 5px;
+  justify-items: end;
+  max-width: calc(100vw - 24px);
+}
+.buddy-quote-source {
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--muted);
+  font-size: 10px;
+  text-underline-offset: 3px;
+}
+.buddy-line-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
 .buddy-bubble {
   position: relative;
   max-width: 280px;

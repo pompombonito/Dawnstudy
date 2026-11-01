@@ -8,13 +8,15 @@ export default function Avatar({
   id = "cat",
   className = "",
   label,
+  hoverLine = true,
 }: {
   id?: string;
   className?: string;
   label?: string;
+  hoverLine?: boolean;
 }) {
   const animeCharacter = findAnimeCharacter(id);
-  if (animeCharacter) return <AnimeAvatar character={animeCharacter} className={className} label={label}/>;
+  if (animeCharacter) return <AnimeAvatar character={animeCharacter} className={className} label={label} hoverLine={hoverLine}/>;
   if (["cat", "fox", "bunny", "bear"].includes(id))
     return (
       <span
