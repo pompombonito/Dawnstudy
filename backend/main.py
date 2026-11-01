@@ -123,6 +123,7 @@ class Health(BaseModel):
     status: Literal["ok"] = "ok"
     model: str
     web_search: bool
+    revision: str | None = None
 
 
 class GoogleSignIn(BaseModel):
@@ -241,7 +242,7 @@ def onboarded_user(user: dict[str, str] = Depends(authenticated_user)) -> dict[s
 def health():
     models = configured_ai_models()
     model_summary = " → ".join(model_id for model_id, _provider, _model, _key, _label in models) or "not configured"
-    return Health(model=model_summary, web_search=bool(os.getenv("TAVILY_API_KEY")))
+    return Health(model=model_summary, web_search=bool(os.getenv("TAVILY_API_KEY")), revision=os.getenv("RENDER_GIT_COMMIT"))
 
 
 @app.get("/api/models")
