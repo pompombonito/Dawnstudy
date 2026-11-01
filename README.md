@@ -11,6 +11,8 @@ A student study desk that turns uploaded notes into flashcards, multiple-choice 
 
 Supported materials are PDF, PowerPoint (`.pptx`), DOCX, TXT, Markdown, and PNG/JPG/JPEG/WEBP images up to 15 MB. Students can upload those files or paste a public webpage URL; pages that require sign-in or block public access return a clear access error. Direct links to supported file types can also be pasted. PowerPoint slides and PDF pages are labeled so generated cards can cite slide/page references. Uploaded images are OCR-processed with the bundled Tesseract engine and English language data before being sent to the selected AI model. The API truncates extracted content to a bounded context window before sending it to the model.
 
+Page/slide selection accepts a blank field, `All pages`, `All slides`, `all`, or `*` for the whole document, ignoring capitalization and extra spacing. Numbered selections support inputs such as `1-5, 8`, `pages 1 to 5; 8`, Unicode dashes, and line-separated lists. Duplicate page numbers are combined, and trailing separators are tolerated. Invalid, reversed or out-of-bounds ranges still return a clear error rather than selecting unexpected material. The same parser handles uploads, direct document links and saved selections reused for continuation.
+
 ## Deploy
 
 ### API on Render
