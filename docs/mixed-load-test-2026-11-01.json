@@ -1,0 +1,614 @@
+{
+  "created_at": "2026-11-01T05:42:12.524338+00:00",
+  "kind": "isolated_local_mixed_workload_simulation",
+  "production_capacity_claim": false,
+  "runtime": {
+    "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
+    "fastapi": "0.115.6",
+    "starlette": "0.41.3",
+    "httpx": "0.28.1",
+    "requests": "2.32.3"
+  },
+  "assumptions": {
+    "transport": "ASGI TestClient; no external HTTP; locally signed synthetic bearer sessions through original authentication and profile gates",
+    "storage": "thread-safe memory Sheets HTTP adapter; real accounts._api retries, _rows caches, serialization and write locks",
+    "schema": "preexisting headers; cold schema creation excluded",
+    "sheets_latency_ms": 50,
+    "quota_model": "60 read and 60 write HTTP requests per rolling60s per service identity; synthetic model, not measured Google responses",
+    "quota_resets": "each independent stage starts with an empty rolling window and fresh synthetic tables",
+    "study_workload": "Each student loads library/progress/due, saves one set, then rates one card and refreshes progress every10s; synchronous backpressure after slow requests",
+    "generation_workload": "10questions; real fallback engine produces batches8+2, each fake provider call sleeps5s; one generator per10students rounded, minimum1 so small-cohort fractions exceed10%",
+    "excluded": "real Google login, Google transport latency/quota billing, real model latency/quality/quotas, OCR, browser rendering, Render CPU/RAM and network/deployment conditions",
+    "interpretation": "Local functional/quota-demand evidence only; not a supported concurrent-student limit"
+  },
+  "stages": [
+    {
+      "students": 1,
+      "requested_duration_seconds": 65,
+      "actual_duration_seconds": 65.0,
+      "quota_mode": "observe_demand_without_throttling",
+      "generator_students": 1,
+      "generator_fraction": 1.0,
+      "sheets": {
+        "attempts": {
+          "read": 46,
+          "write": 14
+        },
+        "accepted": {
+          "read": 46,
+          "write": 14
+        },
+        "http_429_attempts": {},
+        "attempts_above_rolling_60s_demand_limit": {},
+        "by_table_and_direction": {
+          "Users:read": 2,
+          "StudySets:read": 8,
+          "CardProgress:read": 20,
+          "ReviewLogs:read": 14,
+          "Profiles:read": 2,
+          "StudySets:write": 2,
+          "CardProgress:write": 6,
+          "ReviewLogs:write": 6
+        },
+        "phases": {
+          "startup_0_to_10s": {
+            "read": 8,
+            "write": 1
+          },
+          "steady_after_10s": {
+            "read": 38,
+            "write": 13
+          }
+        },
+        "first_over_limit_at_seconds": null
+      },
+      "api": {
+        "requests": 28,
+        "successes": 28,
+        "errors": 0,
+        "status_counts": {
+          "200": 27,
+          "202": 1
+        },
+        "endpoints": {
+          "GET /api/study-sets": {
+            "requests": 1,
+            "status_counts": {
+              "200": 1
+            },
+            "p50_ms": 109.0,
+            "p95_ms": 109.0,
+            "max_ms": 109.0
+          },
+          "GET /api/progress": {
+            "requests": 7,
+            "status_counts": {
+              "200": 7
+            },
+            "p50_ms": 94.0,
+            "p95_ms": 156.0,
+            "max_ms": 156.0
+          },
+          "GET /api/reviews/due": {
+            "requests": 1,
+            "status_counts": {
+              "200": 1
+            },
+            "p50_ms": 109.0,
+            "p95_ms": 109.0,
+            "max_ms": 109.0
+          },
+          "POST /api/study-sets": {
+            "requests": 1,
+            "status_counts": {
+              "200": 1
+            },
+            "p50_ms": 110.0,
+            "p95_ms": 110.0,
+            "max_ms": 110.0
+          },
+          "POST /api/generation-jobs": {
+            "requests": 1,
+            "status_counts": {
+              "202": 1
+            },
+            "p50_ms": 0.0,
+            "p95_ms": 0.0,
+            "max_ms": 0.0
+          },
+          "GET /api/generation-jobs/{id}": {
+            "requests": 11,
+            "status_counts": {
+              "200": 11
+            },
+            "p50_ms": 0.0,
+            "p95_ms": 16.0,
+            "max_ms": 16.0
+          },
+          "POST /api/reviews": {
+            "requests": 6,
+            "status_counts": {
+              "200": 6
+            },
+            "p50_ms": 312.0,
+            "p95_ms": 359.0,
+            "max_ms": 359.0
+          }
+        },
+        "error_samples": [],
+        "generations": [
+          {
+            "user": "synthetic-000",
+            "status": "complete",
+            "elapsed_seconds": 11.031,
+            "items": 10,
+            "saved": true,
+            "persistence_error": null,
+            "error_status": null,
+            "message": "Your study set is ready."
+          }
+        ]
+      },
+      "authentication": "retained successful demand-only stage used synthetic identity dependency with real account lookup/profile gate; signed-token verification was added for subsequent stages"
+    },
+    {
+      "students": 2,
+      "requested_duration_seconds": 65,
+      "actual_duration_seconds": 65.0,
+      "authentication": "real signed synthetic bearer session; original authenticated_user/onboarded_user",
+      "quota_mode": "observe_demand_without_throttling",
+      "generator_students": 1,
+      "generator_fraction": 0.5,
+      "sheets": {
+        "attempts": {
+          "read": 82,
+          "write": 27
+        },
+        "accepted": {
+          "read": 82,
+          "write": 27
+        },
+        "http_429_attempts": {},
+        "attempts_above_rolling_60s_demand_limit": {
+          "read": 22
+        },
+        "by_table_and_direction": {
+          "Users:read": 3,
+          "StudySets:read": 9,
+          "CardProgress:read": 40,
+          "ReviewLogs:read": 28,
+          "Profiles:read": 2,
+          "StudySets:write": 3,
+          "CardProgress:write": 12,
+          "ReviewLogs:write": 12
+        },
+        "phases": {
+          "startup_0_to_10s": {
+            "read": 12,
+            "write": 2
+          },
+          "steady_after_10s": {
+            "read": 70,
+            "write": 25
+          }
+        },
+        "first_over_limit_at_seconds": 50.094
+      },
+      "api": {
+        "requests": 44,
+        "successes": 44,
+        "errors": 0,
+        "status_counts": {
+          "200": 43,
+          "202": 1
+        },
+        "endpoints": {
+          "GET /api/study-sets": {
+            "requests": 2,
+            "status_counts": {
+              "200": 2
+            },
+            "p50_ms": 0.0,
+            "p95_ms": 109.0,
+            "max_ms": 109.0
+          },
+          "GET /api/progress": {
+            "requests": 14,
+            "status_counts": {
+              "200": 14
+            },
+            "p50_ms": 109.0,
+            "p95_ms": 156.0,
+            "max_ms": 156.0
+          },
+          "GET /api/reviews/due": {
+            "requests": 2,
+            "status_counts": {
+              "200": 2
+            },
+            "p50_ms": 93.0,
+            "p95_ms": 109.0,
+            "max_ms": 109.0
+          },
+          "POST /api/study-sets": {
+            "requests": 2,
+            "status_counts": {
+              "200": 2
+            },
+            "p50_ms": 109.0,
+            "p95_ms": 110.0,
+            "max_ms": 110.0
+          },
+          "POST /api/generation-jobs": {
+            "requests": 1,
+            "status_counts": {
+              "202": 1
+            },
+            "p50_ms": 15.0,
+            "p95_ms": 15.0,
+            "max_ms": 15.0
+          },
+          "GET /api/generation-jobs/{id}": {
+            "requests": 11,
+            "status_counts": {
+              "200": 11
+            },
+            "p50_ms": 0.0,
+            "p95_ms": 0.0,
+            "max_ms": 0.0
+          },
+          "POST /api/reviews": {
+            "requests": 12,
+            "status_counts": {
+              "200": 12
+            },
+            "p50_ms": 312.0,
+            "p95_ms": 360.0,
+            "max_ms": 360.0
+          }
+        },
+        "error_samples": [],
+        "generations": [
+          {
+            "user": "synthetic-000",
+            "status": "complete",
+            "elapsed_seconds": 11.031,
+            "items": 10,
+            "saved": true,
+            "persistence_error": null,
+            "error_status": null,
+            "message": "Your study set is ready."
+          }
+        ]
+      }
+    },
+    {
+      "students": 5,
+      "requested_duration_seconds": 65,
+      "actual_duration_seconds": 65.0,
+      "authentication": "real signed synthetic bearer session; original authenticated_user/onboarded_user",
+      "quota_mode": "observe_demand_without_throttling",
+      "generator_students": 1,
+      "generator_fraction": 0.2,
+      "sheets": {
+        "attempts": {
+          "read": 187,
+          "write": 66
+        },
+        "accepted": {
+          "read": 187,
+          "write": 66
+        },
+        "http_429_attempts": {},
+        "attempts_above_rolling_60s_demand_limit": {
+          "read": 127,
+          "write": 3
+        },
+        "by_table_and_direction": {
+          "Users:read": 3,
+          "StudySets:read": 11,
+          "CardProgress:read": 100,
+          "ReviewLogs:read": 70,
+          "Profiles:read": 3,
+          "StudySets:write": 6,
+          "CardProgress:write": 30,
+          "ReviewLogs:write": 30
+        },
+        "phases": {
+          "startup_0_to_10s": {
+            "read": 26,
+            "write": 5
+          },
+          "steady_after_10s": {
+            "read": 161,
+            "write": 61
+          }
+        },
+        "first_over_limit_at_seconds": 20.359
+      },
+      "api": {
+        "requests": 92,
+        "successes": 92,
+        "errors": 0,
+        "status_counts": {
+          "200": 91,
+          "202": 1
+        },
+        "endpoints": {
+          "GET /api/study-sets": {
+            "requests": 5,
+            "status_counts": {
+              "200": 5
+            },
+            "p50_ms": 47.0,
+            "p95_ms": 109.0,
+            "max_ms": 109.0
+          },
+          "GET /api/progress": {
+            "requests": 35,
+            "status_counts": {
+              "200": 35
+            },
+            "p50_ms": 109.0,
+            "p95_ms": 156.0,
+            "max_ms": 157.0
+          },
+          "GET /api/reviews/due": {
+            "requests": 5,
+            "status_counts": {
+              "200": 5
+            },
+            "p50_ms": 109.0,
+            "p95_ms": 110.0,
+            "max_ms": 110.0
+          },
+          "POST /api/study-sets": {
+            "requests": 5,
+            "status_counts": {
+              "200": 5
+            },
+            "p50_ms": 62.0,
+            "p95_ms": 110.0,
+            "max_ms": 110.0
+          },
+          "POST /api/generation-jobs": {
+            "requests": 1,
+            "status_counts": {
+              "202": 1
+            },
+            "p50_ms": 0.0,
+            "p95_ms": 0.0,
+            "max_ms": 0.0
+          },
+          "GET /api/generation-jobs/{id}": {
+            "requests": 11,
+            "status_counts": {
+              "200": 11
+            },
+            "p50_ms": 0.0,
+            "p95_ms": 16.0,
+            "max_ms": 16.0
+          },
+          "POST /api/reviews": {
+            "requests": 30,
+            "status_counts": {
+              "200": 30
+            },
+            "p50_ms": 312.0,
+            "p95_ms": 360.0,
+            "max_ms": 375.0
+          }
+        },
+        "error_samples": [],
+        "generations": [
+          {
+            "user": "synthetic-000",
+            "status": "complete",
+            "elapsed_seconds": 11.031,
+            "items": 10,
+            "saved": true,
+            "persistence_error": null,
+            "error_status": null,
+            "message": "Your study set is ready."
+          }
+        ]
+      }
+    },
+    {
+      "students": 2,
+      "requested_duration_seconds": 65,
+      "actual_duration_seconds": 66.828,
+      "authentication": "real signed synthetic bearer session; original authenticated_user/onboarded_user",
+      "quota_mode": "enforce_http_429_with_real_backend_retries",
+      "generator_students": 1,
+      "generator_fraction": 0.5,
+      "sheets": {
+        "attempts": {
+          "read": 80,
+          "write": 23
+        },
+        "accepted": {
+          "read": 72,
+          "write": 23
+        },
+        "http_429_attempts": {
+          "read": 8
+        },
+        "attempts_above_rolling_60s_demand_limit": {
+          "read": 16
+        },
+        "by_table_and_direction": {
+          "Users:read": 3,
+          "StudySets:read": 9,
+          "CardProgress:read": 42,
+          "ReviewLogs:read": 24,
+          "Profiles:read": 2,
+          "StudySets:write": 3,
+          "CardProgress:write": 10,
+          "ReviewLogs:write": 10
+        },
+        "phases": {
+          "startup_0_to_10s": {
+            "read": 12,
+            "write": 2
+          },
+          "steady_after_10s": {
+            "read": 68,
+            "write": 21
+          }
+        },
+        "first_over_limit_at_seconds": 50.109
+      },
+      "api": {
+        "requests": 40,
+        "successes": 40,
+        "errors": 0,
+        "status_counts": {
+          "200": 39,
+          "202": 1
+        },
+        "endpoints": {
+          "GET /api/study-sets": {
+            "requests": 2,
+            "status_counts": {
+              "200": 2
+            },
+            "p50_ms": 0.0,
+            "p95_ms": 109.0,
+            "max_ms": 109.0
+          },
+          "GET /api/progress": {
+            "requests": 12,
+            "status_counts": {
+              "200": 12
+            },
+            "p50_ms": 109.0,
+            "p95_ms": 203.0,
+            "max_ms": 203.0
+          },
+          "GET /api/reviews/due": {
+            "requests": 2,
+            "status_counts": {
+              "200": 2
+            },
+            "p50_ms": 94.0,
+            "p95_ms": 94.0,
+            "max_ms": 94.0
+          },
+          "POST /api/study-sets": {
+            "requests": 2,
+            "status_counts": {
+              "200": 2
+            },
+            "p50_ms": 109.0,
+            "p95_ms": 110.0,
+            "max_ms": 110.0
+          },
+          "POST /api/generation-jobs": {
+            "requests": 1,
+            "status_counts": {
+              "202": 1
+            },
+            "p50_ms": 0.0,
+            "p95_ms": 0.0,
+            "max_ms": 0.0
+          },
+          "GET /api/generation-jobs/{id}": {
+            "requests": 11,
+            "status_counts": {
+              "200": 11
+            },
+            "p50_ms": 0.0,
+            "p95_ms": 16.0,
+            "max_ms": 16.0
+          },
+          "POST /api/reviews": {
+            "requests": 10,
+            "status_counts": {
+              "200": 10
+            },
+            "p50_ms": 312.0,
+            "p95_ms": 16594.0,
+            "max_ms": 16594.0
+          }
+        },
+        "error_samples": [],
+        "generations": [
+          {
+            "user": "synthetic-000",
+            "status": "complete",
+            "elapsed_seconds": 11.031,
+            "items": 10,
+            "saved": true,
+            "persistence_error": null,
+            "error_status": null,
+            "message": "Your study set is ready."
+          }
+        ]
+      }
+    }
+  ],
+  "resumed_from": "2026-11-01T05:39:43.160531+00:00",
+  "generation_queue_probe": {
+    "simultaneous_submit_statuses": [
+      202,
+      202,
+      202,
+      202,
+      202,
+      202,
+      429
+    ],
+    "duplicate_account_status": 409,
+    "states_while_provider_blocked": {
+      "running": 2,
+      "queued": 4
+    },
+    "states_after_release": {
+      "complete": 6
+    },
+    "expected": "6 accepted (2 workers plus 4 queued), seventh HTTP429, duplicate-account HTTP409",
+    "passed": true,
+    "api": {
+      "requests": 8,
+      "successes": 6,
+      "errors": 2,
+      "status_counts": {
+        "202": 6,
+        "429": 1,
+        "409": 1
+      },
+      "endpoints": {
+        "POST /api/generation-jobs": {
+          "requests": 8,
+          "status_counts": {
+            "202": 6,
+            "429": 1,
+            "409": 1
+          },
+          "p50_ms": 0.0,
+          "p95_ms": 109.0,
+          "max_ms": 109.0
+        }
+      },
+      "error_samples": [
+        {
+          "method": "POST",
+          "path": "/api/generation-jobs",
+          "status": 429,
+          "latency_ms": 0.0,
+          "detail": "{\"detail\":\"The study queue is busy. Try again shortly.\"}"
+        },
+        {
+          "method": "POST",
+          "path": "/api/generation-jobs",
+          "status": 409,
+          "latency_ms": 0.0,
+          "detail": "{\"detail\":\"A generation is already running for your account. Reconnecting to it.\",\"job_id\":\"9b034870-a12d-48ff-9c5c-eb7443f28881\"}"
+        }
+      ],
+      "generations": []
+    }
+  },
+  "current_process_simulated_provider_calls_including_queue_probe": 18
+}

@@ -11,6 +11,7 @@ import secrets
 import threading
 import time
 from functools import lru_cache
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
@@ -18,6 +19,7 @@ from urllib.parse import quote
 import requests
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2 import id_token, service_account
+from review_store import BatchedReviewStore, ReviewStoreError
 
 
 SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
@@ -58,6 +60,8 @@ _row_cache_ttl = 2.0
 _row_cache_max_characters = 2_000_000
 _cached_row_tabs = {USERS_TAB, SETS_TAB, *SOCIAL_TABLES}
 _sheets_retry_count = 4
+_review_grid_lock = threading.Lock()
+_review_grids: dict[str, tuple[int, int]] = {}
 
 
 class StorageError(RuntimeError):
@@ -107,7 +111,7 @@ def _sheets_retry_delay(response: requests.Response, attempt: int) -> float:
     return min(8.0, max(backoff, requested_delay)) + random.uniform(0.0, 0.5)
 
 
-def _api(method: str, path: str, *, params: dict[str, str] | None = None, body: dict[str, Any] | None = None) -> dict[str, Any]:
+def _api(method: str, path: str, *, params: dict[str, Any] | None = None, body: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
         credentials = _credentials()
         if not credentials.valid:
@@ -193,7 +197,7 @@ def _rows(tab: str, columns: list[str], *, use_cache: bool = True) -> list[tuple
     # Keep the lock through cache fills to collapse simultaneous requests into one Sheets read.
     with _row_cache_lock:
         cached = _row_cache.get(cache_key)
-        ttl = 30.0 if tab in {USERS_TAB, "Profiles", "Friendships", "UserBlocks"} else (5.0 if tab == "EncryptedMessages" else _row_cache_ttl)
+        ttl = 30.0 if tab in {USERS_TAB, SETS_TAB, "Profiles", "Friendships", "UserBlocks"} else (5.0 if tab == "EncryptedMessages" else _row_cache_ttl)
         if cached and time.monotonic() - cached[0] < ttl:
             return [(number, dict(row)) for number, row in cached[1]]
         results = read_rows()
@@ -205,16 +209,37 @@ def _rows(tab: str, columns: list[str], *, use_cache: bool = True) -> list[tuple
         return [(number, dict(row)) for number, row in results]
 
 
+def _cache_written_row(tab: str, columns: list[str], number: int, values: list[str]) -> None:
+    """Update a loaded snapshot after a durable write, preserving its refresh time."""
+    key = (tab, tuple(columns))
+    with _row_cache_lock:
+        cached = _row_cache.get(key)
+        if cached is None:
+            return
+        rows = [(n, dict(row)) for n, row in cached[1] if n != number]
+        rows.append((number, dict(zip(columns, map(str, values)))))
+        rows.sort(key=lambda item: item[0])
+        if sum(len(k) + len(v) for _, row in rows for k, v in row.items()) <= _row_cache_max_characters:
+            _row_cache[key] = (cached[0], rows)
+        else:
+            _row_cache.pop(key, None)
+
+
 def _append(tab: str, row: list[str]) -> None:
     ensure_schema()
     range_name = quote(f"{tab}!A1", safe="!:")
-    _api(
+    result = _api(
         "POST",
         f"/values/{range_name}:append",
         params={"valueInputOption": "RAW", "insertDataOption": "INSERT_ROWS"},
         body={"values": [row]},
     )
-    _invalidate_rows(tab)
+    updated_range = result.get("updates", {}).get("updatedRange", "")
+    match = re.search(r"!\$?A\$?(\d+)(?::|$)", updated_range)
+    if tab == SETS_TAB and match:
+        _cache_written_row(tab, SET_COLUMNS, int(match[1]), row)
+    else:
+        _invalidate_rows(tab)
 
 
 def _update_user(row_number: int, user: dict[str, str]) -> None:
@@ -324,34 +349,24 @@ def update_study_set(user_id: str, set_id: str, study_set: dict[str, Any]) -> bo
             return False
         row_number, existing = match
         range_name = quote(f"{SETS_TAB}!A{row_number}:{chr(64 + len(SET_COLUMNS))}{row_number}", safe="!:")
-        _api(
-            "PUT",
-            f"/values/{range_name}",
-            params={"valueInputOption": "RAW"},
-            body={"values": [[
-                set_id,
-                user_id,
-                str(study_set["title"])[:150],
-                str(study_set["type"]),
-                chunks[0],
-                sources_json,
-                existing["created_at"],
-                str(study_set.get("material_fingerprint", existing.get("material_fingerprint", ""))),
-                str(bool(study_set.get("incomplete", False))).lower(),
-                str(study_set.get("requested_count", len(study_set["items"]))),
-                str(study_set.get("source_url", existing.get("source_url", "")))[:2048],
-                page_ranges_json,
-                str(study_set.get("focus_topic", existing.get("focus_topic", "")))[:300],
-                *chunks[1:],
-            ]]},
-        )
-        _invalidate_rows(SETS_TAB)
+        written = [
+            set_id, user_id, str(study_set["title"])[:150], str(study_set["type"]), chunks[0],
+            sources_json, existing["created_at"],
+            str(study_set.get("material_fingerprint", existing.get("material_fingerprint", ""))),
+            str(bool(study_set.get("incomplete", False))).lower(),
+            str(study_set.get("requested_count", len(study_set["items"]))),
+            str(study_set.get("source_url", existing.get("source_url", "")))[:2048], page_ranges_json,
+            str(study_set.get("focus_topic", existing.get("focus_topic", "")))[:300], *chunks[1:],
+        ]
+        _api("PUT", f"/values/{range_name}", params={"valueInputOption": "RAW"}, body={"values": [written]})
+        _cache_written_row(SETS_TAB, SET_COLUMNS, row_number, written)
         return True
 
 
 def delete_study_set(user_id: str, set_id: str) -> bool:
     """Delete one saved set only when it belongs to the requesting account."""
-    with _set_write_lock, _review_write_lock:
+    # Fixed review-row reservations must not outlive a physical row deletion.
+    with _set_write_lock, _review_store.maintenance(), _review_write_lock:
         row_number = next(
             (
                 row_number
@@ -383,9 +398,15 @@ def delete_study_set(user_id: str, set_id: str) -> bool:
                 continue
             matching = [number for number, row in _rows(tab, columns, use_cache=False) if row["user_id"] == user_id and row["set_id"] == set_id]
             deletions.extend({"deleteDimension": {"range": {"sheetId": related_sheet_id, "dimension": "ROWS", "startIndex": number - 1, "endIndex": number}}} for number in reversed(matching))
-        _api("POST", ":batchUpdate", body={"requests": deletions})
-        for tab in (SETS_TAB, PROGRESS_TAB, REVIEWS_TAB, SHARES_TAB, REPORTS_TAB):
-            _invalidate_rows(tab)
+        try:
+            _api("POST", ":batchUpdate", body={"requests": deletions})
+        finally:
+            # A lost HTTP reply can follow a committed deletion. Re-fetch both
+            # rows and grid sizes even then; physical deletion shifts row IDs.
+            with _review_grid_lock:
+                _review_grids.clear()
+            for tab in (SETS_TAB, PROGRESS_TAB, REVIEWS_TAB, SHARES_TAB, REPORTS_TAB):
+                _invalidate_rows(tab)
         return True
 
 
@@ -432,22 +453,76 @@ def save_card_report(report: dict[str, str]) -> None:
     _append(REPORTS_TAB, [report.get(column, "") for column in REPORT_COLUMNS])
 
 
+def _load_review_rows():
+    ensure_schema()
+    result = _api("GET", "/values:batchGet", params={
+        "ranges": [f"{PROGRESS_TAB}!A:{chr(64 + len(PROGRESS_COLUMNS))}", f"{REVIEWS_TAB}!A:{chr(64 + len(REVIEW_COLUMNS))}"],
+        "valueRenderOption": "UNFORMATTED_VALUE",
+    })
+    ranges = result.get("valueRanges", [])
+    if len(ranges) != 2:
+        raise StorageError("Google Sheets returned incomplete review history.")
+    return (_parse_rows(ranges[0].get("values", []), PROGRESS_COLUMNS),
+            _parse_rows(ranges[1].get("values", []), REVIEW_COLUMNS))
+
+
+def _write_review_rows(body):
+    # Grow the grid in chunks before fixed-range writes reach its boundary.
+    # Absolute rowCount updates can safely be repeated after an uncertain reply.
+    required = {}
+    for item in body["data"]:
+        tab, target = item["range"].split("!", 1)
+        required[tab] = max(required.get(tab, 0), int(re.findall(r"\d+", target)[-1]))
+    with _review_grid_lock:
+        if any(tab not in _review_grids for tab in required):
+            metadata = _api("GET", "")
+            for sheet in metadata.get("sheets", []):
+                props = sheet.get("properties", {})
+                if props.get("title") in required:
+                    _review_grids[props["title"]] = (props["sheetId"], props.get("gridProperties", {}).get("rowCount", 0))
+        updates, grown = [], {}
+        for tab, last_row in required.items():
+            if tab not in _review_grids:
+                raise StorageError(f"The {tab} tab could not be found in the spreadsheet.")
+            sheet_id, count = _review_grids[tab]
+            if last_row > count:
+                new_count = max(count + 1000, last_row + 1000)
+                updates.append({"updateSheetProperties": {"properties": {"sheetId": sheet_id, "gridProperties": {"rowCount": new_count}}, "fields": "gridProperties.rowCount"}})
+                grown[tab] = (sheet_id, new_count)
+        if updates:
+            _api("POST", ":batchUpdate", body={"requests": updates})
+            _review_grids.update(grown)
+    _api("POST", "/values:batchUpdate", body=body)
+
+
+_review_store = BatchedReviewStore(
+    load=lambda: _load_review_rows(), write=lambda body: _write_review_rows(body),
+    progress_columns=PROGRESS_COLUMNS, review_columns=REVIEW_COLUMNS,
+    flush_seconds=2.0, refresh_seconds=60.0,
+)
+
+
+@contextmanager
+def review_transaction(user_id: str, set_id: str, card_id: str):
+    try:
+        with _review_store.transaction((user_id, set_id, card_id)):
+            yield
+    except ReviewStoreError as exc:
+        raise StorageError(str(exc)) from exc
+
+
 def review_data(user_id: str) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    progress = [row for _, row in _rows(PROGRESS_TAB, PROGRESS_COLUMNS) if row["user_id"] == user_id]
-    reviews = [row for _, row in _rows(REVIEWS_TAB, REVIEW_COLUMNS) if row["user_id"] == user_id]
-    return progress, reviews
+    try:
+        return _review_store.data(user_id)
+    except ReviewStoreError as exc:
+        raise StorageError(str(exc)) from exc
 
 
 def save_card_review(user_id: str, set_id: str, card_id: str, progress: dict[str, str], review: dict[str, str]) -> None:
-    with _review_write_lock:
-        existing = next(((number, row) for number, row in _rows(PROGRESS_TAB, PROGRESS_COLUMNS) if row["user_id"] == user_id and row["set_id"] == set_id and row["card_id"] == card_id), None)
-        if existing:
-            row_number, _ = existing
-            range_name = quote(f"{PROGRESS_TAB}!A{row_number}:J{row_number}", safe="!:")
-            _api("PUT", f"/values/{range_name}", params={"valueInputOption": "RAW"}, body={"values": [[progress.get(column, "") for column in PROGRESS_COLUMNS]]})
-        else:
-            _append(PROGRESS_TAB, [progress.get(column, "") for column in PROGRESS_COLUMNS])
-        _append(REVIEWS_TAB, [review.get(column, "") for column in REVIEW_COLUMNS])
+    try:
+        _review_store.save(user_id, set_id, card_id, progress, review)
+    except ReviewStoreError as exc:
+        raise StorageError(str(exc)) from exc
 
 
 def list_study_sets(user_id: str) -> list[dict[str, Any]]:

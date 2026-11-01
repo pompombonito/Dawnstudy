@@ -5,7 +5,12 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "keep-alive": "node scripts/keep-alive.mjs",
+    "keep-alive:check": "node scripts/keep-alive.mjs --once",
+    "test:keep-alive": "node --test tests/keep-alive.test.mjs",
+    "stress-test": "node scripts/stress-test.mjs",
+    "test:stress-test": "node --test tests/stress-test.test.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

@@ -1,0 +1,261 @@
+{
+  "startedAt": "2026-11-01T05:35:23.701Z",
+  "profile": "public-baseline",
+  "config": {
+    "site": "https://dawnstudy.vercel.app",
+    "api": "https://dawnstudy-api.onrender.com",
+    "stages": [
+      1,
+      5,
+      10,
+      20,
+      40
+    ],
+    "durationMs": 20000,
+    "rps": 20,
+    "maxInFlight": 20,
+    "thinkMs": 5000,
+    "timeoutMs": 10000,
+    "maxBodyBytes": 1048576
+  },
+  "limitation": "Public HTML, health, and model-list requests only. Excludes browser assets, sign-in, study-set storage, AI generation, and maximum mixed-student capacity.",
+  "stages": [
+    {
+      "users": 1,
+      "elapsedSeconds": 20.0035442,
+      "requests": 12,
+      "successes": 12,
+      "failures": 0,
+      "p50Ms": 182.4,
+      "p95Ms": 293.42,
+      "maxMs": 293.42,
+      "startedRequests": 12,
+      "cancelled": 0,
+      "requestsPerSecond": 0.5998936928386921,
+      "completedJourneys": 4,
+      "statuses": {
+        "200": 12
+      },
+      "capWaitP50Ms": 1.86,
+      "capWaitP95Ms": 15.5,
+      "maxObservedInFlight": 1,
+      "endpoints": {
+        "homepage": {
+          "requests": 4,
+          "successes": 4,
+          "failures": 0,
+          "p50Ms": 126.45,
+          "p95Ms": 293.42,
+          "maxMs": 293.42
+        },
+        "health": {
+          "requests": 4,
+          "successes": 4,
+          "failures": 0,
+          "p50Ms": 192.71,
+          "p95Ms": 213.12,
+          "maxMs": 213.12
+        },
+        "models": {
+          "requests": 4,
+          "successes": 4,
+          "failures": 0,
+          "p50Ms": 173.6,
+          "p95Ms": 182.4,
+          "maxMs": 182.4
+        }
+      },
+      "errors": []
+    },
+    {
+      "users": 5,
+      "elapsedSeconds": 20.0081683,
+      "requests": 60,
+      "successes": 60,
+      "failures": 0,
+      "p50Ms": 165.8,
+      "p95Ms": 210.4,
+      "maxMs": 643.34,
+      "startedRequests": 60,
+      "cancelled": 0,
+      "requestsPerSecond": 2.9987752552041456,
+      "completedJourneys": 20,
+      "statuses": {
+        "200": 60
+      },
+      "capWaitP50Ms": 47.74,
+      "capWaitP95Ms": 211.11,
+      "maxObservedInFlight": 5,
+      "endpoints": {
+        "homepage": {
+          "requests": 20,
+          "successes": 20,
+          "failures": 0,
+          "p50Ms": 44.84,
+          "p95Ms": 118.69,
+          "maxMs": 119.4
+        },
+        "health": {
+          "requests": 20,
+          "successes": 20,
+          "failures": 0,
+          "p50Ms": 179.1,
+          "p95Ms": 611.09,
+          "maxMs": 643.34
+        },
+        "models": {
+          "requests": 20,
+          "successes": 20,
+          "failures": 0,
+          "p50Ms": 172.37,
+          "p95Ms": 195.63,
+          "maxMs": 203.06
+        }
+      },
+      "errors": []
+    },
+    {
+      "users": 10,
+      "elapsedSeconds": 20.008714599999998,
+      "requests": 120,
+      "successes": 120,
+      "failures": 0,
+      "p50Ms": 160.34,
+      "p95Ms": 210.65,
+      "maxMs": 231.6,
+      "startedRequests": 120,
+      "cancelled": 0,
+      "requestsPerSecond": 5.997386758667647,
+      "completedJourneys": 40,
+      "statuses": {
+        "200": 120
+      },
+      "capWaitP50Ms": 183.82,
+      "capWaitP95Ms": 496.77,
+      "maxObservedInFlight": 5,
+      "endpoints": {
+        "homepage": {
+          "requests": 40,
+          "successes": 40,
+          "failures": 0,
+          "p50Ms": 41.24,
+          "p95Ms": 114.02,
+          "maxMs": 137.4
+        },
+        "health": {
+          "requests": 40,
+          "successes": 40,
+          "failures": 0,
+          "p50Ms": 164.87,
+          "p95Ms": 180.9,
+          "maxMs": 219.99
+        },
+        "models": {
+          "requests": 40,
+          "successes": 40,
+          "failures": 0,
+          "p50Ms": 162.22,
+          "p95Ms": 224.81,
+          "maxMs": 231.6
+        }
+      },
+      "errors": []
+    },
+    {
+      "users": 20,
+      "elapsedSeconds": 20.050728399999993,
+      "requests": 196,
+      "successes": 196,
+      "failures": 0,
+      "p50Ms": 157.04,
+      "p95Ms": 218.56,
+      "maxMs": 232.26,
+      "startedRequests": 196,
+      "cancelled": 0,
+      "requestsPerSecond": 9.77520597206833,
+      "completedJourneys": 65,
+      "statuses": {
+        "200": 196
+      },
+      "capWaitP50Ms": 465.98,
+      "capWaitP95Ms": 1042.97,
+      "maxObservedInFlight": 5,
+      "endpoints": {
+        "homepage": {
+          "requests": 66,
+          "successes": 66,
+          "failures": 0,
+          "p50Ms": 40.05,
+          "p95Ms": 63.31,
+          "maxMs": 110.69
+        },
+        "health": {
+          "requests": 65,
+          "successes": 65,
+          "failures": 0,
+          "p50Ms": 159.93,
+          "p95Ms": 218.56,
+          "maxMs": 232.26
+        },
+        "models": {
+          "requests": 65,
+          "successes": 65,
+          "failures": 0,
+          "p50Ms": 160.16,
+          "p95Ms": 221.71,
+          "maxMs": 232.12
+        }
+      },
+      "errors": []
+    },
+    {
+      "users": 40,
+      "elapsedSeconds": 20.0555962,
+      "requests": 290,
+      "successes": 290,
+      "failures": 0,
+      "p50Ms": 157.73,
+      "p95Ms": 210.28,
+      "maxMs": 228.2,
+      "startedRequests": 290,
+      "cancelled": 0,
+      "requestsPerSecond": 14.459804490878211,
+      "completedJourneys": 96,
+      "statuses": {
+        "200": 290
+      },
+      "capWaitP50Ms": 1401.26,
+      "capWaitP95Ms": 2115.96,
+      "maxObservedInFlight": 5,
+      "endpoints": {
+        "homepage": {
+          "requests": 98,
+          "successes": 98,
+          "failures": 0,
+          "p50Ms": 39.45,
+          "p95Ms": 110.79,
+          "maxMs": 208.51
+        },
+        "health": {
+          "requests": 96,
+          "successes": 96,
+          "failures": 0,
+          "p50Ms": 160.31,
+          "p95Ms": 218.71,
+          "maxMs": 219.7
+        },
+        "models": {
+          "requests": 96,
+          "successes": 96,
+          "failures": 0,
+          "p50Ms": 160.84,
+          "p95Ms": 210.56,
+          "maxMs": 228.2
+        }
+      },
+      "errors": []
+    }
+  ],
+  "stoppedReason": null,
+  "finishedAt": "2026-11-01T05:37:03.833Z"
+}

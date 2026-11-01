@@ -54,6 +54,33 @@ The Sheets API's standard usage is available at no additional cost, within its q
 
 Import the repository into Vercel and deploy the Next.js project from the repository root. Set `NEXT_PUBLIC_API_URL` to the Render API base URL (without a trailing slash), for example `https://dawnstudy-api.onrender.com`. `render.yaml` sets the API service's `FRONTEND_ORIGINS` manually, so enter the deployed Vercel origin there, for example `https://your-project.vercel.app` (add a comma-separated preview origin if needed). Redeploy the API after changing its environment.
 
+### Keep the API awake
+
+The keep-alive program requests the public homepage and sends `GET /api/health` directly to Render every five minutes. Both checks start independently, so homepage failures cannot prevent Render traffic. It validates homepage HTML and API JSON `status: "ok"`, allows 90 seconds for a cold start, and retries each failed target up to three times with ten seconds between attempts. It logs results and continues after outages. These checks do not sign in, generate study sets, call model providers, or use Google Sheets. API health checks the process, not those dependencies.
+
+**Run independently of your computer:** The workflow is published on this repository's default branch. In GitHub **Actions → Keep Dawnstudy API awake**, select **Run workflow** for an immediate check. The schedule requests checks every five minutes and marks a run failed if either target exhausts retries. It needs no API keys or npm install. For another deployment, set the repository's **Settings → Secrets and variables → Actions → Variables**: `KEEP_ALIVE_API_URL` is the API base URL (without `/api/health`), and `KEEP_ALIVE_SITE_URL` is the homepage URL. Forks skip checks unless both variables are set.
+
+**Run on an always-on computer or server:** With Node.js 22+ installed, use `npm run keep-alive`; stop with Ctrl+C. `npm run keep-alive:check` makes one check with retries and exits with code 1 on failure. A sleeping, disconnected, or switched-off computer cannot send checks. Run outside the Render API process, because an in-process timer stops when Render sleeps. To change the target in PowerShell:
+
+```powershell
+$env:KEEP_ALIVE_API_URL = "https://your-api.onrender.com"
+npm run keep-alive
+```
+
+Optional environment variables are `KEEP_ALIVE_SITE_URL` (defaults to the production homepage), `KEEP_ALIVE_INTERVAL_SECONDS` (default 300, range 60–600) and `KEEP_ALIVE_TIMEOUT_SECONDS` (default 90, range 1–120). Set these in the launching shell or process manager; the script does not load `.env` files. Test the monitor with `npm run test:keep-alive`.
+
+This reduces idle sleeping; it cannot guarantee zero downtime or recover a suspended/crashed host. [GitHub schedules can be delayed or dropped](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule), and public-repository schedules disable after 60 days without repository activity. Check that the workflow remains enabled; use a dedicated external monitor or an always-on host when tighter availability is required. GitHub Actions usage depends on repository visibility and account allowance, so check your Actions usage before enabling a frequent schedule in a private repository. [Render Free limits](https://render.com/docs/free) still apply: 750 running hours are shared by all free services in a workspace each month, exhausted hours suspend services, and Render can restart a free service at any time. Continuous activity uses those hours. A paid Render compute instance removes idle spin-down; upgrading is a separate hosting decision.
+
+### Capacity testing
+
+Review storage coalesces ratings from different students into one atomic Sheets values batch, normally within two seconds. Each request waits for durable acknowledgment; failed batches return an error. Exact fixed-range retries avoid appending duplicate rows when a write succeeds but its response is lost. Committed progress/history are cached together for up to 60 seconds, and each caller sees its own successful rating immediately. Study-set snapshots refresh every 30 seconds; successful saves and updates write through to loaded snapshots. Physical deletion drains pending reviews and invalidates row mappings and grid dimensions before traffic resumes.
+
+Run **one API process and one writer per spreadsheet**. Separate workers/replicas or manual edits to the review tables can conflict with reserved row ranges; this optimization does not introduce distributed coordination. The cache reloads existing history after a restart, and successful ratings are already on Sheets. API/provider failures and hosting limits still apply.
+
+The [25-student validation report](docs/capacity-25-2026-11-01.md) records 745 API requests and 300 persisted ratings with no errors or quota rejections in a 130-second isolated mixed-use test. With backend Python dependencies plus `httpx`, repeat it using `python scripts/stress-test-mixed.py --capacity-25 --output docs/capacity-25-repeat.json`. This runs real local routes with synthetic students, simulated Sheets/AI responses, and blocked external traffic; it does not establish a production user maximum.
+
+Run `npm run stress-test -- --output docs/load-test-repeat.json` for a bounded public-traffic baseline; `npm run test:stress-test` tests that harness. It exercises public HTML, API health, and model listing with automatic overload stops. The [earlier baseline report](docs/performance-2026-11-01.md) preserves the measurements before the storage optimization. `python scripts/audit-study-capacity.py` verifies the current review storage-operation counts and generation queue boundaries without external requests or credentials.
+
 ## API
 
 Profiles, three themes, companion chat, friends, encrypted direct messages, live quizzes, YouTube materials and the agreement flow are documented in [Community features and operations](docs/community.md), including setup, encryption boundaries and regression checks.

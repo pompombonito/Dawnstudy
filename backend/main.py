@@ -52,6 +52,7 @@ from accounts import (
     list_study_shares,
     list_users,
     review_data,
+    review_transaction,
     save_card_review,
     save_card_report,
     save_study_set,
@@ -607,6 +608,12 @@ def get_due_reviews(user: dict[str, str] = Depends(authenticated_user), limit: i
 
 @app.post("/api/reviews")
 def grade_review(body: CardReview, user: dict[str, str] = Depends(onboarded_user)):
+    # Serialize one card's read/schedule/save sequence while other students batch.
+    with review_transaction(user["user_id"], body.study_set_id, body.card_id):
+        return _grade_review(body, user)
+
+
+def _grade_review(body: CardReview, user: dict[str, str]):
     try:
         study_set = next((item for item in list_study_sets(user["user_id"]) if item["id"] == body.study_set_id), None)
         if not study_set:

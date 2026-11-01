@@ -1,0 +1,377 @@
+{
+  "created_at": "2026-11-01T05:57:28.500948+00:00",
+  "kind": "isolated_local_mixed_workload_simulation",
+  "production_capacity_claim": false,
+  "runtime": {
+    "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
+    "fastapi": "0.115.6",
+    "starlette": "0.41.3",
+    "httpx": "0.28.1",
+    "requests": "2.32.3"
+  },
+  "assumptions": {
+    "transport": "ASGI TestClient; no external HTTP; locally signed synthetic bearer sessions through original authentication and profile gates",
+    "storage": "thread-safe memory Sheets HTTP adapter; real accounts._api retries, _rows caches, serialization and write locks",
+    "schema": "preexisting headers; cold schema creation excluded",
+    "sheets_latency_ms": 50,
+    "quota_model": "60 read and 60 write HTTP requests per rolling60s per service identity; synthetic model, not measured Google responses",
+    "quota_resets": "each independent stage starts with an empty rolling window and fresh synthetic tables",
+    "study_workload": "Each student loads library/progress/due, saves one set, then rates one card and refreshes progress every10s; synchronous backpressure after slow requests",
+    "generation_workload": "10questions; real fallback engine produces batches8+2, each fake provider call sleeps5s; ceil(students/10) generators, minimum1 so small-cohort fractions exceed10%",
+    "excluded": "real Google login, Google transport latency/quota billing, real model latency/quality/quotas, OCR, browser rendering, Render CPU/RAM and network/deployment conditions",
+    "interpretation": "Local functional/quota-demand evidence only; not a supported concurrent-student limit"
+  },
+  "stages": [
+    {
+      "students": 25,
+      "requested_duration_seconds": 130,
+      "actual_duration_seconds": 130.0,
+      "authentication": "real signed synthetic bearer session; original authenticated_user/onboarded_user",
+      "quota_mode": "enforce_http_429_with_real_backend_retries",
+      "generator_students": 3,
+      "generator_fraction": 0.12,
+      "review_batcher": {
+        "stage_counters": {
+          "loads": 3,
+          "batches": 24,
+          "write_attempts": 24,
+          "committed_reviews": 300,
+          "failed_reviews": 0
+        },
+        "pending_at_end": 0,
+        "inflight_at_end": false
+      },
+      "persisted_state": {
+        "successful_rating_requests": 300,
+        "persisted_review_log_rows": 300,
+        "persisted_progress_rows": 250,
+        "persisted_sets": 53,
+        "reviews_per_student": {
+          "synthetic-000": 12,
+          "synthetic-001": 12,
+          "synthetic-002": 12,
+          "synthetic-003": 12,
+          "synthetic-004": 12,
+          "synthetic-005": 12,
+          "synthetic-006": 12,
+          "synthetic-007": 12,
+          "synthetic-008": 12,
+          "synthetic-009": 12,
+          "synthetic-010": 12,
+          "synthetic-011": 12,
+          "synthetic-012": 12,
+          "synthetic-013": 12,
+          "synthetic-014": 12,
+          "synthetic-015": 12,
+          "synthetic-016": 12,
+          "synthetic-017": 12,
+          "synthetic-018": 12,
+          "synthetic-019": 12,
+          "synthetic-020": 12,
+          "synthetic-021": 12,
+          "synthetic-022": 12,
+          "synthetic-023": 12,
+          "synthetic-024": 12
+        },
+        "all_successful_ratings_persisted": true
+      },
+      "sheets": {
+        "attempts": {
+          "read": 19,
+          "write": 52
+        },
+        "accepted": {
+          "read": 19,
+          "write": 52
+        },
+        "http_429_attempts": {},
+        "attempts_above_rolling_60s_demand_limit": {},
+        "by_table_and_direction": {
+          "Users:read": 5,
+          "StudySets:read": 5,
+          "batch[CardProgress,ReviewLogs]:read": 3,
+          "Profiles:read": 5,
+          "StudySets:write": 28,
+          "metadata:read": 1,
+          "batch[CardProgress,ReviewLogs]:write": 24
+        },
+        "by_operation": {
+          "values.get": 15,
+          "values.batchGet": 3,
+          "values.append": 28,
+          "spreadsheets.get": 1,
+          "values.batchUpdate": 24
+        },
+        "peak_accepted_requests_in_rolling_60s": {
+          "read": 8,
+          "write": 38
+        },
+        "minute_windows": {
+          "0_to_60s": {
+            "accepted": {
+              "read": 8,
+              "write": 38
+            },
+            "http_429": {}
+          },
+          "60_to_120s": {
+            "accepted": {
+              "read": 7,
+              "write": 12
+            },
+            "http_429": {}
+          },
+          "120_to_180s": {
+            "accepted": {
+              "read": 4,
+              "write": 2
+            },
+            "http_429": {}
+          }
+        },
+        "phases": {
+          "startup_0_to_10s": {
+            "read": 4,
+            "write": 25
+          },
+          "steady_after_10s": {
+            "write": 27,
+            "read": 15
+          }
+        },
+        "first_over_limit_at_seconds": null
+      },
+      "api": {
+        "requests": 745,
+        "successes": 745,
+        "errors": 0,
+        "status_counts": {
+          "200": 742,
+          "202": 3
+        },
+        "latency_ms": {
+          "p50": 16.0,
+          "p95": 1922.0,
+          "max": 2125.0
+        },
+        "ratings": {
+          "attempted": 300,
+          "completed": 300,
+          "successful_per_student": {
+            "synthetic-000": 12,
+            "synthetic-013": 12,
+            "synthetic-005": 12,
+            "synthetic-001": 12,
+            "synthetic-006": 12,
+            "synthetic-007": 12,
+            "synthetic-004": 12,
+            "synthetic-002": 12,
+            "synthetic-009": 12,
+            "synthetic-010": 12,
+            "synthetic-011": 12,
+            "synthetic-012": 12,
+            "synthetic-008": 12,
+            "synthetic-003": 12,
+            "synthetic-024": 12,
+            "synthetic-017": 12,
+            "synthetic-022": 12,
+            "synthetic-014": 12,
+            "synthetic-015": 12,
+            "synthetic-020": 12,
+            "synthetic-016": 12,
+            "synthetic-018": 12,
+            "synthetic-019": 12,
+            "synthetic-021": 12,
+            "synthetic-023": 12
+          }
+        },
+        "rating_plus_progress_interaction": {
+          "count": 300,
+          "errors": 0,
+          "p50_ms": 1188.0,
+          "p95_ms": 2078.0,
+          "max_ms": 2156.0
+        },
+        "endpoints": {
+          "GET /api/study-sets": {
+            "requests": 25,
+            "status_counts": {
+              "200": 25
+            },
+            "p50_ms": 0.0,
+            "p95_ms": 16.0,
+            "max_ms": 94.0
+          },
+          "GET /api/progress": {
+            "requests": 325,
+            "status_counts": {
+              "200": 325
+            },
+            "p50_ms": 15.0,
+            "p95_ms": 62.0,
+            "max_ms": 78.0
+          },
+          "GET /api/reviews/due": {
+            "requests": 25,
+            "status_counts": {
+              "200": 25
+            },
+            "p50_ms": 0.0,
+            "p95_ms": 16.0,
+            "max_ms": 16.0
+          },
+          "POST /api/study-sets": {
+            "requests": 25,
+            "status_counts": {
+              "200": 25
+            },
+            "p50_ms": 47.0,
+            "p95_ms": 110.0,
+            "max_ms": 157.0
+          },
+          "POST /api/generation-jobs": {
+            "requests": 3,
+            "status_counts": {
+              "202": 3
+            },
+            "p50_ms": 0.0,
+            "p95_ms": 0.0,
+            "max_ms": 0.0
+          },
+          "GET /api/generation-jobs/{id}": {
+            "requests": 42,
+            "status_counts": {
+              "200": 42
+            },
+            "p50_ms": 0.0,
+            "p95_ms": 15.0,
+            "max_ms": 16.0
+          },
+          "POST /api/reviews": {
+            "requests": 300,
+            "status_counts": {
+              "200": 300
+            },
+            "p50_ms": 1172.0,
+            "p95_ms": 2063.0,
+            "max_ms": 2125.0
+          }
+        },
+        "error_samples": [],
+        "generations": [
+          {
+            "user": "synthetic-001",
+            "status": "complete",
+            "elapsed_seconds": 11.031,
+            "items": 10,
+            "saved": true,
+            "persistence_error": null,
+            "error_status": null,
+            "message": "Your study set is ready."
+          },
+          {
+            "user": "synthetic-000",
+            "status": "complete",
+            "elapsed_seconds": 11.031,
+            "items": 10,
+            "saved": true,
+            "persistence_error": null,
+            "error_status": null,
+            "message": "Your study set is ready."
+          },
+          {
+            "user": "synthetic-002",
+            "status": "complete",
+            "elapsed_seconds": 20.046,
+            "items": 10,
+            "saved": true,
+            "persistence_error": null,
+            "error_status": null,
+            "message": "Your study set is ready."
+          }
+        ]
+      }
+    }
+  ],
+  "generation_queue_probe": {
+    "simultaneous_submit_statuses": [
+      202,
+      202,
+      202,
+      202,
+      202,
+      202,
+      429
+    ],
+    "duplicate_account_status": 409,
+    "states_while_provider_blocked": {
+      "running": 2,
+      "queued": 4
+    },
+    "states_after_release": {
+      "complete": 6
+    },
+    "expected": "6 accepted (2 workers plus 4 queued), seventh HTTP429, duplicate-account HTTP409",
+    "passed": true,
+    "api": {
+      "requests": 8,
+      "successes": 6,
+      "errors": 2,
+      "status_counts": {
+        "202": 6,
+        "429": 1,
+        "409": 1
+      },
+      "latency_ms": {
+        "p50": 0.0,
+        "p95": 94.0,
+        "max": 94.0
+      },
+      "ratings": {
+        "attempted": 0,
+        "completed": 0,
+        "successful_per_student": {}
+      },
+      "rating_plus_progress_interaction": {
+        "count": 0,
+        "errors": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "max_ms": null
+      },
+      "endpoints": {
+        "POST /api/generation-jobs": {
+          "requests": 8,
+          "status_counts": {
+            "202": 6,
+            "429": 1,
+            "409": 1
+          },
+          "p50_ms": 0.0,
+          "p95_ms": 94.0,
+          "max_ms": 94.0
+        }
+      },
+      "error_samples": [
+        {
+          "user": "synthetic-006",
+          "method": "POST",
+          "path": "/api/generation-jobs",
+          "status": 429,
+          "latency_ms": 15.000000013969839,
+          "detail": "{\"detail\":\"The study queue is busy. Try again shortly.\"}"
+        },
+        {
+          "user": "synthetic-000",
+          "method": "POST",
+          "path": "/api/generation-jobs",
+          "status": 409,
+          "latency_ms": 0.0,
+          "detail": "{\"detail\":\"A generation is already running for your account. Reconnecting to it.\",\"job_id\":\"1d6ba200-31f3-4ff0-a365-3293e64008da\"}"
+        }
+      ],
+      "generations": []
+    }
+  },
+  "current_process_simulated_provider_calls_including_queue_probe": 18
+}
