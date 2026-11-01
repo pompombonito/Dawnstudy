@@ -1,6 +1,7 @@
 "use client";
 
 import { useId } from "react";
+import { characterMotionStyle } from "./character-motion";
 import type { AnimeCharacter } from "../community/anime-companions";
 import AnimeFace, { AnimeMouth, faceDesign, faceOutline } from "./AnimeFace";
 
@@ -8,6 +9,12 @@ type Visual = AnimeCharacter;
 const ink = "#342d3d";
 const cream = "#fff8e8";
 const gold = "#e8bb58";
+
+// Facial marks, glasses and masks stay fixed; only ornaments attached to hair sway.
+const movingHeadwear = new Set([
+  "headband", "ribbon", "ribbons", "flower-clips", "headphones", "horns", "small-horns",
+  "one-horn", "hair-buns", "veil", "leaf-band", "hammer-pin", "camellia", "hairpins", "hairpin",
+]);
 
 function tint(hex: string, amount: number) {
   const parts = hex.replace("#", "").match(/.{2}/g) || ["88", "88", "88"];
@@ -33,6 +40,8 @@ function Bow({ x, y, color = ink, size = 1 }: { x: number; y: number; color?: st
 
 function HairBack({ c }: { c: Visual }) {
   const h = c.hair, dark = ink;
+  if (c.id === "anime-kaoruko") return <g fill={h} stroke={dark} strokeWidth="1.2"><path d="M24 29Q13 35 18 52q-7 12 1 20-8 13 2 19l6-8q9 8 15-10h16q7 17 18 9l5 9q9-9 1-20 7-10 0-21 4-18-9-24Z"/><path d="M24 43q-5 11 0 21t0 16m52-37q5 11 0 21t0 16" fill="none" stroke={tint(h,.18)} strokeWidth="1"/></g>;
+  if (c.id === "anime-subaru") return <g fill={h} stroke={dark} strokeWidth="1.2"><path d="M65 20q3-16 16-11 16 4 8 24l-6 16 9 27q-20-3-20-24l-2-20-10-6Z"/><path d="M78 18q10 9 0 30l6 20" fill="none" stroke={tint(h,-.24)} strokeWidth="1"/><path d="m67 20 10 4-2 5-9-4Z" fill="#66616f"/></g>;
   if (c.id === "anime-mitsueda") return <g fill={h} stroke={dark} strokeWidth="1"><path d="M24 32q-8 20 2 49l7-13-2-29m45-7q8 20-2 49l-7-13 2-29"/><path d="m26 48 2 20m46-20-2 20" stroke={tint(h,.2)} fill="none"/></g>;
   switch (c.style) {
     case "long": return <g fill={h} stroke={dark} strokeWidth="1.2">
@@ -76,7 +85,9 @@ function HairFront({ c }: { c: Visual }) {
   let path = "";
   switch(c.style) {
     case "spiky": path = spikyHair[c.id] || "M20 41 12 28l15-6 4-12 14 9L58 9l8 15 17 3-5 20-12-15-10 12-10-13-10 11-6-12Z"; break;
-    case "messy": path = c.id === "anime-shinpei"
+    case "messy": path = c.id === "anime-luffy"
+      ? "M22 39q4-10 28-10t28 10l3 9-10-6-2 12-11-15-7 11-10-10-11 13-2-10-9 5Z"
+      : c.id === "anime-shinpei"
       ? "M21 44 15 34l7-10-2-11 15 5L47 9l8 7 15-4 2 12 11 6-8 25-10-21-10 26-6-24-10 13-6-16-6 25Z"
       : c.id === "anime-deku"
       ? "M21 45 11 38l10-9-4-12 15 2 8-13 12 9L64 8l6 12 16 1-6 12 10 7-13 12-13-16-8 10-10-13-9 13-9-9-7 15Z"
@@ -106,13 +117,24 @@ function HairFront({ c }: { c: Visual }) {
     case "pompadour": path = "M22 42Q13 24 25 13 40-1 65 9q20 7 14 29l-11-4-4-13q-12 13-30 10l-4 14Z"; break;
     case "curtains": path = "M22 45Q14 15 49 12q35-1 30 34l-11 13-3-27-14-11-10 21-11 7 1 11Z"; break;
     case "cropped": path = c.id === "anime-zoro" ? "M23 38 20 26l9-2 2-8 10 3 9-8 9 7 10-2 4 9 7 2-3 14-11-10-6 8-10-9-9 8-8-7Z" : "M22 40 17 29l9-5 2-10 14 4 9-8 9 8 13-2 3 10 8 6-7 10-10-9-9 8-9-11-9 11-8-9Z"; break;
-    case "tall-spikes": path = "M22 43 15 28l12 3L23 8l14 11L46 1l9 18L68 3l1 23 17-7-8 24-15-14-9 11-9-12-9 13-7-8Z"; break;
+    case "tall-spikes": path = "M22 43 15 28l12 3L23 8l14 11L46 2l9 17L68 3l1 23 17-7-8 24-15-14-9 11-9-12-9 13-7-8Z"; break;
     case "hero": path = "M22 42Q14 25 29 19L22 2l18 11 10 14L62 10 81 2l-8 20q15 9 4 23L66 29l-8 11-8-9-9 10-9-11Z"; break;
     case "split": path = "M22 44Q16 13 49 12q34 0 30 33l-11-12-10 13-8-17-9 15-10-11-2 24Z"; break;
     case "bun": case "tied": case "updo": path = "M22 44Q16 17 49 15q35-1 29 30l-11-14-10 10-8-13-12 14-6-10-5 20Z"; break;
   }
+  // These silhouettes follow the official Kaoru Hana miniature character sheet.
+  const kaoruHair: Record<string, string> = {
+    "anime-rintaro": "M22 48 18 37 21 23 29 24 28 14 40 18 44 5 52 14 66 7 65 20 79 17 76 30 82 35 77 50 69 43 69 30Q52 38 31 31L30 45Z",
+    "anime-kaoruko": "M22 45Q15 16 46 12q36-4 34 31l-6 18-6-8 3-21-10 8-7-10-10 11-5-10-8 8-2 22Z",
+    "anime-subaru": "M21 44Q15 14 47 12q33-4 33 30l-9 18-7-4 6-28-14 32-1-25-12 9-7-12-6 25-5 4Z",
+    "anime-saku": "M22 46Q16 16 48 13q34-2 31 31l-9 18-5-9 5-22-13 27-6-22-9 13-5-17-9 25Z",
+    "anime-shohei": "M21 43 15 35 21 27 20 17 31 20 39 9 48 18 61 10 65 23 78 18 76 30 85 36 77 49 67 35 59 47 51 31 44 44 36 33 28 49Z",
+  };
+  path = kaoruHair[c.id] || path;
   return <g stroke={edge} strokeWidth="1.8" strokeLinejoin="round">
     <path d={path} fill={h}/>
+    {c.id === "anime-rintaro" && <path d="M31 30q20 6 38-1l-2 5q-18 5-34 0Z" fill="#62574e" stroke="none"/>}
+    {c.id === "anime-kaoruko" && <path d="m25 43 1 11m48-13-2 13" fill="none" stroke={tint(h,.18)} strokeWidth="1"/>}
     {c.style === "split" && <path d="M50 12q31 0 29 33L68 33 58 46l-8-17Z" fill="#a83946" stroke="#8c3040"/>}
     {c.style === "undercut" && <path d="m22 36 2 15 7-16m47 0-3 16-7-17" fill={tint(h,-.5)} stroke="none"/>}
     {c.style === "braid" && <path d="m27 28 9-7m-8 13 11-8m-9 13 11-8" fill="none" stroke={tint(h,-.22)} strokeWidth="1"/>}
@@ -124,12 +146,14 @@ function Outfit({ c }: { c: Visual }) {
   const o = c.outfit, edge = ink;
   const kimono = c.series === "Firefly Wedding" || ["kimono","haori","blue-sash","dragon-hand","hairpins","camellia","hairpin"].includes(c.accessory);
   const school = ["school-bow","school-tie","blue-lips","white-mask"].includes(c.accessory);
+  const pinkUniform = ["anime-kaoruko", "anime-subaru"].includes(c.id);
   return <g strokeLinejoin="round">
     <path d="M18 103v-9q2-17 24-19h16q23 3 25 19v9" fill={o} stroke={edge} strokeWidth="1.4"/>
     <path d="M43 68v11q7 8 14 0V68" fill="#ffd4ba" stroke="#ce9982" strokeWidth=".9"/>
     <path d="m29 87-5 15m47-15 5 15" fill="none" stroke={edge} strokeWidth="1.3"/>
     {kimono ? <><path d="m35 77 17 13 12-13 6 5-19 20-20-22Z" fill={cream}/><path d="m37 77 20 17-9 9-18-23m31-3-16 18" fill={o} stroke={edge} strokeWidth="1.1"/><path d="M31 98h39v5H31Z" fill={c.accessory === "blue-sash" ? "#73afd3" : tint(o,-.35)}/></>
-      : school ? <><path d="m40 76 10 8 10-8-2 27H42Z" fill="#fffbf3"/><path d="m37 77-8 7 10 5-6 4 11 10-2-19m21-7 8 7-10 5 6 4-11 10 2-19" fill="#30303e"/>{c.accessory === "school-tie" ? <path d="m50 84-4 5 4 13 4-13Z" fill={ink}/> : <Bow x={50} y={88} color="#343544" size={.75}/>}</>
+      : c.id === "anime-saku" ? <><path d="m39 76 11 9 11-9-2 27H41Z" fill="#fff9ed"/><path d="m37 77 11 9-7 17H29l1-18Zm26 0-11 9 6 17h13l-1-18Z" fill={o} stroke="#737984" strokeWidth="1"/><path d="m40 76 10 9-7 5-6-10m23-4-10 9 7 5 6-10" fill="#fff9ed" stroke="#cecec9" strokeWidth=".7"/><path d="m49 86-3 17" stroke="#727984" strokeWidth="1"/>{[91,97].map(y => <circle key={y} cx="49" cy={y} r=".9" fill="#646d7b"/>)}</>
+      : school ? <><path d="m40 76 10 8 10-8-2 27H42Z" fill="#fffbf3"/><path d="m37 77-8 7 10 5-6 4 11 10-2-19m21-7 8 7-10 5 6 4-11 10 2-19" fill={pinkUniform ? tint(o,-.12) : "#30303e"}/>{c.accessory === "school-tie" ? <path d="m50 84-4 5 4 13 4-13Z" fill={ink}/> : <Bow x={50} y={88} color={pinkUniform ? "#ecc0ca" : "#343544"} size={.75}/>}</>
         : <path d="m37 77 13 10 13-10-7 17H44Z" fill={tint(o,.35)} stroke={edge} strokeWidth="1.1"/>}
     {["gold-trim","brow-scar","dragon-temple","earring","fang"].includes(c.accessory) && c.series === "Tokyo Revengers" && <><path d="m39 77 4 26m18-26-4 26" stroke={gold} strokeWidth="1.7"/><path d="M63 87h8m-8 4h8m-8 4h8" stroke={gold} strokeWidth="1"/><circle cx="50" cy="94" r="1.2" fill={gold}/></>}
     {c.accessory === "apron" && <><path d="m33 77 6 1 1 7h20l1-7 6-1-1 26H34Z" fill="#fff0d7"/><path d="M43 91h14v8H43Z" fill="#e7cdbb"/></>}
@@ -138,10 +162,12 @@ function Outfit({ c }: { c: Visual }) {
     {c.accessory === "red-piping" && <><path d="m36 77 14 12 14-12M50 88v15M24 95h14m24 0h14" fill="none" stroke="#c35443" strokeWidth="2"/><circle cx="53" cy="94" r="1" fill={gold}/></>}
     {c.accessory === "chain" && <><path d="m35 79 15 10 15-10m-15 10v14" fill="none" stroke={gold} strokeWidth="2"/><path d="M72 87q10 8-2 15" fill="none" stroke={gold} strokeWidth="1.5" strokeDasharray="2 1"/></>}
     {c.accessory === "red-hood" && <><path d="M29 82q2-12 13-8l8 9 8-9q13-2 14 9l-9 9H39Z" fill="#bd4f60" stroke="#8f354b"/><path d="m38 80 12 7 12-7" fill="none" stroke="#e48e95" strokeWidth="2"/></>}
-    {c.accessory === "high-collar" && <path d="m34 76 12 2 4 8 4-8 13-2-1 15-16 4-16-4Z" fill={tint(o,-.12)} stroke={edge} strokeWidth="1.2"/>}
+    {c.accessory === "high-collar" && c.id !== "anime-shohei" && <path d="m34 76 12 2 4 8 4-8 13-2-1 15-16 4-16-4Z" fill={tint(o,-.12)} stroke={edge} strokeWidth="1.2"/>}
     {c.accessory === "cloak" && <><path d="m33 75-13 14 15 14 11-18m21-10 13 14-15 14-11-18" fill="#5f7d60" stroke="#425e47"/><path d="m28 86 5-3 5 3-5 10Z" fill="#e8e6d9"/><path d="m30 87 6 5m-6-1 6-5" stroke="#7295b3" strokeWidth="1.6"/></>}
     {c.accessory === "cravat" && <><path d="m40 77 10 5 10-5-3 10-7-1-7 1Z" fill={cream}/><path d="m47 83-5 13 8-3 8 3-5-13Z" fill="#fffdf5" stroke="#d7d3d0" strokeWidth=".8"/></>}
     {c.accessory === "pendant" && <><path d="m39 78 11 12 11-12" fill="none" stroke="#b39a5b" strokeWidth="1.5"/><path d="m50 87 4 5-4 7-4-7Z" fill="#71ad7b" stroke="#426f52"/></>}
+    {c.id === "anime-rintaro" && <><path d="m40 76 10 10 10-10-2 27H42Z" fill="#f9f7ee"/><path d="m39 77 11 9-6 5-8-11m25-3-11 9 6 5 8-11" fill="#fffdf4" stroke="#bdbcb6" strokeWidth=".7"/><path d="M50 86v17" stroke="#d8d7d0" strokeWidth=".8"/></>}
+    {c.id === "anime-shohei" && <><path d="M30 82q-1-13 12-10l8 8 8-8q13-3 13 10l-8 9H39Z" fill="#d6ad43" stroke="#9a7a35" strokeWidth="1"/><path d="M39 85h22v18H39Z" fill="#d6ad43"/><path d="m31 81 9 5-3 17H24l1-17m44-5-9 5 3 17h13l-1-17" fill={o} stroke={edge} strokeWidth="1"/><path d="m39 78 11 8 11-8m-16 8v8m10-8v8" fill="none" stroke="#f1d577" strokeWidth="1.3" strokeLinecap="round"/></>}
     {c.id === "anime-sanji" && <><path d="m40 77 10 10 10-10" fill="#c8deea"/><path d="m50 86-3 5 3 12 3-12Z" fill="#55556c"/></>}
     {c.id === "anime-leorio" && <><path d="m40 77 10 9 10-9" fill="#eef3f8"/><path d="m50 85-3 5 3 13 3-13Z" fill="#bc4a58"/></>}
     {c.accessory === "goggles" && <path d="m49 82-3 8 4 13 4-13-3-8" fill="#526b68"/>}
@@ -163,7 +189,7 @@ function Accessories({ c }: { c: Visual }) {
     case "ribbon": return <><Bow x={22} y={30} color="#5d4d77" size={.7}/><Bow x={78} y={30} color="#5d4d77" size={.7}/></>;
     case "ribbons": return <><Bow x={22} y={25} color="#3e425e" size={.7}/><Bow x={78} y={25} color="#3e425e" size={.7}/></>;
     case "red-scarf": return <><path d="M31 72q19 10 38-1l2 10q-20 12-41 0Z" fill="#aa3c50" stroke="#7f2e42"/><path d="m58 81 10-2 8 20-10-3-6 4Z" fill="#bc4656"/><path d="M37 77q12 4 24 0" fill="none" stroke="#df7f87" strokeWidth="1.5"/></>;
-    case "fur-scarf": return <g fill="#f5edda" stroke="#c9c1b2" strokeWidth=".7"><path d="m28 73 7-3 5 4 6-3 5 3 7-3 5 3 7-4 5 6-2 8-7 3-7-2-7 3-7-2-7 2-6-4-6-1Z"/><path d="m65 80 10 3-3 19-10-2Z"/></g>;
+    case "fur-scarf": return <g fill="#f5edda" stroke="#c9c1b2" strokeWidth=".7"><path d="m28 73 7-3 5 4 6-3 5 3 7-3 5 3 7-4 5 6-2 8-7 3-7-2-7 3-7-2-7 2-6-4-6-1Z"/><path d="m65 80 10 3-3 15-10-2Z"/></g>;
     case "glasses": return <g fill="none" stroke={c.id === "anime-rize" ? "#9d4f6f" : "#604b41"} strokeWidth="1.7"><rect x="28" y="42" width="18" height="14" rx={c.id === "anime-rize" ? 7 : 4}/><rect x="54" y="42" width="18" height="14" rx={c.id === "anime-rize" ? 7 : 4}/><path d="M46 47q4-3 8 0m-30-2 4 1m44 0 4-1"/></g>;
     case "round-glasses": return <g fill={c.id === "anime-sakamoto" ? "#fffdf3" : "none"} stroke="#584e56" strokeWidth="1.6"><circle cx="37" cy="49" r="10"/><circle cx="63" cy="49" r="10"/><path d="M47 47q3-2 6 0m-30-2 5 1m44 0 5-1" fill="none"/>{c.id === "anime-sakamoto" && <path d="M43 60h14v3H43Z" fill="#74777d" stroke="none"/>}</g>;
     case "flower-clips": return <><Flower x={75} y={39} color="#8eb9dc" size={.75}/><Flower x={77} y={49} color="#8eb9dc" size={.6}/></>;
@@ -173,7 +199,7 @@ function Accessories({ c }: { c: Visual }) {
     case "headphones": return <g stroke={c.id === "anime-hide" ? "#aa683d" : "#355875"} strokeWidth="1.4"><path d="M21 50V37q1-28 29-28t29 28v13" fill="none" strokeWidth="4"/><rect x="17" y="40" width="10" height="20" rx="5" fill={c.id === "anime-hide" ? "#e7a24b" : "#77a7bc"}/><rect x="73" y="40" width="10" height="20" rx="5" fill={c.id === "anime-hide" ? "#e7a24b" : "#77a7bc"}/><path d="M21 45v10m58-10v10" stroke={cream} opacity=".7"/></g>;
     case "brow-scar": return <path d="m30 43 5-6m-5 3 4 1" stroke="#bb816e" strokeWidth="1.2"/>;
     case "dragon-temple": return <path d="M29 30q-8 2-5 9t5 4q3-3 0-5-4-3-6 4m1-8-3 1m7-3-1-3m0 13 3 4m-7 0-1 4" stroke="#6b5266" fill="none" strokeWidth="1.3" strokeLinecap="round"/>;
-    case "earring": return c.id === "anime-chifuyu" ? <circle cx="77" cy="57" r="3" fill="none" stroke="#30313c" strokeWidth="1.5"/> : <g stroke={gold} fill="none" strokeWidth="1.5"><path d="M77 54v11"/><circle cx="77" cy="65" r="2.5"/></g>;
+    case "earring": return c.id === "anime-rintaro" ? <g fill="none" stroke="#a9b1ba" strokeWidth="1.2">{[20,22,78,80].map((x,i) => <ellipse key={x} cx={x} cy={57+i%2*2} rx="1.5" ry="2.1"/>)}</g> : c.id === "anime-chifuyu" ? <circle cx="77" cy="57" r="3" fill="none" stroke="#30313c" strokeWidth="1.5"/> : <g stroke={gold} fill="none" strokeWidth="1.5"><path d="M77 54v11"/><circle cx="77" cy="65" r="2.5"/></g>;
     case "fang": return <path d="m45 61 4 1-3 4Z" fill="#fffaf1" stroke="#c7a08e" strokeWidth=".5"/>;
     case "horns": return <g fill="#3b303b" stroke="#211e29" strokeWidth="1"><path d="M30 28Q22 20 28 9q2 11 10 12Z"/><path d="M68 27q10-9 4-20-2 12-10 14Z"/></g>;
     case "small-horns": return <g fill="#f8dfc2" stroke="#cfaa9b" strokeWidth=".8"><path d="M30 26q-7-8-3-15l9 12Zm38 0q8-8 4-15l-9 12Z"/></g>;
@@ -184,25 +210,26 @@ function Accessories({ c }: { c: Visual }) {
     case "pink-earpieces": return <g fill="#f3b9d1" stroke="#aa698b" strokeWidth="1.2"><circle cx="23" cy="52" r="7"/><circle cx="77" cy="52" r="7"/><path d="M20 48h6v7h-6m54-7h6v7h-6" fill="#654762"/></g>;
     case "hair-buns": return <g fill={c.hair} stroke={tint(c.hair,-.3)} strokeWidth="1"><circle cx="21" cy="29" r="10"/><circle cx="79" cy="29" r="10"/><path d="M13 25q8 10 16 2m42 0q8 8 16-2" fill="none" stroke={gold} strokeWidth="3"/></g>;
     case "veil": return <><path d="M19 41Q13 12 49 9q36-1 32 34l-7-10Q50 15 27 33Z" fill="#33313e" stroke="#22222d"/><path d="m22 32 6-5 5 2 5-5 6 3 6-5 6 5 6-3 6 5 5-2 6 5" fill="none" stroke="#e2dfda" strokeWidth="3"/><path d="M20 33v43m60-43v43" stroke="#44404c" strokeWidth="5"/><path d="m17 44 4 4-4 4m66-8-4 4 4 4" fill="none" stroke="#b4aab9" strokeWidth="1"/></>;
-    case "straw-hat": return <><path d="M26 26Q26 8 49 8q24-1 26 19" fill="#e9c77c" stroke="#b98f4e" strokeWidth="1.2"/><path d="M27 23q23-6 47 0v8H27Z" fill="#c54f53"/><ellipse cx="50" cy="31" rx="42" ry="9" fill="#eccc85" stroke="#b98f4e" strokeWidth="1.3"/><path d="M15 32q34 8 70 0m-48-16 2-5m10 4v-5m10 5 2-4" fill="none" stroke="#d2ab60" strokeWidth="1"/><path d="M61 58h10m-7-2v4m4-4v4" stroke="#b98478" strokeWidth="1"/></>;
+    case "straw-hat": return <><g className="anime-headwear"><path d="M26 26Q26 8 49 8q24-1 26 19" fill="#e9c77c" stroke="#b98f4e" strokeWidth="1.2"/><path d="M27 23q23-6 47 0v8H27Z" fill="#c54f53"/><ellipse cx="50" cy="31" rx="42" ry="9" fill="#eccc85" stroke="#b98f4e" strokeWidth="1.3"/><path d="M15 32q34 8 70 0m-48-16 2-5m10 4v-5m10 5 2-4" fill="none" stroke="#d2ab60" strokeWidth="1"/></g><path d="M61 58h10m-7-2v4m4-4v4" stroke="#b98478" strokeWidth="1"/></>;
     case "triple-earring": return <><g fill="none" stroke={gold} strokeWidth="1.5">{[0,1,2].map(i=><ellipse key={i} cx={76+i*2} cy={56+i*3} rx="2" ry="4"/>)}</g><path d="M62 41v17m-5-9 10-1" stroke="#7b7563" strokeWidth="1.2"/><path d="m58 48 8 1" stroke={ink} strokeWidth="1.5"/></>;
     case "tangerine": return <g><circle cx="70" cy="93" r="8" fill="#efa551" stroke="#d18137"/><path d="M70 85q1-7 7-5-1 5-7 5" fill="#719b66"/><circle cx="67" cy="91" r="2" fill="#ffe1a0" opacity=".7"/></g>;
     case "curly-brow": return <><path d="M61 40q9-6 9 0 0 4-4 1" fill="none" stroke="#766040" strokeWidth="1.3"/><path d="m47 68 3 2 3-2m-3 2v3" fill="none" stroke="#7c654e" strokeWidth="1.1"/></>;
-    case "leaf-whiskers": return <><LeafBand/><path d="m25 53 8 2m-9 2 8 1m-7 3h8m42-8-8 2m9 2-8 1m7 3h-8" stroke="#aa8a6c" strokeWidth="1.1" strokeLinecap="round"/></>;
+    case "leaf-whiskers": return <><g className="anime-headwear"><LeafBand/></g><path d="m25 53 8 2m-9 2 8 1m-7 3h8m42-8-8 2m9 2-8 1m7 3h-8" stroke="#aa8a6c" strokeWidth="1.1" strokeLinecap="round"/></>;
     case "leaf-band": return <LeafBand/>;
-    case "diamond": return <><path d="M23 28q26-8 54 0l-2 7q-26-8-50 0Z" fill="#b54760"/><path d="m50 37 2.6 4-2.6 4-2.6-4Z" fill="#9861b0"/></>;
+    case "diamond": return <><g className="anime-headwear"><path d="M23 28q26-8 54 0l-2 7q-26-8-50 0Z" fill="#b54760"/></g><path d="m50 37 2.6 4-2.6 4-2.6-4Z" fill="#9861b0"/></>;
     case "ninja-mask": return <><path d="M23 52q27-5 54 0l-4 13q-22 16-46 0Z" fill="#455269" stroke="#303c55"/><path d="M31 59q19 9 37 0" fill="none" stroke="#63738a" strokeWidth="1.1"/><path d="m54 35 24-4-2 22H56Z" fill="#414c65"/><LeafBand mask/><path d="m57 54 1 3" stroke="#a47c79" strokeWidth="1"/></>;
     case "blindfold": return <><path d="M21 39q29-8 58 0l-2 15q-27-4-53 0Z" fill="#303144" stroke="#202235" strokeWidth="1"/><path d="M26 44q26-4 49-1m-47 7q21-4 45-1" fill="none" stroke="#55556f" strokeWidth="1.1"/><path d="m22 45-9 9 11-3" fill="#303144"/></>;
     case "hammer-pin": return <g transform="rotate(-25 75 40)" stroke="#b48d52" strokeWidth="1.2"><path d="M75 35v12"/><path d="M70 34h10v5H70Z" fill={gold}/></g>;
     case "goggles": return <g fill="#7f8f81" stroke="#514d40" strokeWidth="1.3"><path d="m27 43 18-2 1 12-16 2Zm28-2 18 2-3 12-16-2Z"/><path d="M45 45h10m-32 0 5 1m45 0 4-1" fill="none"/><path d="m31 46 9-1m18 0 9 1" stroke="#e7e4c5" strokeWidth="1"/></g>;
     case "star-tear": return <><path d="m31 54 1.4 3 3.2.5-2.3 2.3.5 3.2-2.8-1.5-2.8 1.5.5-3.2-2.3-2.3 3.2-.5Z" fill="#c66b91"/><path d="M68 54q-6 7-1 9t1-9" fill="#78b7c0"/></>;
+    case "school-bow": return c.id === "anime-kaoruko" ? <g className="anime-headwear"><path d="M23 30Q24 13 50 13q25 0 27 17" fill="none" stroke="#292631" strokeWidth="5" strokeLinecap="round"/><path d="M27 22q23-15 46 0" fill="none" stroke="#534b60" strokeWidth=".8"/></g> : null;
     case "blue-lips": return null; // The configured mouth carries her blue lip color.
     case "white-mask": return <g><path d="M25 39q25-10 50 0l-3 23q-22 22-44 0Z" fill="#fbfaf4" stroke="#c8c9d0" strokeWidth="1.1"/><path d="m32 48 11 1-6 4Zm36 0-11 1 6 4Z" fill="#555662"/><path d="m50 49-2 8 4 1m-7 7q5-2 10 0" fill="none" stroke="#b8b8c3" strokeWidth="1.2"/></g>;
     case "camellia": return <><Flower x={76} y={30} size={1.05}/><path d="m77 36-2 14m5-14 2 11" stroke={gold} strokeWidth="1.5"/><circle cx="75" cy="51" r="2" fill="#f1d293"/></>;
     case "hairpins": return <g stroke={gold} strokeWidth="1.6" strokeLinecap="round"><path d="m19 13 36 15m-33 5 32-15m8 7 20-13m-18 2 14 17"/><Flower x={27} y={20} color="#d8698d" size={.7}/><path d="m23 25-2 17m5-15-1 12" strokeWidth="1"/><circle cx="21" cy="44" r="2" fill={gold}/></g>;
     case "hairpin": return <g stroke={gold} strokeWidth="1.5"><path d="m65 29 17 10m-17-7 12 11"/><path d="m76 34 6-4 3 5-5 4Z" fill="#78b6bd"/><circle cx="78" cy="43" r="2" fill={gold}/></g>;
     case "dragon-hand": return <g fill="#e9ede9" stroke="#a5beb9" strokeWidth="1"><path d="M66 100q-4-6 0-10l-3-8q1-4 4 0l3 6 1-10q2-4 4 0v11l3-6q3-1 3 2l-3 13-4 4Z"/><path d="m68 91 7 3m-8 0 7 3m-3-8 3 2" fill="none"/></g>;
-    case "dragon-mask": return <><g transform="translate(15 -2) rotate(14 50 24) scale(.72 .56)"><path d="m23 43 4-13 13 7 10-7 10 7 13-7 4 14-7 21-13 2-7 7-7-7-13-2Z" fill="#dfd1a6" stroke="#a9946b" strokeWidth="1.4"/><path d="m29 43 15 4-9 7Zm42 0-15 4 9 7Z" fill="#5b6874"/><path d="m50 37-4 11 4 9 4-9ZM40 62h20l-4 5H44Z" fill="#b3a174"/><path d="m74 34 9-17 1 16 8-9-7 18" fill="#648aa9" stroke="#3f6483"/></g><path d="m28 70 7-2 6 4 8-3 7 3 8-4 9 4-4 12-9-2-10 4-10-4-8 1Z" fill="#eee6d3"/></>;
+    case "dragon-mask": return <><g className="anime-headwear"><g transform="translate(15 0) rotate(14 50 24) scale(.72 .56)"><path d="m23 43 4-13 13 7 10-7 10 7 13-7 4 14-7 21-13 2-7 7-7-7-13-2Z" fill="#dfd1a6" stroke="#a9946b" strokeWidth="1.4"/><path d="m29 43 15 4-9 7Zm42 0-15 4 9 7Z" fill="#5b6874"/><path d="m50 37-4 11 4 9 4-9ZM40 62h20l-4 5H44Z" fill="#b3a174"/><path d="m74 34 9-17 1 16 8-9-7 18" fill="#648aa9" stroke="#3f6483"/></g></g><path d="m28 70 7-2 6 4 8-3 7 3 8-4 9 4-4 12-9-2-10 4-10-4-8 1Z" fill="#eee6d3"/></>;
     case "stubble": return <g stroke="#8c6b61" strokeWidth=".9" strokeLinecap="round"><path d="m32 62 1 2m3 0 1 2m3 0 1 2m3 1 1 2m5-1v2m5-3-1 2m5-5-1 2m5-4-1 2m4-5-1 2"/>{c.id === "anime-yami" && <path d="m44 62 3-1m6 0 3 1" strokeWidth="1.5"/>}</g>;
     case "snack": return <g><path d="M38 97q-3-3 0-7l9-13q3-4 6 0l10 14q3 5-2 7Z" fill="#fff9e9" stroke="#c7bda4"/><path d="M45 91h11v8H45Z" fill="#415c46"/><path d="m43 87 1-1m5-3 1 1m7 4h1" stroke="#d6ccae" strokeWidth="1"/></g>;
     default: return null;
@@ -214,13 +241,17 @@ function Chopper({ c }: { c: Visual }) {
   return <g strokeLinejoin="round" data-face={face.faceShape} data-eyes={face.eyes}>
     <path d="M29 33Q13 23 16 9m3 17L8 20m9-2L8 10m63 23Q87 23 84 9m-3 17 11-6m-9-2 9-8" stroke="#94603d" strokeWidth="5" strokeLinecap="round" fill="none"/>
     <path d="M31 40q-16-15-21-3t18 17m41-14q16-15 21-3T72 54" fill="#bd8e64" stroke="#875b41" strokeWidth="1.2"/>
-    <path d="M27 103q1-22 23-22t23 22" fill="#82bcc0" stroke="#57949e" strokeWidth="1.2"/><path d="M43 81v22m14-22v22" stroke="#d2eddf" strokeWidth="4"/>
+    <path d="M27 98.5q1-17.5 23-17.5t23 17.5" fill="#82bcc0" stroke="#57949e" strokeWidth="1.2"/><path d="M43 81v16m14-16v16" stroke="#d2eddf" strokeWidth="4"/>
     <ellipse cx="50" cy="53" rx="32" ry="26" fill={c.hair} stroke="#946240" strokeWidth="1.2"/><ellipse cx="50" cy="64" rx="19" ry="13" fill="#e6bb89"/>
-    {face.eyes === "closed" ? <path d="M32 52q5-7 10 0m16 0q5-7 10 0" fill="none" stroke={ink} strokeWidth="1.8" strokeLinecap="round"/> : <><ellipse cx="37" cy="52" rx={face.eyeWidth*.3} ry={face.eyeHeight*.44} fill={ink}/><ellipse cx="63" cy="52" rx={face.eyeWidth*.3} ry={face.eyeHeight*.44} fill={ink}/><circle cx="38" cy="50" r="1.2" fill="white"/><circle cx="64" cy="50" r="1.2" fill="white"/></>}
+    {[37, 63].map(x => <g key={x} transform={`translate(${x} 52)`}>
+      <g className={face.eyes === "closed" ? "anime-eye-rest" : "anime-eye-blink"}>
+        {face.eyes === "closed" ? <path d="M-5 0q5-7 10 0" fill="none" stroke={ink} strokeWidth="1.8" strokeLinecap="round"/> : <g className="anime-eye-gaze"><ellipse rx={face.eyeWidth*.3} ry={face.eyeHeight*.44} fill={ink}/><circle cx="1" cy="-2" r="1.2" fill="white"/></g>}
+      </g>
+    </g>)}
     <ellipse cx="50" cy="60" rx="5.5" ry="3.7" fill="#679bbd" stroke="#476a95" strokeWidth=".8"/><path d="M50 64v2" fill="none" stroke="#714e40" strokeWidth="1.3"/><AnimeMouth design={face} y={68}/>
     <ellipse cx="28" cy="62" rx="5" ry="2.5" fill="#eaa0a0" opacity={face.blush}/><ellipse cx="72" cy="62" rx="5" ry="2.5" fill="#eaa0a0" opacity={face.blush}/>
-    <path d="M20 35Q14 9 50 8q36 1 30 27" fill="#d674a2" stroke="#a34e7d" strokeWidth="1.3"/><ellipse cx="50" cy="37" rx="36" ry="9" fill="#e397ba" stroke="#ac5b8b" strokeWidth="1.2"/><path d="m43 18 14 13m0-13L43 31" stroke="#fff8ed" strokeWidth="5" strokeLinecap="round"/>
-    <path d="M32 89q-7-2-7 5t11 6m32-11q7-2 7 5t-11 6" fill={c.hair} stroke="#946240"/>
+    <g className="anime-headwear"><path d="M20 35Q14 9 50 8q36 1 30 27" fill="#d674a2" stroke="#a34e7d" strokeWidth="1.3"/><ellipse cx="50" cy="37" rx="36" ry="9" fill="#e397ba" stroke="#ac5b8b" strokeWidth="1.2"/><path d="m43 18 14 13m0-13L43 31" stroke="#fff8ed" strokeWidth="5" strokeLinecap="round"/></g>
+    <path d="M32 88q-7-2-7 5t11 5m32-10q7-2 7 5t-11 5" fill={c.hair} stroke="#946240"/>
   </g>;
 }
 
@@ -234,20 +265,20 @@ export default function AnimeAvatar({ character: c, className = "", label }: { c
   const heldProp = ["snack", "tangerine", "dragon-hand"].includes(c.accessory);
   if (c.id === "anime-kirari" && !face.lipColor) face.lipColor = "#6a90b5";
   const complexion = ["anime-yami","anime-mitsueda","anime-hak"].includes(c.id) ? "#e7b494" : "#ffdcc3";
-  return <svg className={`ds-avatar anime-avatar ${className}`} data-character={c.id} data-transparent="true" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" role={label ? "img" : undefined} aria-label={label} aria-hidden={!label || undefined}>
+  return <svg className={`ds-avatar anime-avatar motion-avatar ${className}`} style={characterMotionStyle(c.id)} data-character={c.id} data-transparent="true" data-animated="true" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" role={label ? "img" : undefined} aria-label={label} aria-hidden={!label || undefined}>
     <defs>
       <clipPath id={clip}><rect width="100" height="100"/></clipPath>
     </defs>
     <g clipPath={`url(#${clip})`}>
       {c.style === "reindeer" ? <Chopper c={c}/> : <>
-        <g transform={`translate(50 0) scale(${backScale} 1) translate(-50 0)`}><HairBack c={c}/></g>
+        <g transform={`translate(50 0) scale(${backScale} 1) translate(-50 0)`}><g className="anime-hair-back"><HairBack c={c}/></g></g>
         <g transform="translate(50 80) scale(.68 .78) translate(-50 -80)"><Outfit c={c}/>{heldProp && <Accessories c={c}/>}</g>
         <ellipse cx="18" cy="51" rx="5" ry="7" fill={complexion} stroke={ink} strokeWidth="1.1"/><ellipse cx="82" cy="51" rx="5" ry="7" fill={complexion} stroke={ink} strokeWidth="1.1"/>
         <path d={faceOutline(face)} fill={complexion} stroke={ink} strokeWidth="1.8"/>
         {c.accessory === "red-scar" && <path d="M55 37q15-5 19 9l-3 13-12-1-5-10Z" fill="#bd6c70" opacity=".65"/>}
         <AnimeFace design={face} eyeColor={c.eyes} browColor={tint(c.hair,-.55)} uid={uid} characterId={c.id}/>
-        <g transform={`translate(50 0) scale(${frontScale} 1) translate(-50 0)`}><HairFront c={c}/></g>
-        {!heldProp && <g transform="translate(50 0) scale(1.12 1) translate(-50 0)"><Accessories c={c}/></g>}
+        <g transform={`translate(50 0) scale(${frontScale} 1) translate(-50 0)`}><g className="anime-hair-front"><HairFront c={c}/></g></g>
+        {!heldProp && <g transform="translate(50 0) scale(1.12 1) translate(-50 0)"><g className={movingHeadwear.has(c.accessory) ? "anime-headwear" : undefined}><Accessories c={c}/></g></g>}
       </>}
     </g>
   </svg>;

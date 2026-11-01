@@ -32,7 +32,7 @@ async function noOverflow() { assert.equal(await page.evaluate(() => document.do
 try {
   await page.goto(base); await page.waitForLoadState("networkidle");
   await page.locator(".sidebar").getByRole("button", { name: "My profile", exact: true }).click();
-  await page.getByText("190 icons", { exact: true }).waitFor();
+  await page.getByText(`${115 + catalog.length} icons`, { exact: true }).waitFor();
   await page.getByRole("button", { name: "Anime", exact: true }).click();
   const picker = page.locator(".profile-settings .avatar-picker");
   for (const series of [...new Set(catalog.map(character => character.series))]) {
@@ -45,9 +45,9 @@ try {
   }
   await picker.getByLabel("Anime series", { exact: true }).selectOption("all");
   while (await picker.getByRole("button", { name: "Show more icons", exact: true }).count()) await picker.getByRole("button", { name: "Show more icons", exact: true }).click();
-  assert.equal(await picker.locator(".avatar-grid button").count(), 75);
+  assert.equal(await picker.locator(".avatar-grid button").count(), catalog.length);
   const portraits = picker.locator(".avatar-grid svg[data-character]");
-  assert.equal(await portraits.count(), 75);
+  assert.equal(await portraits.count(), catalog.length);
   for (const portrait of await portraits.all()) {
     assert.equal(await portrait.getAttribute("data-transparent"), "true");
     assert.equal(await portrait.locator("[data-face][data-eyes]").count(), 1, await portrait.getAttribute("data-character"));
@@ -64,8 +64,65 @@ try {
     });
     assert.ok(transparent, `${await portrait.getAttribute("data-character")} must have empty transparent surroundings`);
   }
+  const motion = await picker.evaluate(root => {
+    const selectors = [".anime-eye-blink", ".anime-eye-rest", ".anime-eye-gaze", ".anime-mouth-motion", ".anime-hair-front", ".anime-hair-back", ".anime-headwear"];
+    return [...root.querySelectorAll("svg[data-character]")].map(svg => {
+      const result = { id: svg.dataset.character, categories: {}, missing: [] };
+      for (const selector of selectors) {
+        const nodes = [...svg.querySelectorAll(selector)];
+        for (const node of nodes) {
+          const animation = node.getAnimations()[0];
+          if (!animation) { result.missing.push(selector); continue; }
+          const timing = animation.effect.getTiming(), priorTime = animation.currentTime, priorState = animation.playState;
+          const duration = Number(timing.duration), delay = timing.delay;
+          animation.pause(); animation.currentTime = delay + duration;
+          const start = getComputedStyle(node).transform;
+          const phase = selector === ".anime-eye-blink" ? .905 : selector === ".anime-eye-rest" ? .91 : selector === ".anime-eye-gaze" ? .44 : .5;
+          animation.currentTime = delay + duration * (1 + phase);
+          const moved = getComputedStyle(node).transform;
+          result.categories[selector] = (result.categories[selector] ?? true) && start !== moved;
+          animation.currentTime = priorTime;
+          if (priorState === "running") animation.play();
+        }
+      }
+      return result;
+    });
+  });
+  for (const result of motion) {
+    const character = catalog.find(character => character.id === result.id);
+    assert.deepEqual(result.missing, [], `${result.id} must have active native motion`);
+    for (const [part, moves] of Object.entries(result.categories)) assert.ok(moves, `${result.id} ${part} must move`);
+    if (character.face.mouth !== "hidden") assert.ok(result.categories[".anime-mouth-motion"], result.id);
+    else assert.equal(result.categories[".anime-mouth-motion"], undefined, `${result.id} mouth stays covered`);
+    if (character.style !== "reindeer") assert.ok(result.categories[".anime-hair-front"], result.id);
+    else assert.ok(result.categories[".anime-headwear"], result.id);
+  }
+  // One observer pauses hidden/offscreen roots, including dynamically inserted choices.
+  const firstPortrait = portraits.first();
+  await firstPortrait.scrollIntoViewIfNeeded();
+  await page.waitForFunction(() => document.querySelector('.avatar-grid svg[data-character]')?.dataset.motionVisible === "true");
+  await portraits.last().scrollIntoViewIfNeeded();
+  await page.waitForFunction(() => document.querySelector('.avatar-grid svg[data-character]')?.dataset.motionVisible === "false");
+  assert.equal(await firstPortrait.locator(".anime-hair-front").evaluate(node => getComputedStyle(node).animationPlayState), "paused");
+  await firstPortrait.scrollIntoViewIfNeeded();
+  await page.waitForFunction(() => document.querySelector('.avatar-grid svg[data-character]')?.dataset.motionVisible === "true");
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  assert.equal(await page.locator("html").getAttribute("data-motion-paused"), "true");
+  assert.equal(await firstPortrait.locator(".anime-hair-front").evaluate(node => getComputedStyle(node).animationPlayState), "paused");
+  await page.evaluate(() => {
+    delete document.hidden;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  assert.equal(await page.locator("html").getAttribute("data-motion-paused"), "false");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  assert.equal(await firstPortrait.locator(".anime-hair-front").evaluate(node => getComputedStyle(node).animationName), "none");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  console.log(`PASS all ${catalog.length} characters have expression-preserving eye/mouth/hair/headwear motion; hidden mouths and reduced motion remain respected.`);
   await picker.locator(".avatar-grid").evaluate(grid => grid.style.maxHeight = "none");
-  await picker.locator(".avatar-grid").screenshot({ path: join(artifacts, "all-75-chibis.png") });
+  await picker.locator(".avatar-grid").screenshot({ path: join(artifacts, `all-${catalog.length}-chibis.png`), animations: "disabled" });
   await picker.locator(".avatar-grid").evaluate(grid => grid.style.removeProperty("max-height"));
   await page.evaluate(() => {
     const stage = document.createElement("div"); stage.id = "chibi-style-preview";
@@ -79,9 +136,44 @@ try {
     }
     document.body.append(stage);
   });
-  await page.locator("#chibi-style-preview").screenshot({path:join(artifacts,"style-preview.png")});
+  await page.locator("#chibi-style-preview").screenshot({path:join(artifacts,"style-preview.png"), animations:"disabled"});
   await page.locator("#chibi-style-preview").evaluate(stage => stage.remove());
+  await page.evaluate(() => {
+    const stage = document.createElement("div"); stage.id = "kaoruhana-preview";
+    Object.assign(stage.style, {position:"fixed",top:"0",left:"0",zIndex:"999999",display:"grid",gridTemplateColumns:"repeat(5, 170px)",gap:"10px",padding:"22px",background:"#f4f0f7",color:"#302b37",fontFamily:"Arial, sans-serif"});
+    for (const [id, label] of [["rintaro","Rintaro Tsumugi"],["kaoruko","Kaoruko Waguri"],["subaru","Subaru Hoshina"],["saku","Saku Natsusawa"],["shohei","Shohei Usami"]]) {
+      const original = document.querySelector(`.profile-settings svg[data-character="anime-${id}"]`);
+      const card = document.createElement("div"); Object.assign(card.style, {display:"grid",justifyItems:"center",gap:"8px"});
+      const portrait = original.cloneNode(true); Object.assign(portrait.style, {width:"170px",height:"170px",maxWidth:"none",background:"transparent",border:"0",borderRadius:"0"});
+      const name = document.createElement("strong"); name.textContent = label; name.style.fontSize = "13px";
+      card.append(portrait, name); stage.append(card);
+    }
+    document.body.append(stage);
+  });
+  await page.locator("#kaoruhana-preview").screenshot({path:join(artifacts,"kaoruhana-preview.png"), animations:"disabled"});
+  await page.locator("#kaoruhana-preview").evaluate(stage => stage.remove());
 
+
+  // Existing animals, Sanrio and all human portraits share eye/mouth motion too.
+  let otherIcons = 0;
+  for (const category of ["Animals", "Characters", "Feminine", "Masculine"]) {
+    await picker.getByRole("button", { name: category, exact: true }).click();
+    while (await picker.getByRole("button", { name: "Show more icons", exact: true }).count()) await picker.getByRole("button", { name: "Show more icons", exact: true }).click();
+    for (const button of await picker.locator(".avatar-grid button").all()) {
+      const svg = button.locator("svg");
+      assert.equal(await svg.getAttribute("data-animated"), "true");
+      const eyes = svg.locator(".character-eyes, .study-mascot-eyes, .portrait-eye-motion");
+      assert.equal(await eyes.count(), 1);
+      assert.ok(await eyes.evaluate(node => node.getAnimations().length > 0));
+      const name = await button.getAttribute("aria-label");
+      if (!name.toLowerCase().includes("hello kitty")) assert.equal(await svg.locator(".character-mouth-motion, .portrait-mouth-motion").count(), 1);
+      if (["Feminine", "Masculine"].includes(category)) assert.ok(await svg.locator(".portrait-hair-motion").count() >= 1);
+      otherIcons++;
+    }
+  }
+  assert.equal(otherIcons, 115);
+  await picker.getByRole("button", { name: "Anime", exact: true }).click();
+  console.log("PASS all 115 existing animal, character and portrait icons retain animation and selection support.");
   await picker.getByLabel("Search anime characters", { exact: true }).fill("GOJO");
   assert.equal(await picker.locator(".avatar-grid button").count(), 1);
   await picker.getByRole("button", { name: "Satoru Gojo · Jujutsu Kaisen", exact: true }).click();
@@ -90,7 +182,7 @@ try {
   assert.equal(profile.avatar_id, "anime-gojo");
   await page.reload(); await page.waitForLoadState("networkidle");
   assert.equal(await page.locator('.profile-avatar-button svg[data-character="anime-gojo"]').count(), 1);
-  console.log("PASS all 75 individual face designs render with transparent SVG surroundings; search and saved selections work.");
+  console.log(`PASS all ${catalog.length} individual face designs render with transparent SVG surroundings; search and saved selections work.`);
 
   for (const width of [320, 390, 768]) {
     await page.setViewportSize({ width, height: 900 });
@@ -108,7 +200,7 @@ try {
   await page.getByRole("button", { name: "Customize companion", exact: true }).click();
   const buddy = page.locator(".buddy-settings");
   await buddy.getByRole("button", { name: "Anime", exact: true }).click();
-  assert.equal(await buddy.getByLabel("Anime series", { exact: true }).locator("option").count(), 16);
+  assert.equal(await buddy.getByLabel("Anime series", { exact: true }).locator("option").count(), 1 + new Set(catalog.map(character => character.series)).size);
   await buddy.getByLabel("Anime series", { exact: true }).selectOption("Naruto");
   await buddy.getByRole("button", { name: "Naruto Uzumaki · Naruto", exact: true }).click();
   assert.equal(await buddy.getByLabel("Companion name", { exact: true }).inputValue(), "Naruto Uzumaki");

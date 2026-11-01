@@ -121,6 +121,7 @@ export function AnimeMouth({ design, y = 64 }: { design: FaceDesign; y?: number 
   const color=design.lipColor || ink;
   const common={ stroke: color, strokeWidth: 1.4, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
   return <g transform={`translate(50 ${y}) scale(${design.mouthScale ?? 1})`} data-mouth={design.mouth}>
+    <g className={design.mouth === "hidden" ? undefined : "anime-mouth-motion"}>
     {design.mouth === "neutral" && <path d="M-4 0h8" fill="none" {...common}/>}
     {design.mouth === "frown" && <path d="M-4.5 1Q0-3 4.5 1" fill="none" {...common}/>}
     {design.mouth === "smirk" && <><path d="M-5 1q5 1 11-3" fill="none" {...common}/><path d="m6-3 1 2" fill="none" stroke={color} strokeWidth=".8"/></>}
@@ -133,6 +134,7 @@ export function AnimeMouth({ design, y = 64 }: { design: FaceDesign; y?: number 
     {design.mouth === "grin" && design.squareGrin && <><path d="M-10-2q10 1 20 0l-1 9H-9Z" fill="#fffdf1" {...common}/><path d="M-9 2H9m-5-3v7m-4-7v7m-4-7v7" stroke="#d2bcaa" strokeWidth=".7"/></>}
     {design.mouth === "toothy" && <><path d="M-8-1q8 1 16-2L6 6Q0 9-7 4Z" fill="#fffdf1" {...common}/><path d="M-6 1q6 2 12-1m-8 0v5m4-6v6" fill="none" stroke="#d7b9ad" strokeWidth=".75"/></>}
     {design.mouth === "shout" && <><path d="M-6-3Q0-6 6-3L8 5Q0 11-8 5Z" fill="#723e48" {...common}/><path d="M-5-3H5l1 3H-6Z" fill="#fff9e9"/><path d="M-5 5Q0 1 5 5Q0 9-5 5" fill="#d98790"/></>}
+    </g>
   </g>;
 }
 
@@ -159,13 +161,15 @@ export default function AnimeFace({ design, eyeColor, browColor, uid, characterI
       return <g key={side} transform={`translate(${cx} ${cy})`}>
         {f.eyes !== "blank" && <Eyebrow face={f} side={side} color={browColor}/>}
         <g transform={`rotate(${-side*f.eyeTilt}) scale(${mirror} 1)`}>
+          {f.eyeShadow && !wink && f.eyes !== "closed" && f.eyes !== "blank" && <path d={contours.outline} transform="scale(1.5 1.9)" fill="#3a3848"/>}
+          <g className={f.eyes === "blank" ? undefined : f.eyes === "closed" || wink ? "anime-eye-rest" : "anime-eye-blink"}>
           {f.eyes === "closed" || wink ? <path d={closedSmile ? `M${-rx} 1Q0 ${-ry} ${rx} 1` : `M${-rx} 0q${rx} 1 ${rx*2} 0`} fill="none" stroke={ink} strokeWidth="1.8" strokeLinecap="round"/>
             : f.eyes === "dot" ? <><ellipse rx={rx*.38} ry={ry*.8} fill={ink}/><circle cx="1" cy={-ry*.36} r=".8" fill="white"/></>
               : f.eyes !== "blank" && <>
                 <defs><clipPath id={id}><path d={contours.outline}/></clipPath></defs>
-                {f.eyeShadow && <path d={contours.outline} transform="scale(1.5 1.9)" fill="#3a3848"/>}
                 <path d={contours.outline} fill={redGhoul ? "#302331" : "#fffdf4"} stroke="#a18d89" strokeWidth=".55"/>
                 <g clipPath={`url(#${id})`}>
+                  <g className="anime-eye-gaze" data-mirrored={mirror === -1 || undefined}>
                   <ellipse cx={gaze} cy=".5" rx={irisRx} ry={irisRy} fill={redGhoul ? "#c93f55" : color} stroke={pale ? "#b3a9c9" : ink} strokeWidth={f.irisDetail === "ring" ? 1.1 : .65}/>
                   {!pale && <ellipse cx={gaze} cy={-irisRy*.35} rx={irisRx} ry={irisRy*.63} fill={ink} opacity={quietEyes ? .3 : .18}/>}
                   {f.irisDetail === "ring" && <ellipse cx={gaze} cy=".5" rx={irisRx*.72} ry={irisRy*.72} fill="none" stroke={ink} strokeWidth=".6" opacity=".65"/>}
@@ -173,11 +177,13 @@ export default function AnimeFace({ design, eyeColor, browColor, uid, characterI
                     : <ellipse cx={gaze} cy=".6" rx={pale ? .8 : irisRx*f.pupilScale} ry={pale ? 1.2 : irisRy*f.pupilScale} fill={pale ? "#aaa2bc" : ink}/>}
                   {f.highlights !== false && f.irisDetail !== "red-ghoul" && !quietEyes && <circle cx={gaze+irisRx*.38*mirror} cy={-irisRy*.34} r={Math.min(1.6,irisRx*.33)} fill="white"/>}
                   {f.highlights !== false && !quietEyes && f.eyes !== "angular" && !pale && <circle cx={gaze-irisRx*.35*mirror} cy={irisRy*.45} r=".65" fill="#fff4da" opacity=".85"/>}
+                  </g>
                 </g>
                 <path d={contours.upper} fill="none" stroke={ink} strokeWidth={f.lashes ? 2 : f.eyes === "angular" ? 1.9 : 1.45} strokeLinecap={f.eyes === "angular" ? "square" : "round"}/>
                 <path d={contours.lower} fill="none" stroke={quietEyes ? "#7d6c70" : "#aa8c89"} strokeWidth={quietEyes ? .9 : .65} strokeLinecap="round"/>
                 {f.lashes && <path d={`m${-rx} ${-ry*.12} -2.4 -2.5m${-rx+.9} ${-ry*.46} -1.4 -2.5`} fill="none" stroke={ink} strokeWidth="1.2" strokeLinecap="round"/>}
               </>}
+          </g>
         </g>
         {f.undereye && <path d={`M${-rx*.7} ${ry+2.3}q${rx*.7} 1.2 ${rx*1.4} -.1`} fill="none" stroke="#a28b8c" strokeWidth=".85" strokeLinecap="round"/>}
       </g>;

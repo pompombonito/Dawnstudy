@@ -1,6 +1,7 @@
 "use client";
 
 import { useId } from "react";
+import { characterMotionStyle } from "./character-motion";
 import "./study-mascot.css";
 
 type Animal = "cat" | "fox" | "bunny" | "bear";
@@ -26,7 +27,9 @@ export default function StudyMascot({ animal = "cat", className = "", decorative
 
   return (
     <svg
-      className={`study-mascot study-mascot--${animal} ${className}`.trim()}
+      className={`study-mascot motion-avatar study-mascot--${animal} ${className}`.trim()}
+      style={characterMotionStyle(animal)}
+      data-animated="true"
       viewBox="0 0 200 200"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
@@ -98,7 +101,7 @@ export default function StudyMascot({ animal = "cat", className = "", decorative
         <ellipse cx="66" cy="106" rx="7" ry="4" fill="#d98e78" opacity=".5" />
         <ellipse cx="134" cy="106" rx="7" ry="4" fill="#d98e78" opacity=".5" />
         <path d="M95 106q5-3 10 0c0 4-3 6-5 6s-5-2-5-6Z" fill={animal === "bunny" ? "#c58275" : outline} />
-        <path d="M100 112v3m0 0c-2 4-7 4-9 0m9 0c2 4 7 4 9 0" stroke={outline} strokeWidth="2" />
+        <path className="character-mouth-motion" d="M100 112v3m0 0c-2 4-7 4-9 0m9 0c2 4 7 4 9 0" stroke={outline} strokeWidth="2" />
         {animal === "cat" && <g stroke={outline} strokeWidth="1.7" opacity=".5"><path d="m53 103 14 3m-15 6 14-1m67-5 14-3m-13 8 14 1" /></g>}
 
         <path d="M58 151c16-5 29-3 42 5 13-8 26-10 42-5v24c-15-4-28-2-42 5-14-7-27-9-42-5Z" fill="#f7f1df" stroke={outline} strokeWidth="2.5" />

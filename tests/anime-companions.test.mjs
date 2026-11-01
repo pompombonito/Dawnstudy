@@ -14,9 +14,9 @@ async function loadHelper(characters) {
 const helper = await loadHelper(catalog);
 
 test("the catalog contains five unique characters per series and supports exact lookup only", () => {
-  assert.equal(catalog.length, 75);
+  assert.equal(catalog.length, 80);
   assert.equal(new Set(catalog.map(character => character.id)).size, catalog.length);
-  assert.equal(helper.animeSeries.length, 15);
+  assert.equal(helper.animeSeries.length, 16);
   for (const series of helper.animeSeries) assert.equal(helper.filterAnimeCharacters(series).length, 5);
   for (const character of catalog) {
     assert.deepEqual(helper.findAnimeCharacter(character.id), character);

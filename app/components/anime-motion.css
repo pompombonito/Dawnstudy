@@ -1,0 +1,100 @@
+/* CSS-only character motion: static SVG positioning lives on the parent groups. */
+.anime-eye-blink,
+.portrait-eye-motion,
+.character-eyes,
+.motion-avatar .study-mascot-eyes {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: character-natural-blink var(--anime-blink-duration, 7.3s) linear var(--anime-blink-delay, -2.1s) infinite;
+}
+
+.anime-eye-rest {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: character-resting-eyes var(--anime-blink-duration, 7.3s) ease-in-out var(--anime-blink-delay, -2.1s) infinite;
+}
+
+.anime-eye-gaze {
+  --anime-gaze-direction: 1;
+  animation: character-gentle-gaze var(--anime-gaze-duration, 13.7s) ease-in-out var(--anime-gaze-delay, -3.4s) infinite;
+}
+
+.anime-eye-gaze[data-mirrored="true"] { --anime-gaze-direction: -1; }
+
+.anime-mouth-motion,
+.character-mouth-motion,
+.portrait-mouth-motion {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: character-mouth-breathe var(--anime-mouth-duration, 8.9s) ease-in-out var(--anime-mouth-delay, -1.7s) infinite;
+}
+
+.anime-hair-front,
+.anime-hair-back,
+.portrait-hair-motion {
+  transform-box: view-box;
+  transform-origin: 50px 22px;
+  animation: character-hair-sway var(--anime-hair-duration, 7.2s) ease-in-out var(--anime-motion-delay, -1.3s) infinite;
+}
+
+.anime-hair-back { animation-name: character-back-hair-sway; }
+.portrait-hair-motion { transform-box: fill-box; transform-origin: 50% 15%; }
+
+.anime-headwear,
+.character-headwear-motion {
+  transform-box: view-box;
+  transform-origin: 50px 30px;
+  animation: character-headwear-sway var(--anime-hair-duration, 7.2s) ease-in-out var(--anime-motion-delay, -1.3s) infinite;
+}
+
+/* A brief asymmetric double blink occurs only near the end of each long cycle. */
+@keyframes character-natural-blink {
+  0%, 88%, 93.5%, 97.5%, 100% { transform: scaleY(1); }
+  90%, 91.5% { transform: scaleY(.08); }
+  95%, 96% { transform: scaleY(.16); }
+}
+
+@keyframes character-resting-eyes {
+  0%, 87%, 100% { transform: translateY(0) scaleY(1); }
+  91% { transform: translateY(.18px) scaleY(.9); }
+  95% { transform: translateY(0) scaleY(1); }
+}
+
+@keyframes character-gentle-gaze {
+  0%, 35%, 55%, 100% { transform: translateX(0); }
+  39%, 49% { transform: translateX(calc(var(--anime-gaze-direction, 1) * .45px)); }
+  75%, 83% { transform: translateX(calc(var(--anime-gaze-direction, 1) * -.35px)); }
+}
+
+@keyframes character-mouth-breathe {
+  0%, 40%, 64%, 100% { transform: translateY(0) scale(1); }
+  48%, 56% { transform: translateY(.12px) scale(1.035, 1.075); }
+  81% { transform: translateY(-.08px) scale(.98, .97); }
+}
+
+@keyframes character-hair-sway {
+  0%, 100% { transform: rotate(-.22deg); }
+  50% { transform: rotate(.22deg); }
+}
+
+@keyframes character-back-hair-sway {
+  0%, 100% { transform: rotate(-.3deg); }
+  50% { transform: rotate(.3deg); }
+}
+
+@keyframes character-headwear-sway {
+  0%, 100% { transform: rotate(-.18deg); }
+  50% { transform: rotate(.18deg); }
+}
+
+/* One shared visibility observer pauses offscreen avatars and hidden tabs. */
+html[data-motion-paused="true"] :is(.anime-eye-blink, .anime-eye-rest, .anime-eye-gaze, .anime-mouth-motion, .anime-hair-front, .anime-hair-back, .anime-headwear, .character-eyes, .study-mascot-eyes, .character-mouth-motion, .character-headwear-motion, .portrait-eye-motion, .portrait-mouth-motion, .portrait-hair-motion, .character-body, .study-mascot-creature, .study-mascot-shadow, .study-mascot-star),
+.motion-avatar[data-motion-visible="false"] :is(.anime-eye-blink, .anime-eye-rest, .anime-eye-gaze, .anime-mouth-motion, .anime-hair-front, .anime-hair-back, .anime-headwear, .character-eyes, .study-mascot-eyes, .character-mouth-motion, .character-headwear-motion, .portrait-eye-motion, .portrait-mouth-motion, .portrait-hair-motion, .character-body, .study-mascot-creature, .study-mascot-shadow, .study-mascot-star) {
+  animation-play-state: paused !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(.anime-eye-blink, .anime-eye-rest, .anime-eye-gaze, .anime-mouth-motion, .anime-hair-front, .anime-hair-back, .anime-headwear, .character-eyes, .study-mascot-eyes, .character-mouth-motion, .character-headwear-motion, .portrait-eye-motion, .portrait-mouth-motion, .portrait-hair-motion, .character-body, .study-mascot-creature, .study-mascot-shadow, .study-mascot-star) {
+    animation: none !important;
+  }
+}

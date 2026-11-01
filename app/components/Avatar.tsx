@@ -1,5 +1,6 @@
 "use client";
 import StudyMascot from "./StudyMascot";
+import { characterMotionStyle } from "./character-motion";
 import AnimeAvatar from "./AnimeAvatar";
 import { findAnimeCharacter } from "../community/anime-companions";
 
@@ -60,7 +61,9 @@ export default function Avatar({
               : "#faf1e5";
     return (
       <svg
-        className={`ds-avatar ${className}`}
+        className={`ds-avatar motion-avatar ${className}`}
+        style={characterMotionStyle(id)}
+        data-animated="true"
         viewBox="0 0 100 100"
         role={label ? "img" : undefined}
         aria-label={label}
@@ -72,11 +75,12 @@ export default function Avatar({
           rx="24"
           fill={["#dacdc1", "#c9d9cb", "#e2cad3", "#cdd4e0"][n % 4]}
         />
-        {female && <path d="M24 49C18 10 80 8 77 48l5 40H18Z" fill={hair} />}
+        {female && <path className="portrait-hair-motion" d="M24 49C18 10 80 8 77 48l5 40H18Z" fill={hair} />}
         <path d="M12 103V85c0-18 18-25 38-25s38 7 38 25v18" fill={shirt} />
         <path d="M42 55v14l8 6 8-6V55" fill={skin} />
         <ellipse cx="50" cy="39" rx="23" ry="27" fill={skin} />
         <path
+          className="portrait-hair-motion"
           d={
             female
               ? "M26 36C22 8 74 4 74 35 54 29 48 18 45 20 42 30 32 31 26 36Z"
@@ -84,11 +88,12 @@ export default function Avatar({
           }
           fill={hair}
         />
-        <g fill="#302923">
+        <g className="portrait-eye-motion" fill="#302923">
           <ellipse cx="41" cy="41" rx="2" ry="2.6" />
           <ellipse cx="60" cy="41" rx="2" ry="2.6" />
         </g>
         <path
+          className="portrait-mouth-motion"
           d="M44 53q6 5 12-1"
           stroke="#8b5348"
           strokeWidth="2"
@@ -176,7 +181,9 @@ export default function Avatar({
       id === "pompompurin";
   return (
     <svg
-      className={`ds-avatar character-avatar ${className}`}
+      className={`ds-avatar character-avatar motion-avatar ${className}`}
+      style={characterMotionStyle(id)}
+      data-animated="true"
       viewBox="0 0 100 100"
       role={label ? "img" : undefined}
       aria-label={label}
@@ -264,6 +271,7 @@ export default function Avatar({
         )}
         {id !== "hello-kitty" && (
           <path
+            className="character-mouth-motion"
             d="M45 59q5 5 10 0"
             stroke={dark}
             strokeWidth="1.8"
@@ -272,11 +280,11 @@ export default function Avatar({
           />
         )}
         {id === "pompompurin" && (
-          <>
+          <g className="character-headwear-motion">
             <ellipse cx="50" cy="20" rx="22" ry="7" fill="#865737" />
             <ellipse cx="50" cy="15" rx="15" ry="9" fill="#865737" />
             <path d="M51 7V4" stroke="#865737" strokeWidth="4" />
-          </>
+          </g>
         )}
         {id === "kuromi" && (
           <>
@@ -286,7 +294,7 @@ export default function Avatar({
           </>
         )}
         {["hello-kitty", "my-melody"].includes(id) && (
-          <g fill={id === "hello-kitty" ? "#dc526e" : "#fff2cf"}>
+          <g className="character-headwear-motion" fill={id === "hello-kitty" ? "#dc526e" : "#fff2cf"}>
             <path d="m65 24 12-8 5 16-16-1Z" />
             <path d="m66 24-12-8-5 16 16-1Z" />
             <circle cx="65" cy="25" r="5" />

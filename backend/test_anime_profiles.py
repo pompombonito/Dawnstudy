@@ -29,7 +29,7 @@ class AnimeProfileTests(unittest.TestCase):
         social_api.LIMITS.clear()
 
     def test_every_catalog_id_can_be_saved_as_avatar_and_companion(self):
-        self.assertEqual(len(self.characters), 75)
+        self.assertEqual(len(self.characters), 80)
         for character in self.characters:
             with self.subTest(character=character["id"]):
                 social_api.LIMITS.clear()
