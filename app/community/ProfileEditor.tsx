@@ -1,14 +1,16 @@
 "use client";
 import { useState } from "react";
 import Avatar from "../components/Avatar";
-import { animals, portraits, themes } from "./catalog";
+import { animals, portraits } from "./catalog";
+import ThemePicker from "../components/ThemePicker";
+import { DEFAULT_THEME } from "./themes";
 import type { ProfileInput, Theme } from "./types";
 
 export const defaultProfile: ProfileInput = {
   nickname: "",
   avatar_id: "cat",
   gender: "prefer-not-to-say",
-  theme: "dark",
+  theme: DEFAULT_THEME,
   discoverable: false,
   companion_id: "cat",
   companion_name: "Miso",
@@ -20,27 +22,7 @@ export function ThemeChoices({
   value: Theme;
   onChange: (theme: Theme) => void;
 }) {
-  return (
-    <div className="theme-choices">
-      {themes.map((t) => (
-        <button
-          type="button"
-          key={t.id}
-          className={`theme-card theme-${t.id} ${value === t.id ? "chosen" : ""}`}
-          aria-pressed={value === t.id}
-          onClick={() => onChange(t.id)}
-        >
-          <span className="theme-swatch">
-            <i />
-            <i />
-            <i />
-          </span>
-          <strong>{t.label}</strong>
-          <small>{t.description}</small>
-        </button>
-      ))}
-    </div>
-  );
+  return <ThemePicker value={value} onChange={onChange} compact={false}/>;
 }
 export function AvatarPicker({
   value,

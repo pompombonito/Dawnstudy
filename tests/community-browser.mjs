@@ -242,7 +242,7 @@ async function context(uid, width = 1440, height = 1000) {
   });
   const page = await c.newPage();
   page.on("pageerror", (e) => errors.push(e.message));
-  await page.goto("http://localhost:3033");
+  await page.goto(process.env.DAWNSTUDY_TEST_URL || "http://localhost:3033");
   return { c, page };
 }
 try {
@@ -255,12 +255,14 @@ try {
   await p.locator(".setup-consent input").check();
   await p.getByRole("button", { name: "Continue", exact: true }).click();
   await p.getByLabel("Public nickname").fill("June");
-  await p.getByRole("button", { name: /Rose Dawn Blush/ }).click();
+  await p.locator(".setup-dialog").getByRole("radio", { name: "Hello Kitty", exact: true }).locator("..").click();
+  await p.locator(".setup-dialog").getByRole("radio", { name: "Light", exact: true }).locator("..").click();
   await p.getByRole("button", { name: "Characters", exact: true }).click();
   await p.getByRole("button", { name: "Hello Kitty", exact: true }).click();
   await p.getByRole("button", { name: "Meet your study space →" }).click();
   await p.locator(".setup-backdrop").waitFor({ state: "detached" });
-  assert.equal(await p.locator("html").getAttribute("data-theme"), "rose");
+  assert.equal(await p.locator("html").getAttribute("data-theme"), "light");
+  assert.equal(await p.locator("html").getAttribute("data-color-theme"), "hello-kitty-light");
   console.log("PASS first-login agreement, profile icon, theme and save");
   assert.equal(
     await p.locator(".buddy-launcher").count(),

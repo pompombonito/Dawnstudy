@@ -39,7 +39,14 @@ class ProfileInput(BaseModel):
     nickname: str = Field(min_length=2, max_length=24)
     avatar_id: str = Field(max_length=80)
     gender: Literal["male", "female", "gender-diverse", "prefer-not-to-say"]
-    theme: Literal["light", "dark", "rose"]
+    theme: Literal[
+        "cinnamoroll-light", "cinnamoroll-dark",
+        "pompompurin-light", "pompompurin-dark",
+        "kuromi-light", "kuromi-dark",
+        "hello-kitty-light", "hello-kitty-dark",
+        "pochacco-light", "pochacco-dark",
+        "light", "dark", "rose",
+    ]
     discoverable: bool = False
     companion_id: str = "cat"
     companion_name: str = Field(default="Miso", min_length=1, max_length=24)

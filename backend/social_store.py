@@ -7,6 +7,21 @@ import accounts
 
 TERMS_VERSION = "2026-10-30"
 LOCK = threading.RLock()
+THEME_IDS = (
+    "cinnamoroll-light", "cinnamoroll-dark",
+    "pompompurin-light", "pompompurin-dark",
+    "kuromi-light", "kuromi-dark",
+    "hello-kitty-light", "hello-kitty-dark",
+    "pochacco-light", "pochacco-dark",
+)
+DEFAULT_THEME = "kuromi-dark"
+LEGACY_THEMES = {"light": "cinnamoroll-light", "dark": "kuromi-dark", "rose": "hello-kitty-light"}
+
+
+def normalize_theme(value):
+    if value in THEME_IDS:
+        return value
+    return LEGACY_THEMES.get(value, DEFAULT_THEME) if isinstance(value, str) else DEFAULT_THEME
 
 
 def now():
@@ -30,7 +45,8 @@ def write(tab, value, number=None):
 
 
 def profile(user_id):
-    return next((row for _, row in rows("Profiles") if row["user_id"] == user_id), None)
+    value = next((row for _, row in rows("Profiles") if row["user_id"] == user_id), None)
+    return {**value, "theme": normalize_theme(value.get("theme"))} if value else None
 
 
 def ready(user_id):
@@ -43,6 +59,7 @@ def save_profile(user_id, changes):
         existing = next(((n, r) for n, r in rows("Profiles") if r["user_id"] == user_id), None)
         value = dict(existing[1]) if existing else {"user_id": user_id, "created_at": now(), "companion_id": "cat", "companion_name": "Miso", "discoverable": "false"}
         value.update(changes)
+        value["theme"] = normalize_theme(value.get("theme"))
         value["updated_at"] = now()
         return write("Profiles", value, existing[0] if existing else None)
 
@@ -69,6 +86,7 @@ def own_profile(value):
         return None
     result = {key: value.get(key, "") for key in accounts.SOCIAL_TABLES["Profiles"] if key != "public_key_json"}
     result["discoverable"] = result["discoverable"] == "true"
+    result["theme"] = normalize_theme(value.get("theme"))
     result["onboarded"] = ready(value["user_id"])
     result["public_key"] = json.loads(value["public_key_json"]) if value.get("public_key_json") else None
     return result

@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ProfileEditor from "./ProfileEditor";
 import type { Community } from "./useCommunity";
 import type { Theme, ProfileInput } from "./types";
@@ -23,6 +23,9 @@ export default function ProfilePage({
   const [password, setPassword] = useState(""),
     [safety, setSafety] = useState(profile.key_fingerprint || "");
   const file = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    setValue(previous => ({ ...previous, theme: profile.theme }));
+  }, [profile.theme]);
   async function operation(task: () => Promise<void>) {
     setBusy(true);
     setError("");
@@ -47,7 +50,8 @@ export default function ProfilePage({
         onSubmit={(e) => {
           e.preventDefault();
           void operation(async () => {
-            await community.saveProfile(value);
+            const saved = await community.saveProfile(value);
+            setTheme(saved.theme);
             setMessage("Your profile is saved.");
           });
         }}

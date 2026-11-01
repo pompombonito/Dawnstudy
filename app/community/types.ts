@@ -1,4 +1,5 @@
-export type Theme = "light" | "dark" | "rose";
+import type { Theme } from "./themes";
+export type { Theme } from "./themes";
 export type Gender = "male" | "female" | "gender-diverse" | "prefer-not-to-say";
 export type Person = {
   id: string;

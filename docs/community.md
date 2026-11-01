@@ -28,7 +28,7 @@ Companion names save explicitly to the account profile; guests can keep local se
 
 There are 10 animal and 9 stylized character companions, plus 96 portrait variants (two presentation styles, six outfits, eight looks) for 115 profile icons. Sanrio references: [official character brands](https://corporate.sanrio.co.jp/en/business-info/brands). Portraits are labeled **CEU-inspired**, because the [official CEU school pages](https://manila.ceu.edu.ph/static/index.html) do not establish a complete current catalogue of every departmental uniform. The gallery does not claim official uniform accuracy or institutional/character-brand affiliation. All styles are available regardless of gender choice.
 
-Themes are Morning (soft light), Midnight (dark) and Rose Dawn (blush/plum). Profile preferences sync across devices. Navigation exposes Study, Library, Friends and Play directly on mobile, with Finder, Voice, Profile, Agreement and About in More.
+Themes are Cinnamoroll (cloud blue), Pompompurin (custard and caramel), Kuromi (lilac and plum), Hello Kitty (rose and ribbon red), and Pochacco (mint and forest), each with light and dark modes. The header picker, profile setup/settings and shared study pages use the same ten choices. Character selection preserves light/dark mode, and mode changes preserve the character. Fresh guests see Kuromi dark before the first paint. Guest choices stay on the device, independently of signed-in profile preferences; signing out restores that guest choice or Kuromi dark. Account preferences sync across devices through the existing profile field. Legacy Morning/Light, Midnight/Dark and Rose Dawn preferences map to Cinnamoroll light, Kuromi dark and Hello Kitty light respectively, without a schema migration. Navigation exposes Study, Library, Friends and Play directly on mobile, with Finder, Voice, Profile, Agreement and About in More.
 
 ## Companion safety routing
 
@@ -70,6 +70,9 @@ The browser regression suite uses only mocked accounts/API records and real brow
 
 ```sh
 node tests/community-browser.mjs
+node tests/themes-browser.mjs
 ```
+
+The theme suite checks all ten character/mode combinations, Kuromi before sign-in, separate guest/account persistence, signed-in theme updates from shared pages, text contrast, keyboard dismissal, and the picker at 320/390/768/1440 pixels. Set `DAWNSTUDY_TEST_URL` to the local server URL when using a port other than the suite's default. Screenshots and color metrics are saved to the temporary `dawnstudy-theme-qa` directory. Theme normalization and API validation also have dedicated unit tests in `tests/themes.test.mjs` and `backend/test_themes.py`.
 
 It checks onboarding, account companion rename and history recovery, two independent messaging participants, ciphertext-only transport, encrypted key recovery in a fresh browser, a two-player quiz through the podium, desktop/tablet/mobile overflow, navigation and timed bubble dismissal. Screenshots/recovery files are written to the system temporary directory, never the repository or production storage.

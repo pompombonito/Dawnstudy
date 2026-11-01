@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import "./dawn-ui.css";
 import "./community/community.css";
+import "./character-themes.css";
+import { themeBootstrapScript } from "./community/themes";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://dawnstudy.vercel.app"),
@@ -22,5 +24,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en" data-theme="dark" suppressHydrationWarning><body>{children}</body></html>;
+  return <html lang="en" data-theme="dark" data-character="kuromi" data-color-theme="kuromi-dark" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{ __html: themeBootstrapScript }}/></head><body>{children}</body></html>;
 }

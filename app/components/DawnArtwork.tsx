@@ -1,10 +1,10 @@
 type ArtworkProps = { className?: string; variant?: "study" | "botanical" };
 type MarkProps = { className?: string };
 
-const ink = "#2d493b";
-const orange = "#f1a775";
-const sage = "#b8cbb2";
-const cream = "#ece8dc";
+const ink = "var(--ink, #2d493b)";
+const orange = "var(--accent, #f1a775)";
+const sage = "var(--sage, #b8cbb2)";
+const cream = "var(--mint, #ece8dc)";
 
 /** Original sunrise mark: a half sun, three rays, and an open horizon. */
 export function DawnMark({ className = "" }: MarkProps) {

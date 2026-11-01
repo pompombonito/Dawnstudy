@@ -35,23 +35,4 @@ export const portraits = ["female", "male"].flatMap((gender) =>
     })),
   ),
 );
-export const themes = [
-  {
-    id: "light",
-    title: "Morning",
-    label: "Light",
-    description: "Soft paper, warm cream and forest green.",
-  },
-  {
-    id: "dark",
-    title: "Midnight",
-    label: "Dark",
-    description: "Quiet charcoal, sage and a little amber.",
-  },
-  {
-    id: "rose",
-    title: "Rose Dawn",
-    label: "Rose Dawn",
-    description: "Blush skies, plum ink and berry accents.",
-  },
-] as const;
+export { THEMES as themes } from "./themes";

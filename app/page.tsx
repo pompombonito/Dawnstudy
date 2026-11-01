@@ -2,6 +2,8 @@
 
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import Avatar from "./components/Avatar";
+import ThemePicker from "./components/ThemePicker";
+import { applyTheme, DEFAULT_THEME, GUEST_THEME_STORAGE_KEY, getTheme, normalizeTheme, readInitialTheme, THEME_STORAGE_KEY } from "./community/themes";
 import { useCommunity } from "./community/useCommunity";
 import { communityApi } from "./community/api";
 import type { Theme } from "./community/types";
@@ -16,7 +18,7 @@ import { findGenerationJob, GenerationJobError, pollGenerationJob, startGenerati
 import {
   AlarmClock, BookOpen, Check, CheckSquare, ChevronLeft, ChevronRight, CircleHelp, Clock3,
   CloudUpload, Copy, Cpu, ExternalLink, FileText, Flag, Globe2, GraduationCap, Layers3, LogOut, Menu, Mic,
-  MicOff, Moon, Maximize2, Minimize2, Plus, Send, Share2, Sparkles, Sun, Trash2, UserRound,
+  MicOff, Maximize2, Minimize2, Plus, Send, Share2, Sparkles, Trash2, UserRound,
   Search, Volume2, X, ArrowUpRight, ArrowRight, FolderOpen, ChevronDown, Leaf, Users, Gamepad2, ShieldCheck, Youtube,
 } from "lucide-react";
 
@@ -48,7 +50,7 @@ declare global { interface Window { google?: { accounts: { id: GoogleIdentity } 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
 const TOKEN_KEY = "dawnstudy_session_v1";
-const THEME_KEY = "dawnstudy_theme_v1";
+const THEME_KEY = THEME_STORAGE_KEY;
 const VOICE_PERSONA_KEY = "dawnstudy_voice_persona_v1";
 const VOICE_DEVICE_KEY = "dawnstudy_device_voice_v1";
 const GENERATION_KEY = "dawnstudy_generation_v1:";
@@ -212,7 +214,9 @@ export default function Home() {
   const [questionCount, setQuestionCount] = useState(10);
   const [difficulty, setDifficulty] = useState<"easy" | "medium" | "hard">("medium");
   const [models, setModels] = useState<ModelOption[]>([]);
-  const [theme, setTheme] = useState<Theme>("dark");
+  const [theme, setTheme] = useState<Theme>(DEFAULT_THEME);
+  const themeSaveQueue = useRef<Promise<void>>(Promise.resolve());
+  const themeSavesPending = useRef(0);
   const [activeView, setActiveView] = useState<WorkspaceView>("study");
   const [composerStep, setComposerStep] = useState(0);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -317,10 +321,9 @@ export default function Home() {
 
   useEffect(() => {
     setSiteOrigin(window.location.origin);
-    const savedTheme = localStorage.getItem(THEME_KEY);
-    const initialTheme: Theme = savedTheme === "light" || savedTheme === "rose" ? savedTheme : "dark";
-    document.documentElement.dataset.theme = initialTheme;
-    setTheme(initialTheme);
+    let initialTheme = DEFAULT_THEME;
+    try { initialTheme = readInitialTheme(localStorage); } catch { /* Kuromi is the storage-free default. */ }
+    setTheme(applyTheme(initialTheme));
     const savedPersona = localStorage.getItem(VOICE_PERSONA_KEY) as VoicePersona | null;
     if (savedPersona && voicePersonas.some((persona) => persona.id === savedPersona)) setVoicePersona(savedPersona);
     setDeviceVoiceURI(localStorage.getItem(VOICE_DEVICE_KEY) || "");
@@ -339,7 +342,7 @@ export default function Home() {
         setAccount(await response.json());
         void loadAccountSets(token);
       })
-      .catch(() => { localStorage.removeItem(TOKEN_KEY); setAuthToken(""); setAccount(null); setActiveShares([]); });
+      .catch(() => { localStorage.removeItem(TOKEN_KEY); setAuthToken(""); setAccount(null); setActiveShares([]); restoreGuestTheme(); });
   }, []);
 
   useEffect(() => {
@@ -506,7 +509,7 @@ export default function Home() {
   }
 
   useEffect(() => {
-    if (community.data?.profile?.theme) setColorTheme(community.data.profile.theme);
+    if (community.data?.profile?.theme && !themeSavesPending.current) setColorTheme(community.data.profile.theme);
   }, [community.data?.profile?.theme]);
 
   useEffect(() => {
@@ -514,9 +517,31 @@ export default function Home() {
   }, [authToken, community.data?.profile?.onboarded]);
 
   function setColorTheme(nextTheme: Theme) {
-    setTheme(nextTheme);
-    document.documentElement.dataset.theme = nextTheme;
-    localStorage.setItem(THEME_KEY, nextTheme);
+    const normalized = applyTheme(normalizeTheme(nextTheme));
+    setTheme(normalized);
+    try {
+      localStorage.setItem(THEME_KEY, normalized);
+      if (!authToken) localStorage.setItem(GUEST_THEME_STORAGE_KEY, normalized);
+    } catch { /* Theme changes still work when device storage is unavailable. */ }
+  }
+
+  function restoreGuestTheme() {
+    let guestTheme = DEFAULT_THEME;
+    try { guestTheme = normalizeTheme(localStorage.getItem(GUEST_THEME_STORAGE_KEY)); } catch { /* Use Kuromi. */ }
+    setTheme(applyTheme(guestTheme));
+    try { localStorage.setItem(THEME_KEY, guestTheme); } catch { /* Device storage is optional. */ }
+  }
+
+  function chooseTheme(nextTheme: Theme) {
+    setColorTheme(nextTheme);
+    if (!community.data?.profile?.onboarded) return;
+    const profile = community.data.profile;
+    themeSavesPending.current += 1;
+    themeSaveQueue.current = themeSaveQueue.current.catch(() => {}).then(async () => {
+      try { await community.saveProfile({ ...profile, theme: nextTheme }); }
+      catch (caught) { setError(caught instanceof Error ? caught.message : "Your theme changed on this device but could not be saved to your profile."); }
+      finally { themeSavesPending.current -= 1; }
+    });
   }
 
   function navigateTo(view: WorkspaceView) {
@@ -838,6 +863,7 @@ export default function Home() {
     generationController.current?.abort(); generationController.current = null;
     setBusy(false); setContinueBusy(false); setGenerationStatus(null); setGenerationNeedsReconnect(false);
     localStorage.removeItem(TOKEN_KEY); setAuthToken(""); setAccount(null); setSets([]); setActiveShares([]); setResult(null); setProgress(null); setReviewActive(false); setReviewQueue([]);
+    restoreGuestTheme();
     setNotice("You’re signed out. Sign in with your CEU Google account to continue using Dawnstudy.");
   }
 
@@ -1224,7 +1250,7 @@ export default function Home() {
         </div>
       </aside>
       <section className="main-area" id="home">
-        <header className="topbar"><div className="topbar-left"><button className="mobile-brand" type="button" aria-label="Dawnstudy home" onClick={() => navigateTo("study")}><DawnMark/></button><div className="crumb"><span>YOUR SPACE</span><b>{viewTitle[activeView]}</b></div></div><div className="top-actions">{account && <button className="online-friends" title="Recently online friends" onClick={() => navigateTo("friends")} aria-label={`${community.data?.friends.filter(p => p.online).length || 0} friends online`}><span className="online-friend-faces">{community.data?.friends.filter(p => p.online).slice(0, 3).map(p => <Avatar key={p.id} id={p.avatar_id}/>)}</span><Users size={16}/><span>{community.data?.friends.filter(p => p.online).length || 0} online</span></button>}{generationStatus && <button className="activity-pill" onClick={() => navigateTo("study")}><span/>{generationNeedsReconnect ? "Reconnect" : "Generating"}</button>}<button className="theme-toggle" onClick={() => { const next: Theme = theme === "dark" ? "light" : theme === "light" ? "rose" : "dark"; setColorTheme(next); if (community.data?.profile?.onboarded) void community.saveProfile({ ...community.data.profile, theme: next }).catch(e => setError(e.message)); }} aria-label="Cycle theme: Light, Rose Dawn, Dark" title="Cycle theme: Light, Rose Dawn, Dark">{theme === "dark" ? <Sun size={18}/> : <Moon size={18}/>}<span>{theme === "dark" ? "Midnight" : theme === "light" ? "Morning" : "Rose Dawn"}</span></button><span className="workspace-label"><span/> CEU WORKSPACE</span><button className="top-account" onClick={() => account ? signOut() : setAuthOpen(true)} title={account ? "Sign out" : "Sign in"}>{account ? <LogOut size={18}/> : <UserRound size={18}/>}<span>{account ? "Sign out" : "Sign in"}</span></button></div></header>
+        <header className="topbar"><div className="topbar-left"><button className="mobile-brand" type="button" aria-label="Dawnstudy home" onClick={() => navigateTo("study")}><DawnMark/></button><div className="crumb"><span>YOUR SPACE</span><b>{viewTitle[activeView]}</b></div></div><div className="top-actions">{account && <button className="online-friends" title="Recently online friends" onClick={() => navigateTo("friends")} aria-label={`${community.data?.friends.filter(p => p.online).length || 0} friends online`}><span className="online-friend-faces">{community.data?.friends.filter(p => p.online).slice(0, 3).map(p => <Avatar key={p.id} id={p.avatar_id}/>)}</span><Users size={16}/><span>{community.data?.friends.filter(p => p.online).length || 0} online</span></button>}{generationStatus && <button className="activity-pill" onClick={() => navigateTo("study")}><span/>{generationNeedsReconnect ? "Reconnect" : "Generating"}</button>}<ThemePicker value={theme} onChange={chooseTheme}/><span className="workspace-label"><span/> CEU WORKSPACE</span><button className="top-account" onClick={() => account ? signOut() : setAuthOpen(true)} title={account ? "Sign out" : "Sign in"}>{account ? <LogOut size={18}/> : <UserRound size={18}/>}<span>{account ? "Sign out" : "Sign in"}</span></button></div></header>
         <div className="content">
           {(error || notice) && <div className="workspace-feedback" aria-live="polite">{error && <div className="error-box"><CircleHelp size={18}/><span>{error}</span><button className="plain-icon" aria-label="Dismiss error" onClick={() => setError("")}><X size={16}/></button></div>}{notice && <div className="notice-box"><Check size={18}/><span>{notice}</span><button className="plain-icon" aria-label="Dismiss message" onClick={() => setNotice("")}><X size={16}/></button></div>}</div>}
           {generationStatus && <div className="generation-status" role="status" aria-live="polite"><span className="generation-status-pulse"/><div className="generation-status-copy"><strong>{generationStatus.message || "Preparing your study set…"}</strong><small>{generationStatus.model ? modelName(generationStatus.model) : generationStatus.stage === "queued" ? "Waiting for an available model" : "Dawnstudy generation service"}{generationStatus.requested > 0 && ` · ${generationStatus.completed} of ${generationStatus.requested} ready`}</small></div>{generationStatus.requested > 0 && <div className="generation-progress-track" aria-label={`${generationStatus.completed} of ${generationStatus.requested} questions ready`}><i style={{ width: `${Math.min(100, generationStatus.completed / generationStatus.requested * 100)}%` }}/></div>}{generationNeedsReconnect && account && <button type="button" className="generation-reconnect" disabled={busy || continueBusy} onClick={() => void restoreGeneration(authToken, account.id)}>Reconnect</button>}</div>}
@@ -1236,7 +1262,7 @@ export default function Home() {
           {community.data?.profile?.onboarded && activeView === "profile" && <ProfilePage community={community} setTheme={setColorTheme} agreement={() => navigateTo("agreement")}/>}
           {activeView === "study" && <div className="workspace-view study-view" key="study">
           {!result && !reviewActive ? <>
-            <section className="studio-intro"><div className="studio-intro-copy"><div className="eyebrow"><span/> A FRESH START TO LEARNING</div><h1>Make room for<br/><em>your next idea.</em></h1><p>Bring your notes. Find your rhythm.<br className="desktop-break"/> Make a little progress, every day.</p></div><DawnArtwork variant="study" className="studio-art"/></section>
+            <section className="studio-intro"><div className="studio-intro-copy"><div className="eyebrow"><span/> A FRESH START TO LEARNING</div><h1>Make room for<br/><em>your next idea.</em></h1><p>Bring your notes. Find your rhythm.<br className="desktop-break"/> Make a little progress, every day.</p></div><div className="character-theme-artwork" aria-hidden="true"><DawnArtwork variant="study" className="studio-art"/><span className="character-theme-mascot"><Avatar id={getTheme(theme).character}/><small>{getTheme(theme).title}</small></span></div></section>
             <div className="studio-dashboard">
               <section className="study-creator" aria-labelledby="creator-title">
                 <div className="creator-heading"><div><span className="section-overline">LET'S MAKE IT STICK</span><h2 id="creator-title">Start a study set</h2></div><span className="creator-step-count">0{composerStep + 1}<i>/ 03</i></span></div>

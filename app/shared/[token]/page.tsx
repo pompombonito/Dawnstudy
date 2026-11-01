@@ -2,7 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { ArrowUpRight, BookOpen, Check, ChevronLeft, ChevronRight, CircleHelp, ExternalLink, Maximize2, Minimize2, Moon, RotateCcw, Share2, Sun } from "lucide-react";
+import ThemePicker from "../../components/ThemePicker";
+import { applyTheme, DEFAULT_THEME, GUEST_THEME_STORAGE_KEY, normalizeTheme, readInitialTheme, THEME_STORAGE_KEY, SESSION_STORAGE_KEY, type Theme } from "../../community/themes";
+import { communityApi } from "../../community/api";
+import type { Bootstrap, Profile } from "../../community/types";
+import { ArrowUpRight, BookOpen, Check, ChevronLeft, ChevronRight, CircleHelp, ExternalLink, Maximize2, Minimize2, RotateCcw, Share2 } from "lucide-react";
 
 type SharedCard = { question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string; source_refs?: string[] };
 type SharedSet = { title: string; type: string; items: SharedCard[]; sources?: { title: string; url: string }[] };
@@ -49,19 +53,35 @@ export default function SharedStudySetPage() {
   const [error, setError] = useState("");
   const [index, setIndex] = useState(0);
   const [responses, setResponses] = useState<AnswerState[]>([]);
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [theme, setTheme] = useState<Theme>(DEFAULT_THEME);
+  const [themeError, setThemeError] = useState("");
+  const themeChanged = useRef(false);
+  const themeProfile = useRef<Profile | null>(null);
+  const themeSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const [fullscreen, setFullscreen] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const quizPanel = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    let saved: "dark" | "light" = "dark";
-    try { saved = localStorage.getItem("dawnstudy_theme_v1") === "light" ? "light" : "dark"; } catch { /* Device storage is optional. */ }
-    setTheme(saved);
-    document.documentElement.dataset.theme = saved;
+    let saved = DEFAULT_THEME;
+    try { saved = readInitialTheme(localStorage); } catch { /* Device storage is optional. */ }
+    setTheme(applyTheme(saved));
+    let alive = true;
+    try {
+      const session = localStorage.getItem(SESSION_STORAGE_KEY);
+      if (session && API_BASE) void communityApi<Bootstrap>(session, "/bootstrap").then(data => {
+        if (!alive) return;
+        themeProfile.current = data.profile;
+        if (data.profile?.theme && !themeChanged.current) {
+          const accountTheme = applyTheme(data.profile.theme);
+          setTheme(accountTheme);
+          try { localStorage.setItem(THEME_STORAGE_KEY, accountTheme); } catch { /* Optional device preference. */ }
+        }
+      }).catch(() => {});
+    } catch { /* Public study links also work without account storage. */ }
     const onFullscreen = () => setFullscreen(document.fullscreenElement === quizPanel.current);
     document.addEventListener("fullscreenchange", onFullscreen);
-    return () => document.removeEventListener("fullscreenchange", onFullscreen);
+    return () => { alive = false; document.removeEventListener("fullscreenchange", onFullscreen); };
   }, []);
 
   useEffect(() => {
@@ -128,11 +148,24 @@ export default function SharedStudySetPage() {
     catch { /* Restarting the visible quiz does not depend on browser storage. */ }
   }
 
-  function toggleTheme() {
-    const next = theme === "dark" ? "light" : "dark";
+  function changeTheme(value: Theme) {
+    themeChanged.current = true;
+    const next = applyTheme(normalizeTheme(value));
     setTheme(next);
-    document.documentElement.dataset.theme = next;
-    try { localStorage.setItem("dawnstudy_theme_v1", next); } catch { /* The theme still changes when storage is unavailable. */ }
+    setThemeError("");
+    let session: string | null = null;
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, next);
+      session = localStorage.getItem(SESSION_STORAGE_KEY);
+      if (!session) localStorage.setItem(GUEST_THEME_STORAGE_KEY, next);
+    } catch { /* The theme still changes when storage is unavailable. */ }
+    if (session && API_BASE) {
+      const token = session;
+      themeSaveQueue.current = themeSaveQueue.current.then(async () => {
+        const profile = themeProfile.current || (await communityApi<Bootstrap>(token, "/bootstrap")).profile;
+        if (profile?.onboarded) themeProfile.current = await communityApi<Profile>(token, "/profile", { ...profile, theme: next }, "PUT");
+      }).catch(() => { setThemeError("Theme updated on this device. Your account preference could not be saved."); });
+    }
   }
 
   async function toggleFullscreen() {
@@ -181,8 +214,9 @@ export default function SharedStudySetPage() {
   return <main className="shared-shell">
     <header className="shared-site-header">
       <a className="shared-logo" href="/" aria-label="Dawnstudy home"><svg viewBox="0 0 42 42" aria-hidden="true"><path d="M6 27h30M9 33h24"/><path d="M11 25a10 10 0 0 1 20 0"/><path d="M21 5v4M7 11l3 3M35 11l-3 3M3 22h4M35 22h4"/></svg><span>dawn<strong>study</strong><small>Make learning stick.</small></span></a>
-      <div className="shared-header-actions"><span className="shared-room-label"><Share2 size={15}/> A shared study room</span><button className="shared-icon-button" type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>{theme === "dark" ? <Sun size={19}/> : <Moon size={19}/>}</button><a className="shared-desk-link" href="/">My study desk <ArrowUpRight size={17}/></a></div>
+      <div className="shared-header-actions"><span className="shared-room-label"><Share2 size={15}/> A shared study room</span><ThemePicker value={theme} onChange={changeTheme}/><a className="shared-desk-link" href="/">My study desk <ArrowUpRight size={17}/></a></div>
     </header>
+    {themeError && <p className="shared-theme-notice" role="status">{themeError}</p>}
     {error ? <section className="shared-empty"><span className="shared-empty-icon"><CircleHelp size={29}/></span><p className="shared-eyebrow">LINK UNAVAILABLE</p><h1>This study room is closed.</h1><p>{error}</p><a className="shared-primary-button" href="/">Go to Dawnstudy <ArrowUpRight size={17}/></a></section> : !studySet || !card ? <section className="shared-empty"><span className="shared-loading-sun"/><p className="shared-eyebrow">GETTING THINGS READY</p><h1>A little focus is on its way.</h1><p>Opening your classmate’s study set…</p></section> : <div className="shared-workspace">
       <aside className="shared-progress-rail">
         <p className="shared-eyebrow">SHARED BY A CLASSMATE</p>
