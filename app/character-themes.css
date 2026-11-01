@@ -100,23 +100,23 @@
 }
 
 :root[data-character="pompompurin"][data-theme="dark"] {
-  --paper: #261f18;
-  --card: #33291f;
-  --ink: #fff1d7;
-  --ink-soft: #dfc9a8;
-  --muted: #bfa989;
-  --line: #594734;
-  --teal: #e4bd7b;
-  --teal-dark: #cba363;
-  --mint: #493a27;
-  --coral: #efb38f;
-  --accent: #e6c17e;
-  --sidebar: #2c231a;
-  --deep: #f9e7c5;
-  --field: #2c241a;
-  --sage: #51412c;
-  --sun: #e9cd91;
-  --on-accent: #382814;
+  --paper: #191a1b;
+  --card: #252627;
+  --ink: #fff5d6;
+  --ink-soft: #ded4b5;
+  --muted: #bcb399;
+  --line: #4d493b;
+  --teal: #f0ce6b;
+  --teal-dark: #d8b548;
+  --mint: #333437;
+  --coral: #f2ce8f;
+  --accent: #f2d675;
+  --sidebar: #1e1f20;
+  --deep: #f8e9b8;
+  --field: #202122;
+  --sage: #404044;
+  --sun: #ffe6a8;
+  --on-accent: #352a13;
 }
 
 :root[data-character="hello-kitty"][data-theme="light"] {

@@ -1,66 +1,66 @@
 /* Quiet, character-free palettes, layered after the shared theme styles. */
 :root[data-character="classic"][data-theme="light"] {
-  --paper: #f3f4f6; --card: #ffffff; --ink: #20252b; --ink-soft: #4c5663;
-  --muted: #56616d; --line: #d4dae2; --teal: #465565; --teal-dark: #354352;
-  --mint: #e2e6eb; --coral: #526271; --accent: #b9c3ce; --sidebar: #eaedf1;
-  --deep: #29333e; --field: #f7f8fa; --sage: #d7dde4; --sun: #d7c499;
-  --on-accent: #23303d; --shadow-color: #1823311c; --overlay: #141a22b3;
+  --paper: #f2f2f2; --card: #ffffff; --ink: #202020; --ink-soft: #444444;
+  --muted: #595959; --line: #d2d2d2; --teal: #3d3d3d; --teal-dark: #282828;
+  --mint: #e1e1e1; --coral: #3b3b3b; --accent: #242424; --sidebar: #e8e8e8;
+  --deep: #1b1b1b; --field: #fafafa; --sage: #d6d6d6; --sun: #bdbdbd;
+  --on-accent: #ffffff; --shadow-color: #0000001c; --overlay: #111111b3;
 }
 
 :root[data-character="classic"][data-theme="dark"] {
-  --paper: #15181c; --card: #20252b; --ink: #edf0f4; --ink-soft: #c1cad4;
-  --muted: #a1adba; --line: #3d4752; --teal: #b8c5d5; --teal-dark: #95a8bc;
-  --mint: #303a46; --coral: #b2c5db; --accent: #bdcad8; --sidebar: #1b2026;
-  --deep: #e2e8f0; --field: #1a1f25; --sage: #384555; --sun: #d5c295;
-  --on-accent: #1f2d3b; --shadow-color: #070a1066; --overlay: #080c12ba;
+  --paper: #111111; --card: #1e1e1e; --ink: #f5f5f5; --ink-soft: #cccccc;
+  --muted: #b4b4b4; --line: #414141; --teal: #e0e0e0; --teal-dark: #bdbdbd;
+  --mint: #303030; --coral: #dedede; --accent: #eeeeee; --sidebar: #181818;
+  --deep: #fafafa; --field: #161616; --sage: #393939; --sun: #acacac;
+  --on-accent: #171717; --shadow-color: #00000066; --overlay: #080808ba;
 }
 
 :root[data-character="ocean"][data-theme="light"] {
-  --paper: #eef4f8; --card: #fbfdff; --ink: #17354b; --ink-soft: #3d5b70;
-  --muted: #4c6578; --line: #cadce8; --teal: #1e5d85; --teal-dark: #174b6b;
-  --mint: #dceaf4; --coral: #246b93; --accent: #a1c9e5; --sidebar: #e5eff6;
-  --deep: #1c425d; --field: #f2f7fb; --sage: #cee2ef; --sun: #d9c49a;
-  --on-accent: #153b56; --shadow-color: #1430441c; --overlay: #102233b3;
+  --paper: #edf4f3; --card: #fcfffe; --ink: #123b3c; --ink-soft: #365d5e;
+  --muted: #4e6868; --line: #c5dbd8; --teal: #006a70; --teal-dark: #005359;
+  --mint: #d3e9e5; --coral: #006a70; --accent: #006f77; --sidebar: #e2eeeb;
+  --deep: #00494c; --field: #f3f8f6; --sage: #bfded8; --sun: #8bc8bd;
+  --on-accent: #ffffff; --shadow-color: #082e321c; --overlay: #061f24b3;
 }
 
 :root[data-character="ocean"][data-theme="dark"] {
-  --paper: #111c2a; --card: #1b2b3d; --ink: #edf5ff; --ink-soft: #bed0e5;
-  --muted: #9bb2ce; --line: #354d69; --teal: #9fc7ef; --teal-dark: #7caad6;
-  --mint: #293f58; --coral: #a4cdea; --accent: #a6cff0; --sidebar: #172335;
-  --deep: #deedff; --field: #152335; --sage: #304b68; --sun: #ddcb9d;
-  --on-accent: #17344e; --shadow-color: #030a1466; --overlay: #07111fba;
+  --paper: #071f23; --card: #103237; --ink: #e3faf6; --ink-soft: #b4dcd5;
+  --muted: #92bfb8; --line: #2d5559; --teal: #44d4c3; --teal-dark: #25b4a9;
+  --mint: #123e43; --coral: #66dfcf; --accent: #33cdbc; --sidebar: #0b282d;
+  --deep: #d5faf4; --field: #0b292e; --sage: #1a5153; --sun: #8ce6d5;
+  --on-accent: #052c30; --shadow-color: #00131666; --overlay: #03181bba;
 }
 
 :root[data-character="forest"][data-theme="light"] {
-  --paper: #eef4ed; --card: #fbfdf8; --ink: #253b2b; --ink-soft: #506653;
-  --muted: #677960; --line: #d0ddcc; --teal: #3b6d48; --teal-dark: #2e593b;
-  --mint: #dce9d5; --coral: #9c6145; --accent: #accbad; --sidebar: #e5eddf;
-  --deep: #2f4e37; --field: #f2f7ee; --sage: #d0e1c4; --sun: #e8d699;
-  --on-accent: #253e2c;
+  --paper: #edf3ec; --card: #fdfff9; --ink: #203c26; --ink-soft: #3e5c42;
+  --muted: #516a50; --line: #cad9c5; --teal: #206536; --teal-dark: #174d29;
+  --mint: #d7e7cf; --coral: #315f2c; --accent: #296b36; --sidebar: #e2ebdc;
+  --deep: #193e24; --field: #f4f8ee; --sage: #c6dbba; --sun: #a9c38d;
+  --on-accent: #ffffff; --shadow-color: #112e161c; --overlay: #0c2110b3;
 }
 
 :root[data-character="forest"][data-theme="dark"] {
-  --paper: #17221c; --card: #223028; --ink: #ecf6e9; --ink-soft: #c1d4c0;
-  --muted: #a1b89c; --line: #3c5443; --teal: #add4af; --teal-dark: #91b995;
-  --mint: #304b38; --coral: #e3b094; --accent: #afd4b3; --sidebar: #1c2921;
-  --deep: #e4f1df; --field: #1a281f; --sage: #39563f; --sun: #e3d29d;
-  --on-accent: #233d2c;
+  --paper: #101f12; --card: #1a3020; --ink: #eef6e3; --ink-soft: #c6dcb7;
+  --muted: #aac39c; --line: #365b3d; --teal: #85cc75; --teal-dark: #67aa59;
+  --mint: #24442b; --coral: #a0d484; --accent: #8bcf74; --sidebar: #15281a;
+  --deep: #e7f5da; --field: #15281a; --sage: #2c4e2d; --sun: #c1db8f;
+  --on-accent: #18321d; --shadow-color: #04110766; --overlay: #07170bba;
 }
 
 :root[data-character="sepia"][data-theme="light"] {
-  --paper: #f7f0e2; --card: #fffaf0; --ink: #473728; --ink-soft: #6a5540;
-  --muted: #705d48; --line: #e3d5bb; --teal: #7f6039; --teal-dark: #66492b;
-  --mint: #ebdfc7; --coral: #946236; --accent: #d8bc8b; --sidebar: #eee5d4;
-  --deep: #513b26; --field: #faf4e7; --sage: #e4d4b4; --sun: #e1c580;
-  --on-accent: #422e17; --shadow-color: #3928151c; --overlay: #2c2016b3;
+  --paper: #f7efe2; --card: #fffaf3; --ink: #432e25; --ink-soft: #684737;
+  --muted: #6d4c3d; --line: #e2ccbc; --teal: #a13c26; --teal-dark: #85321f;
+  --mint: #eedacc; --coral: #a83d28; --accent: #ab432b; --sidebar: #f0e2d0;
+  --deep: #512c20; --field: #fcf4e9; --sage: #e4c5ae; --sun: #cd9066;
+  --on-accent: #ffffff; --shadow-color: #4323161c; --overlay: #291810b3;
 }
 
 :root[data-character="sepia"][data-theme="dark"] {
-  --paper: #261f18; --card: #33291f; --ink: #f7ecdc; --ink-soft: #d7c6ae;
-  --muted: #bca78c; --line: #574735; --teal: #dfc293; --teal-dark: #c0a16e;
-  --mint: #493b2b; --coral: #d9ae7a; --accent: #dec18f; --sidebar: #2d241a;
-  --deep: #f0dfbf; --field: #2b231a; --sage: #55432d; --sun: #e1c78c;
-  --on-accent: #3c2c18; --shadow-color: #140c0666; --overlay: #1a1009ba;
+  --paper: #241a17; --card: #352620; --ink: #f8e8d4; --ink-soft: #e1bfa7;
+  --muted: #cda68e; --line: #614333; --teal: #f3a06e; --teal-dark: #d48252;
+  --mint: #4b3226; --coral: #ffad82; --accent: #ec9464; --sidebar: #2c201b;
+  --deep: #f5debf; --field: #2c1f19; --sage: #593b2b; --sun: #e6ad78;
+  --on-accent: #3a2117; --shadow-color: #160a0666; --overlay: #1e110bba;
 }
 
 /* Classic palettes deliberately omit the decorative character badge. */

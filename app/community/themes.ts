@@ -25,8 +25,8 @@ export const CHARACTERS = [
   {
     id: "pompompurin",
     name: "Pompompurin",
-    description: "Pudding creams and cozy caramel.",
-    colors: { light: ["#fbf5e5", "#fffdf5", "#e7c27b"], dark: ["#261f18", "#33291f", "#e6c17e"] },
+    description: "Buttercream and custard, with graphite in dark mode.",
+    colors: { light: ["#fbf5e5", "#fffdf5", "#e7c27b"], dark: ["#191a1b", "#252627", "#f2d675"] },
   },
   {
     id: "kuromi",
@@ -43,10 +43,10 @@ export const CHARACTERS = [
 ] as const;
 
 export const CLASSICS = [
-  { id: "classic", name: "Classic", description: "Clean neutrals and quiet charcoal.", colors: { light: ["#f3f4f6", "#ffffff", "#b9c3ce"], dark: ["#15181c", "#20252b", "#bdcad8"] } },
-  { id: "ocean", name: "Ocean", description: "Calm blue and deep navy.", colors: { light: ["#eef4f8", "#fbfdff", "#a1c9e5"], dark: ["#111c2a", "#1b2b3d", "#a6cff0"] } },
-  { id: "forest", name: "Forest", description: "Fresh greens and gentle sage.", colors: { light: ["#eef4ed", "#fbfdf8", "#accbad"], dark: ["#17221c", "#223028", "#afd4b3"] } },
-  { id: "sepia", name: "Sepia", description: "Warm paper and soft amber.", colors: { light: ["#f7f0e2", "#fffaf0", "#d8bc8b"], dark: ["#261f18", "#33291f", "#dec18f"] } },
+  { id: "classic", name: "Classic", description: "Pure black, white, and neutral gray.", colors: { light: ["#f2f2f2", "#ffffff", "#242424"], dark: ["#111111", "#1e1e1e", "#eeeeee"] } },
+  { id: "ocean", name: "Ocean", description: "Deep teal and clear turquoise.", colors: { light: ["#edf4f3", "#fcfffe", "#006f77"], dark: ["#071f23", "#103237", "#33cdbc"] } },
+  { id: "forest", name: "Forest", description: "Rich emerald and fresh fern green.", colors: { light: ["#edf3ec", "#fdfff9", "#296b36"], dark: ["#101f12", "#1a3020", "#8bcf74"] } },
+  { id: "sepia", name: "Sepia", description: "Parchment, ink, and terracotta.", colors: { light: ["#f7efe2", "#fffaf3", "#ab432b"], dark: ["#241a17", "#352620", "#ec9464"] } },
 ] as const;
 
 export const THEME_STYLES = [
