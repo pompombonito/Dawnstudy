@@ -5,6 +5,7 @@ import "./character-themes.css";
 import "./classic-themes.css";
 import "./components/anime-motion.css";
 import CharacterMotion from "./components/CharacterMotion";
+import ApiHeartbeat from "./components/ApiHeartbeat";
 import { themeBootstrapScript } from "./community/themes";
 
 export const metadata: Metadata = {
@@ -27,5 +28,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en" data-theme="dark" data-character="kuromi" data-color-theme="kuromi-dark" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{ __html: themeBootstrapScript }}/></head><body><CharacterMotion/>{children}</body></html>;
+  return <html lang="en" data-theme="dark" data-character="kuromi" data-color-theme="kuromi-dark" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{ __html: themeBootstrapScript }}/></head><body><ApiHeartbeat/><CharacterMotion/>{children}</body></html>;
 }

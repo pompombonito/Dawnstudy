@@ -1,6 +1,11 @@
 name: Keep Dawnstudy API awake
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/keep-alive.yml'
+      - 'scripts/keep-alive.mjs'
   schedule:
     # Every five minutes, away from the top-of-hour rush. Scheduling is best effort.
     - cron: '3-58/5 * * * *'
