@@ -32,11 +32,14 @@ SHARES_TAB = "StudyShares"
 REPORTS_TAB = "CardReports"
 USER_COLUMNS = ["user_id", "username", "email", "password_hash", "google_sub", "display_name", "created_at"]
 SET_COLUMNS = ["set_id", "user_id", "title", "type", "items_json", "sources_json", "created_at", "material_fingerprint", "incomplete", "requested_count", "source_url", "page_ranges_json", "focus_topic"]
-# Keep each stored cell within the existing size budget. Extra columns let
-# longer 200-question sets fit without changing or deleting legacy JSON rows.
-SET_ITEM_COLUMNS = ["items_json", *[f"items_json_{index}" for index in range(2, 11)]]
-SET_COLUMNS += SET_ITEM_COLUMNS[1:]
+# Keep each cell within the 50k-character Sheets limit. The larger chunk range
+# accommodates 200 questionnaire cards with one maximum-size extracted figure
+# each, while retaining every legacy column position.
+SET_ITEM_CHUNK_COUNT = 256
+SET_ITEM_COLUMNS = ["items_json", *[f"items_json_{index}" for index in range(2, SET_ITEM_CHUNK_COUNT + 1)]]
+SET_COLUMNS += SET_ITEM_COLUMNS[1:10]
 SET_COLUMNS += ["include_images"]
+SET_COLUMNS += SET_ITEM_COLUMNS[10:]
 SET_CELL_UNITS = 40_000
 USAGE_COLUMNS = ["scope_key", "usage_date", "generation_count"]
 PROGRESS_COLUMNS = ["user_id", "set_id", "card_id", "due_at", "interval_days", "ease_factor", "repetitions", "lapses", "last_reviewed_at", "last_rating"]
@@ -102,6 +105,15 @@ def _parse_rows(values: list[list[Any]], columns: list[str]) -> list[tuple[int, 
     return results
 
 
+def _column_letter(index: int) -> str:
+    """Convert a 1-based column number to Google Sheets A1 notation."""
+    result = ""
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        result = chr(65 + remainder) + result
+    return result
+
+
 def _sheets_retry_delay(response: requests.Response, attempt: int) -> float:
     retry_after = response.headers.get("Retry-After", "")
     try:
@@ -164,13 +176,28 @@ def ensure_schema() -> None:
         if _schema_ready:
             return
         metadata = _api("GET", "")
-        titles = {sheet.get("properties", {}).get("title") for sheet in metadata.get("sheets", [])}
+        sheet_properties = {
+            sheet.get("properties", {}).get("title"): sheet.get("properties", {})
+            for sheet in metadata.get("sheets", [])
+        }
         tables = [(USERS_TAB, USER_COLUMNS), (SETS_TAB, SET_COLUMNS), (USAGE_TAB, USAGE_COLUMNS), (PROGRESS_TAB, PROGRESS_COLUMNS), (REVIEWS_TAB, REVIEW_COLUMNS), (SHARES_TAB, SHARE_COLUMNS), (REPORTS_TAB, REPORT_COLUMNS), *SOCIAL_TABLES.items()]
-        missing = [title for title, _ in tables if title not in titles]
-        if missing:
-            _api("POST", ":batchUpdate", body={"requests": [{"addSheet": {"properties": {"title": title}}} for title in missing]})
+        schema_requests = []
+        for title, columns in tables:
+            required_columns = max(26, len(columns))
+            properties = sheet_properties.get(title)
+            if properties is None:
+                schema_requests.append({"addSheet": {"properties": {"title": title, "gridProperties": {"columnCount": required_columns}}}})
+                continue
+            existing_columns = properties.get("gridProperties", {}).get("columnCount", 26)
+            if existing_columns < required_columns:
+                schema_requests.append({"updateSheetProperties": {
+                    "properties": {"sheetId": properties["sheetId"], "gridProperties": {"columnCount": required_columns}},
+                    "fields": "gridProperties.columnCount",
+                }})
+        if schema_requests:
+            _api("POST", ":batchUpdate", body={"requests": schema_requests})
         for tab, columns in tables:
-            last_column = chr(64 + len(columns))
+            last_column = _column_letter(len(columns))
             header_range = quote(f"{tab}!A1:{last_column}1", safe="!'")
             values = _api("GET", f"/values/{header_range}").get("values", [])
             existing_header = values[0] if values else []
@@ -186,7 +213,7 @@ def ensure_schema() -> None:
 
 def _rows(tab: str, columns: list[str], *, use_cache: bool = True) -> list[tuple[int, dict[str, str]]]:
     ensure_schema()
-    range_name = quote(f"{tab}!A:{chr(64 + len(columns))}", safe="!:")
+    range_name = quote(f"{tab}!A:{_column_letter(len(columns))}", safe="!:")
     cache_key = (tab, tuple(columns))
 
     def read_rows() -> list[tuple[int, dict[str, str]]]:
@@ -349,8 +376,9 @@ def save_study_set(study_set: dict[str, Any]) -> None:
                 str(study_set.get("source_url", ""))[:2048],
                 page_ranges_json,
                 str(study_set.get("focus_topic", ""))[:300],
-                *chunks[1:],
+                *chunks[1:10],
                 str(bool(study_set.get("include_images", False))).lower(),
+                *chunks[10:],
             ],
         )
 
@@ -366,7 +394,7 @@ def update_study_set(user_id: str, set_id: str, study_set: dict[str, Any]) -> bo
         if not match:
             return False
         row_number, existing = match
-        range_name = quote(f"{SETS_TAB}!A{row_number}:{chr(64 + len(SET_COLUMNS))}{row_number}", safe="!:")
+        range_name = quote(f"{SETS_TAB}!A{row_number}:{_column_letter(len(SET_COLUMNS))}{row_number}", safe="!:")
         written = [
             set_id, user_id, str(study_set["title"])[:150], str(study_set["type"]), chunks[0],
             sources_json, existing["created_at"],
@@ -374,8 +402,9 @@ def update_study_set(user_id: str, set_id: str, study_set: dict[str, Any]) -> bo
             str(bool(study_set.get("incomplete", False))).lower(),
             str(study_set.get("requested_count", len(study_set["items"]))),
             str(study_set.get("source_url", existing.get("source_url", "")))[:2048], page_ranges_json,
-            str(study_set.get("focus_topic", existing.get("focus_topic", "")))[:300], *chunks[1:],
+            str(study_set.get("focus_topic", existing.get("focus_topic", "")))[:300], *chunks[1:10],
             str(bool(study_set.get("include_images", existing.get("include_images", "").casefold() == "true"))).lower(),
+            *chunks[10:],
         ]
         _api("PUT", f"/values/{range_name}", params={"valueInputOption": "RAW"}, body={"values": [written]})
         _cache_written_row(SETS_TAB, SET_COLUMNS, row_number, written)
@@ -475,7 +504,7 @@ def save_card_report(report: dict[str, str]) -> None:
 def _load_review_rows():
     ensure_schema()
     result = _api("GET", "/values:batchGet", params={
-        "ranges": [f"{PROGRESS_TAB}!A:{chr(64 + len(PROGRESS_COLUMNS))}", f"{REVIEWS_TAB}!A:{chr(64 + len(REVIEW_COLUMNS))}"],
+        "ranges": [f"{PROGRESS_TAB}!A:{_column_letter(len(PROGRESS_COLUMNS))}", f"{REVIEWS_TAB}!A:{_column_letter(len(REVIEW_COLUMNS))}"],
         "valueRenderOption": "UNFORMATTED_VALUE",
     })
     ranges = result.get("valueRanges", [])
