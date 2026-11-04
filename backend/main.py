@@ -535,7 +535,15 @@ def extend_study_set(set_id: str, body: SavedStudySet, user: dict[str, str] = De
     }
     try:
         if not update_study_set(user["user_id"], set_id, study_set):
-            raise HTTPException(status_code=404, detail="Study set not found.")
+            # Generation can finish even when its original Sheets write fails.
+            # Accept a stable client ID so a browser-held draft can safely retry
+            # after a refresh or a server restart without creating duplicates.
+            study_set.update({
+                "id": set_id,
+                "user_id": user["user_id"],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            save_study_set(study_set)
         updated = next((item for item in list_study_sets(user["user_id"]) if item["id"] == set_id), None)
         if not updated:
             raise HTTPException(status_code=404, detail="Study set not found.")

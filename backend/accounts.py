@@ -32,10 +32,10 @@ SHARES_TAB = "StudyShares"
 REPORTS_TAB = "CardReports"
 USER_COLUMNS = ["user_id", "username", "email", "password_hash", "google_sub", "display_name", "created_at"]
 SET_COLUMNS = ["set_id", "user_id", "title", "type", "items_json", "sources_json", "created_at", "material_fingerprint", "incomplete", "requested_count", "source_url", "page_ranges_json", "focus_topic"]
-# Keep each cell within the 50k-character Sheets limit. The larger chunk range
-# accommodates 200 questionnaire cards with one maximum-size extracted figure
-# each, while retaining every legacy column position.
-SET_ITEM_CHUNK_COUNT = 256
+# Keep each cell within the 50k-character Sheets limit. Extra chunks handle
+# large imported questionnaires where several extracted figures are attached
+# to each question, while retaining every legacy column position.
+SET_ITEM_CHUNK_COUNT = 1024
 SET_ITEM_COLUMNS = ["items_json", *[f"items_json_{index}" for index in range(2, SET_ITEM_CHUNK_COUNT + 1)]]
 SET_COLUMNS += SET_ITEM_COLUMNS[1:10]
 SET_COLUMNS += ["include_images"]

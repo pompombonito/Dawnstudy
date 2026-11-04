@@ -17,6 +17,7 @@ import CompanionDock from "./community/CompanionDock";
 import Agreement from "./community/Agreement";
 import { DawnArtwork, DawnMark } from "./components/DawnArtwork";
 import { cancelGenerationJob, findGenerationJob, GenerationCancelledError, GenerationJobError, pollGenerationJob, startGenerationJob, type GenerationJob, type GenerationStatus } from "./generation-jobs";
+import { deleteUnsyncedStudyDraft, getUnsyncedStudyDraft, saveUnsyncedStudyDraft } from "./unsynced-study-drafts";
 import {
   AlarmClock, ArrowLeftRight, BookOpen, Check, CheckSquare, ChevronLeft, ChevronRight, CircleHelp, Clock3,
   CloudUpload, Copy, Cpu, ExternalLink, FileImage, FileText, Flag, Globe2, GraduationCap, Layers3, LogOut, Menu, Mic,
@@ -649,8 +650,9 @@ export default function Home() {
     } catch { /* The same completed set can be recovered if acknowledgement is interrupted. */ }
   }
 
-  async function applyGenerationResult(data: GenerationResult, token: string, signal: AbortSignal, base?: StudySet) {
+  async function applyGenerationResult(data: GenerationResult, token: string, userId: string, signal: AbortSignal, base?: StudySet) {
     let studySet: GenerationResult = { ...data, id: data.id || crypto.randomUUID(), created_at: data.created_at || new Date().toISOString() };
+    let localDraftSaved = false;
     setInputMode(data.items.some((card) => card.imported) ? "questionnaire" : "notes");
     setIncludeImages(Boolean(data.include_images));
     const legacyContinuation = base && data.continued_set_id !== base.id;
@@ -676,24 +678,32 @@ export default function Home() {
     let synced = true;
     if (!data.id || data.persistence_error || legacyContinuation) {
       try {
+        studySet = { ...studySet, items: studySet.items.map((item) => ({ ...item, card_id: item.card_id || crypto.randomUUID() })) };
+        studySet = { ...studySet, persistence_error: studySet.persistence_error || "Pending account sync" };
+        setResult(studySet);
+        try {
+          await saveUnsyncedStudyDraft(userId, studySet as unknown as Record<string, unknown>);
+          localDraftSaved = true;
+        } catch { /* Continue the account save even if browser storage is unavailable. */ }
         const body = JSON.stringify({ title: studySet.title, type: studySet.type, items: studySet.items,
           sources: studySet.sources || [], source_url: studySet.source_url || "", material_fingerprint: studySet.material_fingerprint,
           incomplete: studySet.incomplete || false, requested_count: studySet.requested_count || studySet.items.length,
           page_ranges: studySet.page_ranges || {}, focus_topic: studySet.focus_topic || "", include_images: Boolean(studySet.include_images) });
         const headers = { "Content-Type": "application/json", Authorization: "Bearer " + token };
-        const updateExisting = Boolean(data.id || legacyContinuation);
-        let saved = await fetch(API_BASE + "/api/study-sets" + (updateExisting ? "/" + encodeURIComponent(studySet.id) : ""), {
-          method: updateExisting ? "PUT" : "POST", headers, body, signal,
+        const saved = await fetch(API_BASE + "/api/study-sets/" + encodeURIComponent(studySet.id), {
+          method: "PUT", headers, body, signal,
         });
-        if (saved.status === 404 && updateExisting) saved = await fetch(API_BASE + "/api/study-sets", { method: "POST", headers, body, signal });
         if (!saved.ok) throw new Error(await responseError(saved));
         studySet = { ...studySet, ...await saved.json(), persistence_error: undefined };
+        await deleteUnsyncedStudyDraft(userId).catch(() => undefined);
         if (signal.aborted) throw new DOMException("Generation monitoring stopped.", "AbortError");
         setResult(studySet);
       } catch (caught) {
         if (signal.aborted) throw caught;
         synced = false;
-        setError("Your questions are ready, but account sync is unavailable: " + (caught instanceof Error ? caught.message : "try again later.") + " Refreshing will retry saving these questions.");
+        studySet = { ...studySet, persistence_error: caught instanceof Error ? caught.message : "Pending account sync" };
+        setResult(studySet);
+        setError("Your questions are ready, but account sync is unavailable: " + (caught instanceof Error ? caught.message : "try again later.") + (localDraftSaved ? " This browser kept a recovery copy and will retry when you reconnect." : " Keep this tab open and reconnect to retry; this browser could not store a recovery copy."));
       }
     }
     if (signal.aborted) throw new DOMException("Generation monitoring stopped.", "AbortError");
@@ -720,7 +730,7 @@ export default function Home() {
       initial = await requestGenerationCancellation(job.job_id, token, controller) || job;
     }
     const data = await pollGenerationJob(job.job_id, generationOptions(token, controller), (status) => updateGenerationStatus(status, controller), initial);
-    const synced = await applyGenerationResult(data, token, controller.signal, pending.base);
+    const synced = await applyGenerationResult(data, token, userId, controller.signal, pending.base);
     if (synced) {
       rememberGeneration(userId, null);
       await acknowledgeGeneration(job.job_id, token, controller.signal);
@@ -797,6 +807,23 @@ export default function Home() {
     setBusy(true); setGenerationNeedsReconnect(false); setError("");
     let jobId: string | undefined;
     try {
+      const localDraft = await getUnsyncedStudyDraft(userId).then((draft) => draft?.studySet as GenerationResult | undefined).catch(() => undefined);
+      const inMemoryDraft = generationNeedsReconnect && generationStatus?.stage === "saving" ? result : null;
+      const unsynced = localDraft || inMemoryDraft;
+      if (unsynced) {
+        setGenerationStatus({ status: "running", stage: "saving", message: "Retrying account sync for your saved questions…", completed: unsynced.items.length, requested: unsynced.requested_count || unsynced.items.length });
+        const synced = await applyGenerationResult(unsynced, token, userId, controller.signal);
+        if (synced) {
+          rememberGeneration(userId, null);
+          setGenerationNeedsReconnect(false);
+          setGenerationStatus(null);
+          resetGenerationCancellation();
+          return;
+        }
+        setGenerationNeedsReconnect(true);
+        setGenerationStatus({ status: "paused", stage: "saving", message: "Your questions are ready. Retry account sync when the connection is available.", completed: unsynced.items.length, requested: unsynced.requested_count || unsynced.items.length });
+        return;
+      }
       const previous = pendingGeneration(userId);
       let job = await findGenerationJob<GenerationResult>(generationOptions(token, controller));
       if (!job && previous) job = await findGenerationJob<GenerationResult>(generationOptions(token, controller), previous.job_id);

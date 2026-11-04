@@ -66,7 +66,7 @@ class LargeStudySetStorageTests(unittest.TestCase):
 
     def test_136_image_questionnaire_items_fit_and_round_trip_without_shifting_legacy_columns(self):
         self.assertEqual(accounts.SET_COLUMNS[22], "include_images")
-        self.assertEqual(accounts._column_letter(len(accounts.SET_COLUMNS)), "JI")
+        self.assertEqual(accounts._column_letter(len(accounts.SET_COLUMNS)), "AMW")
         images = ["data:image/webp;base64," + chr(65 + index % 26) * 39_900 + str(index) for index in range(136)]
         self.study_set["items"] = [
             {"card_id": f"figure-{index}", "question": f"Question {index}?", "answer": "Answer", "images": [image]}
@@ -77,6 +77,19 @@ class LargeStudySetStorageTests(unittest.TestCase):
         self.assertEqual(row["include_images"], "false")
         for column in accounts.SET_ITEM_COLUMNS:
             self.assertLessEqual(len(row[column].encode("utf-16-le")) // 2, accounts.SET_CELL_UNITS)
+        with patch.object(accounts, "_rows", return_value=[(2, row)]):
+            restored = accounts.list_study_sets("student")[0]
+        self.assertEqual(restored["items"], self.study_set["items"])
+
+    def test_questionnaire_payloads_above_the_previous_ten_megabyte_limit_fit(self):
+        self.study_set["items"] = [
+            {"card_id": f"large-{index}", "question": f"Question {index}?", "answer": "Answer",
+             "images": ["data:image/webp;base64," + "A" * 54_990 + str(index)]}
+            for index in range(200)
+        ]
+        self.assertGreater(len(json.dumps(self.study_set["items"], separators=(",", ":"))), 10_240_000)
+        row = dict(zip(accounts.SET_COLUMNS, self.packed_row()))
+        self.assertGreater(sum(bool(row[column]) for column in accounts.SET_ITEM_COLUMNS), 256)
         with patch.object(accounts, "_rows", return_value=[(2, row)]):
             restored = accounts.list_study_sets("student")[0]
         self.assertEqual(restored["items"], self.study_set["items"])
