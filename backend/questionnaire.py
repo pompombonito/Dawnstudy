@@ -12,6 +12,7 @@ OPTION = re.compile(r"^(?:\(([A-Ha-h])\)|([A-Ha-h])[.)])\s+(.+)$")
 ANSWER = re.compile(r"^(?:Correct\s+answer|Answer|Ans|A)\s*[:=]\s*(.*)$", re.I)
 KEY_HEADING = re.compile(r"^(?:answer\s*key|answers|key\s+to\s+answers)\s*:?(.*)$", re.I)
 SOURCE = re.compile(r"^\[SOURCE: (.+)\]$")
+SECTION = re.compile(r"^(?:(?:section|part|quiz|test|chapter|unit|set)\s+(?:\d+|[ivxlcdm]+|[a-z])(?:\b|[:.)])|[ivxlcdm]+[.)]\s+\S|#{1,6}\s+\S)", re.I)
 
 
 def docx_questionnaire_text(document):
@@ -79,25 +80,68 @@ def resolve_answer(raw, options, labels):
     raise QuestionnaireError(f"Answer key {raw!r} does not identify exactly one choice. Correct the key before importing.")
 
 
+def _apply_answer_keys(records, scopes, blocks):
+    """Match keys within a section/file; never broadcast a repeated number."""
+    for block in blocks:
+        keys = block["keys"]
+        if not keys:
+            continue
+        preferred = scopes[block["scope"]]
+        candidates = [scope for scope in scopes if scope["records"] and set(keys) <= {item["number"] for item in scope["records"]}]
+        local = [scope for scope in candidates if scope["document"] == preferred["document"]]
+        if preferred in candidates:
+            targets = preferred["records"]
+        elif len(local) == 1:
+            targets = local[0]["records"]
+        elif len(candidates) == 1:
+            targets = candidates[0]["records"]
+        else:
+            # A key may span sections with globally unique printed numbers.
+            local_records = [item for scope in scopes if scope["document"] == preferred["document"] for item in scope["records"]]
+            pool = local_records or records
+            matches = {number: [item for item in pool if item["number"] == number] for number in keys}
+            if any(not values for values in matches.values()):
+                raise QuestionnaireError("The answer key refers to questions outside this upload. Include their pages or remove the unmatched key entries.")
+            if any(len(values) != 1 for values in matches.values()):
+                raise QuestionnaireError("This separate answer key could match multiple sections with the same question numbers. Place each key after its section, or add answers beside the questions.")
+            targets = [values[0] for values in matches.values()]
+        for item in targets:
+            if item["number"] not in keys:
+                continue
+            key = keys[item["number"]]
+            if item.get("key_answer") and item["key_answer"] != key:
+                raise QuestionnaireError(f"Conflicting answer keys for question {item['source_number']}.")
+            item["key_answer"] = key
+
+
 def parse_questionnaire(documents, limit=200):
     """Read numbered questions or Q:/A: blocks and optional numbered answer keys.
 
     Numbering/choice labels are structure; all question, option and answer wording
     stays intact. Ambiguous layouts fail rather than becoming invented questions.
     """
-    records, keys, current, source = [], {}, None, ""
+    records, scopes, blocks, current, source = [], [], [], None, ""
+
+    def new_scope(document):
+        scope = {"document": document, "records": []}
+        scopes.append(scope)
+        return scope
 
     def put_key(number, value):
         if not value.strip():
             raise QuestionnaireError(f"Answer key {number} is empty.")
+        number = number.lstrip("0") or "0"
+        keys = blocks[-1]["keys"]
         if number in keys and keys[number] != value.strip():
             raise QuestionnaireError(f"Conflicting answer keys for question {number}.")
         keys[number] = value.strip()
 
-    for document in documents:
-        current, in_key = None, False
+    for document_index, document in enumerate(documents):
+        current, in_key, source = None, False, ""
+        scope = new_scope(document_index)
+        lines = document.splitlines()
         # Split same-line choices only at explicit labels; preserve their order.
-        for raw_line in document.splitlines():
+        for line_index, raw_line in enumerate(lines):
             line = raw_line.strip()
             if not line:
                 continue
@@ -105,12 +149,24 @@ def parse_questionnaire(documents, limit=200):
             if marker:
                 source = marker[1]
                 continue
+            if SECTION.match(line) and not OPTION.match(line):
+                current, in_key = None, False
+                if scope["records"]:
+                    scope = new_scope(document_index)
+                continue
             heading = KEY_HEADING.match(line)
             if heading:
                 in_key, current = True, None
+                blocks.append({"scope": len(scopes) - 1, "keys": {}})
                 line = heading[1].strip()
                 if not line:
                     continue
+            # A new question after a key need not have an explicit section title.
+            if in_key and QUESTION.match(line):
+                following = next((value.strip() for value in lines[line_index + 1:] if value.strip() and not SOURCE.match(value.strip())), "")
+                if "?" in line or OPTION.match(following) or ANSWER.match(following):
+                    in_key = False
+                    scope = new_scope(document_index)
             if in_key:
                 # Supports key columns such as '1. B  2. C', including one-letter answers.
                 entries = list(re.finditer(r"(?:^|\s+)(\d+)\s*[.):=\-]\s*", line))
@@ -122,10 +178,14 @@ def parse_questionnaire(documents, limit=200):
                 continue
             numbered, qa = QUESTION.match(line), QA.match(line)
             if numbered or qa:
-                number = numbered[1] if numbered else str(len(records) + 1)
+                printed_number = numbered[1] if numbered else str(len(records) + 1)
+                number = printed_number.lstrip("0") or "0"
+                if any(item["number"] == number for item in scope["records"]):
+                    scope = new_scope(document_index)
                 question = numbered[2] if numbered else qa[1]
-                current = {"number": number, "question": question, "options": [], "labels": [], "answer": "", "source_refs": [source] if source else []}
+                current = {"number": number, "source_number": printed_number, "question": question, "options": [], "labels": [], "answer": "", "source_refs": [source] if source else []}
                 records.append(current)
+                scope["records"].append(current)
                 if len(records) > limit:
                     raise QuestionnaireError(f"This questionnaire has more than {limit} questions. Select fewer pages or split it into smaller files; nothing was imported.")
                 # Numbered question can also have choices on the same line.
@@ -183,11 +243,7 @@ def parse_questionnaire(documents, limit=200):
 
     if not records:
         raise QuestionnaireError("No questions were recognized. Use numbered questions (1. Question), A./B./C./D. choices, and Answer: text or a numbered Answer key section. Scanned PDFs need OCR first.")
-    numbers = [item["number"] for item in records]
-    if len(set(numbers)) != len(numbers):
-        raise QuestionnaireError("Question numbers repeat. Use unique numbers across the uploaded questionnaire so answer keys cannot match the wrong question.")
-    if set(keys) - set(numbers):
-        raise QuestionnaireError("The answer key refers to questions outside this upload. Include their pages or remove the unmatched key entries.")
+    _apply_answer_keys(records, scopes, blocks)
     for item in records:
         options, labels = item["options"], item["labels"]
         if options and (len(options) < 2 or set(labels) != set("ABCDEFGH"[:len(options)])):
@@ -201,11 +257,15 @@ def parse_questionnaire(documents, limit=200):
         if len({_normalized(option) for option in options}) != len(options):
             raise QuestionnaireError(f"Question {item['number']} has duplicate choices; fix them before importing.")
         explicit = item["answer"] if not re.fullmatch(r"[_\s.\-]+", item["answer"]) else ""
-        raw_key = keys.get(item["number"], "")
+        raw_key = item.pop("key_answer", "")
         key = raw_key if not re.fullmatch(r"[_\s.\-]+", raw_key) else ""
         if explicit and key and _normalized(resolve_answer(explicit, options, labels)) != _normalized(resolve_answer(key, options, labels)):
             raise QuestionnaireError(f"Conflicting answers for question {item['number']}.")
         item["answer"] = resolve_answer(explicit or key, options, labels) if explicit or key else ""
+    # AI completion IDs are unique across files/sections, independently of the
+    # printed numbering retained for source attribution.
+    for index, item in enumerate(records, 1):
+        item["number"] = str(index)
     return records
 
 
@@ -247,7 +307,7 @@ def convert_questionnaire(records, study_format, completions):
         answer = record["answer"] or completion.get("answer", "")
         if not answer:
             raise QuestionnaireError(f"Supply an answer for question {record['number']}.")
-        item = {"question": record["question"], "answer": answer, "source_refs": record["source_refs"], "imported": True, "answer_origin": "inferred" if inferred else "provided"}
+        item = {"question": record["question"], "answer": answer, "source_refs": record["source_refs"], "source_number": record.get("source_number", record["number"]), "imported": True, "answer_origin": "inferred" if inferred else "provided"}
         notices = []
         if inferred:
             notices.append("AI-inferred answer: no answer key was supplied. Review it for accuracy.")

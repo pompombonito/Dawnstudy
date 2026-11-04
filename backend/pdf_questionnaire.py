@@ -11,7 +11,7 @@ _pdfium_lock = threading.RLock()
 def extract_pdf_questionnaire(raw, reader, page_indices):
     import pypdfium2 as pdfium
 
-    segments, keys = [], {}
+    segments = []
     with _pdfium_lock:
         document = pdfium.PdfDocument(raw)
         try:
@@ -21,8 +21,7 @@ def extract_pdf_questionnaire(raw, reader, page_indices):
                 try:
                     text = textpage.get_text_bounded().replace("\r\n", "\n")
                     label = f"PDF page {index + 1}"
-                    if text.strip():
-                        segments.append((label, text))
+                    keys = {}
                     for reference in reader.pages[index].get("/Annots", []):
                         annotation = reference.get_object()
                         if annotation.get("/Subtype") != "/Highlight":
@@ -55,15 +54,33 @@ def extract_pdf_questionnaire(raw, reader, page_indices):
                         if not key:
                             raise QuestionnaireError("A highlighted PDF answer could not be read. Add a written answer key for that question.")
                         number = question[1]
-                        if number in keys and keys[number] != key:
+                        occurrence = (number, sum(match[1] == number for match in starts))
+                        if occurrence in keys and keys[occurrence] != key:
                             raise QuestionnaireError(f"Question {number} has multiple highlighted answers. Use one clear correct answer or supply a written key.")
-                        keys[number] = key
+                        keys[occurrence] = key
+                    # Attach a highlight to its actual question occurrence,
+                    # rather than a global printed number that may restart.
+                    starts = list(re.finditer(r"(?m)^[ \t]*(?:Q(?:uestion)?\s*)?(\d+)[.) :]\s*\S", text, re.I))
+                    seen, insertions = {}, []
+                    for position, match in enumerate(starts):
+                        number = match[1]
+                        seen[number] = seen.get(number, 0) + 1
+                        key = keys.get((number, seen[number]))
+                        if not key:
+                            continue
+                        end = starts[position + 1].start() if position + 1 < len(starts) else len(text)
+                        block = text[match.start():end]
+                        choice = re.search(r"(?m)^[ \t]*(?:\([A-Ha-h]\)|[A-Ha-h][.)])\s+\S", block)
+                        insertion = match.start() + choice.start() if choice else end
+                        insertions.append((insertion, f"\nAnswer: {key}\n"))
+                    for insertion, value in reversed(insertions):
+                        text = text[:insertion] + value + text[insertion:]
+                    if text.strip():
+                        segments.append((label, text))
                 finally:
                     textpage.close()
                     page.close()
         finally:
             document.close()
     text = "\n\n".join(f"[SOURCE: {label}]\n{content}" for label, content in segments)
-    if keys:
-        text += "\n\nAnswer key:\n" + "\n".join(f"{number}. {answer}" for number, answer in keys.items())
     return text, [label for label, _ in segments]
