@@ -117,29 +117,25 @@ async function responseError(response: Response) {
 }
 
 function normalizedAnswer(value: unknown) {
-  return String(value ?? "").toLocaleLowerCase().trim().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  return String(value ?? "").toLocaleLowerCase().trim().replace(/\s+/g, " ");
 }
 
 function choiceAnswerOptions(answer: unknown, options: string[]) {
+  const raw = String(answer ?? "").trim();
+  const exactOption = (value: string) => {
+    const matches = options.filter((option) => normalizedAnswer(option) === normalizedAnswer(value));
+    return matches.length === 1 ? matches[0] : undefined;
+  };
+  // Check the full answer first so a literal option containing a pipe is not
+  // mistaken for several checkbox answers.
+  const wholeMatch = exactOption(raw);
+  const parts = wholeMatch ? [raw] : raw.split("|").map((value) => value.trim()).filter(Boolean);
   const resolved: string[] = [];
-  for (const part of String(answer ?? "").split("|").map((value) => value.trim()).filter(Boolean)) {
-    const letter = part.match(/^(?:option\s*)?([A-D])(?:[.):\-])?$/i);
-    let match = letter ? options[letter[1].toUpperCase().charCodeAt(0) - 65] : options.find((option) => normalizedAnswer(option) === normalizedAnswer(part));
-    if (!match && part) {
-      const left = Array.from(normalizedAnswer(part));
-      const ranked = options.map((option) => {
-        const right = Array.from(normalizedAnswer(option));
-        let previous = new Uint16Array(right.length + 1);
-        for (const leftChar of left) {
-          const current = new Uint16Array(right.length + 1);
-          for (let index = 1; index <= right.length; index += 1) {
-            current[index] = leftChar === right[index - 1] ? previous[index - 1] + 1 : Math.max(previous[index], current[index - 1]);
-          }
-          previous = current;
-        }
-        return { option, similarity: left.length + right.length ? 2 * previous[right.length] / (left.length + right.length) : 0 };
-      }).sort((a, b) => b.similarity - a.similarity);
-      if (ranked[0]?.similarity >= 0.9 && (!ranked[1] || ranked[0].similarity - ranked[1].similarity >= 0.08)) match = ranked[0].option;
+  for (const part of parts) {
+    let match = exactOption(part);
+    if (!match) {
+      const letter = part.match(/^(?:option\s*)?([A-D])(?:[.):\-])?$/i);
+      if (letter) match = options[letter[1].toUpperCase().charCodeAt(0) - 65];
     }
     if (!match) return [];
     if (!resolved.some((option) => normalizedAnswer(option) === normalizedAnswer(match))) resolved.push(match);
@@ -703,7 +699,7 @@ export default function Home() {
       const target = base.requested_count || base.items.length;
       const seen = new Set<string>();
       const items = [...base.items, ...data.items].filter((item) => {
-        const key = normalizedAnswer(item.question);
+        const key = item.question.toLocaleLowerCase().trim().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
         if (!key || seen.has(key) || seen.size >= target) return false;
         seen.add(key); return true;
       });

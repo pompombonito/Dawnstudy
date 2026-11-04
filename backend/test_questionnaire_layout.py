@@ -35,6 +35,26 @@ def highlighted_pdf(two_highlights=False):
     return result.getvalue()
 
 
+def flattened_highlighted_pdf():
+    """A text PDF whose green answer marks are page artwork, not annotations."""
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=600, height=800)
+    font = writer._add_object(DictionaryObject({NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"), NameObject("/BaseFont"): NameObject("/Helvetica")}))
+    page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})})
+    stream = DecodedStreamObject()
+    lines = [
+        (50, 750, "1. Which option was marked?"), (50, 730, "a. First"), (260, 730, "c. Third"), (50, 710, "b. Second"), (260, 710, "d. Fourth"),
+        (50, 670, "2. Which option is next?"), (50, 650, "a. Alpha"), (260, 650, "c. Gamma"), (50, 630, "b. Beta"), (260, 630, "d. Delta"),
+    ]
+    text_content = b"\n".join(f"BT /F1 12 Tf {x} {y} Td ({text}) Tj ET".encode() for x, y, text in lines)
+    marks = b"q 0.84 1 0.5 rg 258 727 76 16 re f Q\nq 1 0.88 0.52 rg 48 627 68 16 re f Q\n"
+    stream.set_data(marks + text_content)
+    page[NameObject("/Contents")] = writer._add_object(stream)
+    result = BytesIO()
+    writer.write(result)
+    return result.getvalue()
+
+
 class QuestionnaireLayoutTests(unittest.TestCase):
     def test_questionnaire_text_keeps_c_difficile_and_consecutive_choices(self):
         record = parse_questionnaire(["79. Which organism is isolated?\na. One\nb. Isolation of C. difficile from stool\nc. Three\nd. Four\nAnswer: B"])[0]
@@ -116,6 +136,15 @@ class QuestionnaireLayoutTests(unittest.TestCase):
         self.assertEqual([record["answer"] for record in records], ["Third", "Beta"])
         self.assertEqual(records[0]["options"], ["First", "Second", "Third", "Fourth"])
         self.assertEqual(main.extract_material("marked.pdf", raw, questionnaire=True)[0], text)
+
+    def test_flattened_page_art_highlights_are_used_as_answer_keys(self):
+        raw = flattened_highlighted_pdf()
+        reader = PdfReader(BytesIO(raw))
+        self.assertFalse(any(page.get("/Annots") for page in reader.pages))
+        text, _labels = extract_pdf_questionnaire(raw, reader, [0])
+        records = parse_questionnaire([text])
+        self.assertEqual([record["answer"] for record in records], ["Third", "Beta"])
+        self.assertTrue(all(record["answer"] in record["options"] for record in records))
 
     def test_native_pdf_import_uses_highlights_without_ai(self):
         user = {"user_id": "pdf-student", "email": "student@gmail.com"}

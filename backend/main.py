@@ -1526,12 +1526,32 @@ def safe_model_items(items: Any) -> list[dict[str, Any]]:
 
 
 def answer_texts_for_options(answer: str, options: list[str]) -> list[str]:
-    """Resolve either answer text or A/B/C/D labels to the displayed option text."""
+    """Resolve exact answer text or an explicit A/B/C/D label to an option.
+
+    Fuzzy mapping can silently change the answer when choices differ only by
+    punctuation or a short suffix (for example C++ and C#), so reject misses.
+    """
+    def normalized_answer(value: str) -> str:
+        return re.sub(r"\s+", " ", value).strip().casefold()
+
+    whole_answer = normalized_answer(answer)
+    exact_whole_matches = [option for option in options if normalized_answer(option) == whole_answer]
+    if len(exact_whole_matches) == 1:
+        return exact_whole_matches
+    if len(exact_whole_matches) > 1:
+        return []
+
     resolved = []
     parts = [piece.strip() for piece in answer.split("|") if piece.strip()]
     if not parts:
         return []
     for part in parts:
+        exact_matches = [option for option in options if normalized_answer(option) == normalized_answer(part)]
+        if len(exact_matches) == 1:
+            resolved.append(exact_matches[0])
+            continue
+        if len(exact_matches) > 1:
+            return []
         letter = re.fullmatch(r"(?:option\s*)?([A-D])(?:[.):\-])?", part, re.IGNORECASE)
         if letter:
             index = ord(letter.group(1).upper()) - ord("A")
@@ -1539,43 +1559,38 @@ def answer_texts_for_options(answer: str, options: list[str]) -> list[str]:
                 resolved.append(options[index])
                 continue
             return []
-        match = next((option for option in options if normalized_question(option) == normalized_question(part)), None)
-        if match is None and part:
-            from difflib import SequenceMatcher
-
-            normalized_part = normalized_question(part)
-            ranked = sorted(
-                [
-                    (SequenceMatcher(None, normalized_part, normalized_question(option), autojunk=False).ratio(), option)
-                    for option in options
-                ],
-                key=lambda candidate: candidate[0],
-                reverse=True,
-            )
-            if ranked and ranked[0][0] >= 0.90 and (len(ranked) == 1 or ranked[0][0] - ranked[1][0] >= 0.08):
-                match = ranked[0][1]
-        if not match:
-            return []
-        resolved.append(match)
-    return list(dict.fromkeys(resolved))
+        return []
+    seen = set()
+    unique = []
+    for option in resolved:
+        key = normalized_answer(option)
+        if key not in seen:
+            seen.add(key)
+            unique.append(option)
+    return unique
 
 
 def normalize_choice_item(item: dict[str, Any], study_format: str) -> dict[str, Any] | None:
-    """Require choice answers to map to the displayed options and canonicalize typos."""
+    """Require every supplied choice answer field to identify the same option(s)."""
     options = [str(option).strip() for option in item.get("options", []) if str(option).strip()]
     if len(options) != 4:
         return None
     resolved: list[str] = []
+    supplied_answers = []
+    answer_key = lambda value: re.sub(r"\s+", " ", value).strip().casefold()
     for answer in (item.get("correct_answer"), item.get("answer")):
-        if answer is None:
+        if answer is None or not str(answer).strip():
             continue
+        supplied_answers.append(str(answer))
         candidate_answers = answer_texts_for_options(str(answer), options)
-        if study_format == "multiple_choice" and len(candidate_answers) == 1:
-            resolved = candidate_answers
-            break
-        if study_format == "checkbox" and candidate_answers:
-            resolved = candidate_answers
-            break
+        if not ((study_format == "multiple_choice" and len(candidate_answers) == 1)
+                or (study_format == "checkbox" and candidate_answers)):
+            return None
+        if resolved and sorted(map(answer_key, resolved)) != sorted(map(answer_key, candidate_answers)):
+            return None
+        resolved = candidate_answers
+    if not supplied_answers:
+        return None
     if study_format == "multiple_choice" and len(resolved) != 1:
         return None
     if study_format == "checkbox" and not resolved:

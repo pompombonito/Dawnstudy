@@ -12,6 +12,7 @@ from questionnaire import OPTION, QuestionnaireError
 _pdfium_lock = threading.RLock()
 _QUESTION_START = re.compile(r"(?m)^[ \t]*(?:Q(?:uestion)?\s*)?(\d+)[.)]\s*\S", re.I)
 _OPTION_START = re.compile(r"(?m)^[ \t]*(?:\([A-Ha-h]\)|[A-Ha-h][.)])\s+\S")
+_OPTION_TOKEN = re.compile(r"(?i)(?<![A-Za-z])(?:\(([A-H])\)|([A-H])[.)])\s+\S")
 _FIGURE = re.compile(r"\bFIGURE\s+\d+(?:[-.]\d+)*\b", re.I)
 
 
@@ -30,6 +31,105 @@ def _line_bounds(textpage, text, start):
         return None
     return (min(box[0] for box in boxes), min(box[1] for box in boxes),
             max(box[2] for box in boxes), max(box[3] for box in boxes))
+
+
+def _flattened_highlight_keys(page, textpage, text):
+    """Read visible yellow/green answer marks that are flattened into page art.
+
+    Many exported study PDFs paint highlights into the page instead of saving
+    PDF /Highlight annotations. Only infer a key when one option has a clear
+    highlighter-color fill; ambiguous or unmarked questions stay unanswered.
+    """
+    questions = list(_QUESTION_START.finditer(text))
+    if not questions:
+        return {}
+
+    scale = 1.5
+    bitmap = page.render(scale=scale)
+    image = bitmap.to_pil().convert("RGB")
+    bitmap.close()
+    _page_width, page_height = page.get_size()
+
+    def highlight_fraction(line, start):
+        bounds = _line_bounds(textpage, line, start)
+        if not bounds:
+            return 0.0
+        pad = 1.0
+        left, bottom, right, top = bounds
+        crop = image.crop((
+            max(0, int((left - pad) * scale)),
+            max(0, int((page_height - top - pad) * scale)),
+            min(image.width, int((right + pad) * scale)),
+            min(image.height, int((page_height - bottom + pad) * scale)),
+        ))
+        pixels = list(crop.getdata())
+        if not pixels:
+            return 0.0
+        colored = sum(
+            (red >= 180 and green >= 140 and blue <= 215 and red - blue >= 30 and green - blue >= 15)
+            or (green >= 165 and red >= 100 and blue <= 205 and green - red >= 20 and green - blue >= 20)
+            for red, green, blue in pixels
+        )
+        return colored / len(pixels)
+
+    lines = []
+    for match in re.finditer(r"[^\n]*(?:\n|$)", text):
+        value = match.group(0).rstrip("\r\n")
+        if value.strip():
+            lines.append((match.start(), value))
+
+    result, occurrences = {}, {}
+    for question_index, question in enumerate(questions):
+        number = question[1]
+        occurrences[number] = occurrences.get(number, 0) + 1
+        block_end = questions[question_index + 1].start() if question_index + 1 < len(questions) else len(text)
+        candidates = []
+        for line_start, line in lines:
+            if line_start < question.end() or line_start >= block_end:
+                continue
+            tokens = list(_OPTION_TOKEN.finditer(line))
+            if tokens:
+                candidates.extend((line_start, line, token) for token in tokens)
+
+        # Ignore question-stem abbreviations such as "C. difficile" by only
+        # considering options after the first A label in the question block.
+        first_a = next((index for index, (_start, _line, token) in enumerate(candidates)
+                        if (token.group(1) or token.group(2)).upper() == "A"), None)
+        if first_a is None:
+            continue
+        candidates = candidates[first_a:]
+
+        # A scientific name like "C. difficile" can resemble a choice label.
+        # If that letter is repeated as a standalone option later, keep the
+        # containing source line intact and discard the abbreviation boundary.
+        standalone_later = {}
+        for index, (line_start, line, token) in enumerate(candidates):
+            label = (token.group(1) or token.group(2)).upper()
+            if _OPTION_START.match(line):
+                standalone_later.setdefault(label, []).append(index)
+        filtered = []
+        for index, candidate in enumerate(candidates):
+            line_start, line, token = candidate
+            label = (token.group(1) or token.group(2)).upper()
+            token_is_line_start = not line[:token.start()].strip()
+            if not token_is_line_start and any(later > index for later in standalone_later.get(label, [])):
+                continue
+            filtered.append(candidate)
+        labels = [(token.group(1) or token.group(2)).upper() for _start, _line, token in filtered]
+        if not labels or len(labels) != len(set(labels)) or set(labels) != set("ABCDEFGH"[:len(labels)]):
+            continue
+
+        fractions = []
+        for index, (line_start, line, token) in enumerate(filtered):
+            end = filtered[index + 1][2].start() if index + 1 < len(filtered) and filtered[index + 1][0] == line_start else len(line)
+            segment = line[token.start():end]
+            fractions.append((labels[index], highlight_fraction(segment, line_start + token.start())))
+        marked = [label for label, fraction in fractions if fraction >= 0.18]
+        if len(marked) == 1:
+            result[(number, occurrences[number])] = marked[0]
+
+    image.close()
+    return result
 
 
 def _rect_distance(first, second):
@@ -205,7 +305,7 @@ def extract_pdf_questionnaire(raw, reader, page_indices, include_skipped=False):
                     if leading_markers:
                         text = "\n".join(f"[PDF_IMAGE: {data}]" for data in leading_markers) + "\n" + text
                     label = f"PDF page {index + 1}"
-                    keys = {}
+                    keys = _flattened_highlight_keys(page, textpage, original)
                     for reference in reader.pages[index].get("/Annots", []):
                         annotation = reference.get_object()
                         if annotation.get("/Subtype") != "/Highlight":
@@ -250,10 +350,10 @@ def extract_pdf_questionnaire(raw, reader, page_indices, include_skipped=False):
                         if not key:
                             continue
                         end = starts[position + 1].start() if position + 1 < len(starts) else len(text)
-                        block = text[match.start():end]
-                        choice = _OPTION_START.search(block)
-                        insertion = match.start() + choice.start() if choice else end
-                        insertions.append((insertion, f"\nAnswer: {key}\n"))
+                        # Put the verified key after the whole question block so
+                        # wrapped choice text (for example the second line of C)
+                        # remains attached to its option instead of the answer.
+                        insertions.append((end, f"\nAnswer: {key}\n"))
                     for insertion, value in reversed(insertions):
                         text = text[:insertion] + value + text[insertion:]
                     if text.strip():
