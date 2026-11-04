@@ -200,6 +200,70 @@ class ImportRouteTests(unittest.TestCase):
         self.assertTrue(self.saved[0]["items"][0]["imported"])
         self.assertEqual(self.saved[0]["items"][0]["answer_origin"], "provided")
 
+    def test_partial_questionnaire_is_saved_when_providers_are_unavailable(self):
+        source = "1. First question?\nAnswer: Alpha\n2. Second question?"
+        with patch.object(main, "configured_ai_models", return_value=[]):
+            response = self.request(source, "flashcards", route="/api/generation-jobs")
+        self.assertEqual(response.status_code, 202, response.text)
+        job = self.client.get("/api/generation-jobs/" + response.json()["job_id"]).json()
+        self.assertEqual(job["status"], "complete", job)
+        self.assertTrue(job["result"]["incomplete"])
+        self.assertEqual(job["result"]["requested_count"], 2)
+        self.assertEqual([item["answer"] for item in job["result"]["items"]], ["Alpha"])
+        self.assertTrue(self.saved[0]["incomplete"])
+        self.assertEqual(self.saved[0]["requested_count"], 2)
+
+    def test_keyed_question_without_generated_choices_does_not_crash_partial_import(self):
+        source = "1. Which is a primary color?\nA. Red\nB. Table\nC. Cloud\nD. Chair\nAnswer: A\n2. Name the process plants use to make food.\nAnswer: Photosynthesis"
+        with patch.object(main, "configured_ai_models", return_value=[]):
+            response = self.request(source, "multiple_choice", route="/api/generation-jobs")
+        self.assertEqual(response.status_code, 202, response.text)
+        job = self.client.get("/api/generation-jobs/" + response.json()["job_id"]).json()
+        self.assertEqual(job["status"], "complete", job)
+        self.assertTrue(job["result"]["incomplete"])
+        self.assertEqual([item["question"] for item in job["result"]["items"]], ["Which is a primary color?"])
+        self.assertEqual(job["result"]["items"][0]["options"], ["Red", "Table", "Cloud", "Chair"])
+
+    def test_figure_stays_on_returned_card_without_entering_text_model_prompt(self):
+        image = "data:image/webp;base64,AA=="
+        source = f"1. Which option is shown?\n[PDF_IMAGE: {image}]\nA. Alpha\nB. Beta\nC. Gamma\nD. Delta"
+        response = self.request(source)
+        self.assertEqual(response.status_code, 200, response.text)
+        item = response.json()["items"][0]
+        self.assertEqual(item["images"], [image])
+        prompt = self.provider.call_args.args[3]
+        self.assertNotIn(image, prompt)
+        self.assertIn('"image_count": 1', prompt)
+
+    def test_questionnaire_partial_set_can_resume_without_reanswering_saved_cards(self):
+        source = "1. First question?\nAnswer: Alpha\n2. Second question?"
+        raw = source.encode()
+        fingerprint = main.hashlib.sha256((self.user["user_id"] + "\0" + main.hashlib.sha256(raw).hexdigest()).encode()).hexdigest()
+        base = {
+            "id": "partial-import", "title": "quiz", "type": "flashcards",
+            "items": [{"question": "First question?", "answer": "Alpha", "source_number": "1", "questionnaire_index": 1,
+                       "imported": True, "answer_origin": "provided", "card_id": "saved-card"}],
+            "created_at": "2026-11-04T00:00:00+00:00", "requested_count": 2, "incomplete": True,
+            "material_fingerprint": fingerprint, "page_ranges": {}, "focus_topic": "", "source_url": "", "sources": [],
+        }
+        saved = {base["id"]: copy.deepcopy(base)}
+        def list_sets(_user_id):
+            return [copy.deepcopy(saved[base["id"]])]
+        def update_set(_user_id, set_id, changes):
+            saved[set_id].update(copy.deepcopy(changes))
+            return True
+
+        with patch.object(main, "list_study_sets", side_effect=list_sets), patch.object(main, "update_study_set", side_effect=update_set):
+            response = self.request(source, "flashcards", route="/api/generation-jobs", question_count="1", study_set_id=base["id"])
+            self.assertEqual(response.status_code, 202, response.text)
+            job = self.client.get("/api/generation-jobs/" + response.json()["job_id"]).json()
+        self.assertEqual(job["status"], "complete", job)
+        self.assertFalse(job["result"]["incomplete"])
+        self.assertEqual([item["question"] for item in job["result"]["items"]], ["First question?", "Second question?"])
+        self.assertEqual(job["result"]["items"][0]["answer"], "Alpha")
+        self.assertEqual(job["result"]["items"][0]["card_id"], "saved-card")
+        self.assertEqual(self.provider.call_count, 1)
+
     def test_import_ignores_count_instead_of_dropping_or_inventing_questions(self):
         for count in (1, 200):
             result = self.request(question_count=str(count))

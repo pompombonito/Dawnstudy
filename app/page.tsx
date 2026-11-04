@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 
 type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification" | "same_as_source";
-type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred"; images?: string[]; quiz_type?: "multiple_choice" | "checkbox" | "identification" | "matching"; matching_prompts?: string[]; matching_options?: string[]; matching_pairs?: { prompt: string; answer: string }[] };
+type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred"; images?: string[]; questionnaire_index?: number; quiz_type?: "multiple_choice" | "checkbox" | "identification" | "matching"; matching_prompts?: string[]; matching_options?: string[]; matching_pairs?: { prompt: string; answer: string }[] };
 type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; source_url?: string; created_at: string; material_fingerprint?: string; page_ranges?: Record<string, string>; focus_topic?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; notices?: string[]; usage?: { remaining: number | null; limit: number | null; resets_at: string | null; unlimited?: boolean } };
 type ActiveShare = { set_id: string; title: string; token: string; created_at: string };
 type ReviewItem = { study_set_id: string; study_set_title: string; type: Kind; card: Card; retried?: boolean; intervals: { again: string; hard: string; good: string; easy: string } };
@@ -954,14 +954,16 @@ export default function Home() {
     const form = new FormData();
     if (result.source_url) form.append("source_url", result.source_url);
     else files.forEach((selectedFile) => form.append("files", selectedFile));
+    const questionnaireImport = result.items.some((item) => item.imported);
+    form.append("input_mode", questionnaireImport ? "questionnaire" : "notes");
     form.append("format", result.type);
-    form.append("use_web", String(web));
+    form.append("use_web", String(!questionnaireImport && web));
     form.append("model", modelChoice);
     form.append("question_count", String(remainingCount));
     form.append("difficulty", difficulty);
     form.append("page_ranges", JSON.stringify(result.page_ranges || (result.source_url ? (websitePageRange.trim() ? { "0": websitePageRange.trim() } : {}) : Object.fromEntries(Object.entries(pageRanges).filter(([, value]) => value.trim())))));
-    form.append("focus_topic", result.focus_topic || focusTopic.trim());
-    form.append("existing_questions", JSON.stringify(result.items.map((item) => item.question)));
+    form.append("focus_topic", questionnaireImport ? "" : result.focus_topic || focusTopic.trim());
+    if (!questionnaireImport) form.append("existing_questions", JSON.stringify(result.items.map((item) => item.question)));
     if (result.material_fingerprint) form.append("expected_material_fingerprint", result.material_fingerprint);
     if (sets.some((item) => item.id === result.id)) form.append("study_set_id", result.id);
     await runGeneration(form, result);
@@ -1286,7 +1288,7 @@ export default function Home() {
       else setMatchingResponses((old) => ({ ...old, [cardKey]: next }));
     };
     return <div className={practiceAt === undefined ? `study-face choice-study-face matching-quiz ${revealed ? "is-revealed" : ""}` : "matching-quiz practice-matching"}>
-      {practiceAt === undefined && <><span className="face-label">{revealed ? "MATCHES" : "MATCH EACH ITEM"}</span><span className="face-question">{card.question}</span>{renderQuestionImages(card)}</>}
+      {practiceAt === undefined && <><span className="face-label">{revealed ? "MATCHES" : "MATCH EACH ITEM"}</span><span className="face-question">{card.question}</span></>}
       <div className="matching-rows">{prompts.map((prompt, index) => <label className="matching-row" key={`${index}-${prompt}`}><span>{prompt}</span><select value={answers[prompt] || ""} disabled={practiceAt === undefined && revealed} onChange={(event) => update(prompt, event.target.value)}><option value="">Choose a match</option>{options.map((option, optionIndex) => <option key={`${optionIndex}-${option}`} value={option}>{String.fromCharCode(65 + optionIndex)}. {option}</option>)}</select></label>)}</div>
       {practiceAt === undefined && !revealed && <button className="check-answer-button" type="button" disabled={!complete} onClick={() => setRevealed(true)}>Check matches</button>}
       {practiceAt === undefined && revealed && <p className={`choice-feedback ${correct ? "correct" : "wrong"}`} role="status">{correct ? "All matches are correct." : `Correct matches: ${displayCorrectAnswer(card)}`}</p>}
@@ -1302,7 +1304,6 @@ export default function Home() {
     return <div className={`study-face choice-study-face ${revealed ? "is-revealed" : ""}`}>
       <span className="face-label">{revealed ? "ANSWER FEEDBACK" : "CHOOSE YOUR ANSWER"}</span>
       <span className="face-question">{card.question}</span>
-      {renderQuestionImages(card)}
       <div className="choice-options">{card.options?.map((option, index) => {
         const correct = isCorrect(option);
         const selected = selectedOption === index;
@@ -1329,7 +1330,6 @@ export default function Home() {
     return <div className={"study-face choice-study-face" + (revealed ? " is-revealed" : "")}>
       <span className="face-label">{revealed ? "ANSWER FEEDBACK" : "SELECT EVERY CORRECT ANSWER"}</span>
       <span className="face-question">{card.question}</span>
-      {renderQuestionImages(card)}
       {card.options?.length ? <div className="choice-options" role="group" aria-label="Choose all correct answers">{card.options.map((option, index) => {
         const picked = selectedAnswers.includes(option);
         const correct = isCorrect(option);
@@ -1349,7 +1349,6 @@ export default function Home() {
     return <div className={"study-face choice-study-face" + (revealed ? " is-revealed" : "")}>
       <span className="face-label">{revealed ? "ANSWER FEEDBACK" : "IDENTIFY THE TERM OR CONCEPT"}</span>
       <span className="face-question">{card.question}</span>
-      {renderQuestionImages(card)}
       <label className="practice-written study-identification-input"><span>Your answer</span><input value={answer} disabled={revealed} onChange={(event) => setAnswer(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && answer.trim() && !revealed) setRevealed(true); }} placeholder="Type the term or concept"/></label>
       {!revealed ? <button type="button" className="check-answer-button" disabled={!answer.trim()} onClick={() => setRevealed(true)}>Check answer</button> : <p className={"choice-feedback " + (correct ? "correct" : "wrong")} role="status">{correct ? "Correct! Nice work." : "Correct answer: " + displayCorrectAnswer(card)}</p>}
     </div>;
@@ -1368,7 +1367,6 @@ export default function Home() {
     return <button className={"study-face" + (revealed ? " is-revealed" : "")} onClick={() => setRevealed(!revealed)}>
       <span className="face-label">{revealed ? "THE ANSWER" : "YOUR QUESTION"}</span>
       <span className="face-question">{revealed ? card.answer : card.question}</span>
-      {!revealed && renderQuestionImages(card)}
       {!revealed && <span className="tap-hint">Tap to reveal <span>↗</span></span>}
     </button>;
   }
@@ -1486,7 +1484,7 @@ export default function Home() {
               </aside>
             </div>
           </> : <div className="session-topline"><div><span className="section-overline">YOUR FOCUS SPACE</span><h1>One idea at a time.</h1></div><button type="button" className="outline-button" disabled={busy || continueBusy || generationNeedsReconnect} onClick={beginStudySet}><Plus size={17}/> New study set</button></div>}
-          {reviewActive && <section className="review-panel"><div className="result-head"><div><div className="result-kicker"><span/> SPACED REPETITION</div><h2>{reviewQueue.length ? reviewQueue[0].study_set_title : "Review complete"}</h2><p>{reviewQueue.length ? `${reviewQueue.length} cards in this session · ${reviewQueue[0].type.replaceAll("_", " ")}` : "You’re all caught up for now. Nice work showing up."}</p></div><button className="plain-icon" title="Close review" onClick={() => { setReviewActive(false); setReviewQueue([]); setSelectedOption(null); }}><X size={18}/></button></div>{reviewQueue.length ? <div className="study-card"><div className="study-card-top"><span className="flashcard-label">REVIEW {reviewQueue.length} LEFT</span></div>{reviewQueue[0].card.answer_origin === "inferred" && <p className="import-review-note">AI-inferred answer · review for accuracy</p>}{renderCardInteraction(reviewQueue[0].card, reviewQueue[0].type, true)}{revealed && reviewQueue[0].card.explanation && <p className="explanation">{reviewQueue[0].card.explanation}</p>}{revealed && <div className="rating-row"><button disabled={reviewBusy} onClick={() => void gradeCard("again")}><b>Again</b><small>{reviewQueue[0].intervals.again}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("hard")}><b>Hard</b><small>{reviewQueue[0].intervals.hard}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("good")}><b>Good</b><small>{reviewQueue[0].intervals.good}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("easy")}><b>Easy</b><small>{reviewQueue[0].intervals.easy}</small></button></div>}</div> : <button className="review-done" onClick={() => { setReviewActive(false); setReviewQueue([]); }}>Back to study desk <ChevronRight size={15}/></button>}</section>}
+          {reviewActive && <section className="review-panel"><div className="result-head"><div><div className="result-kicker"><span/> SPACED REPETITION</div><h2>{reviewQueue.length ? reviewQueue[0].study_set_title : "Review complete"}</h2><p>{reviewQueue.length ? `${reviewQueue.length} cards in this session · ${reviewQueue[0].type.replaceAll("_", " ")}` : "You’re all caught up for now. Nice work showing up."}</p></div><button className="plain-icon" title="Close review" onClick={() => { setReviewActive(false); setReviewQueue([]); setSelectedOption(null); }}><X size={18}/></button></div>{reviewQueue.length ? <div className="study-card"><div className="study-card-top"><span className="flashcard-label">REVIEW {reviewQueue.length} LEFT</span></div>{reviewQueue[0].card.answer_origin === "inferred" && <p className="import-review-note">AI-inferred answer · review for accuracy</p>}{renderQuestionImages(reviewQueue[0].card)}{renderCardInteraction(reviewQueue[0].card, reviewQueue[0].type, true)}{revealed && reviewQueue[0].card.explanation && <p className="explanation">{reviewQueue[0].card.explanation}</p>}{revealed && <div className="rating-row"><button disabled={reviewBusy} onClick={() => void gradeCard("again")}><b>Again</b><small>{reviewQueue[0].intervals.again}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("hard")}><b>Hard</b><small>{reviewQueue[0].intervals.hard}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("good")}><b>Good</b><small>{reviewQueue[0].intervals.good}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("easy")}><b>Easy</b><small>{reviewQueue[0].intervals.easy}</small></button></div>}</div> : <button className="review-done" onClick={() => { setReviewActive(false); setReviewQueue([]); }}>Back to study desk <ChevronRight size={15}/></button>}</section>}
           {result && practiceActive && !reviewActive && <section ref={practicePanel} className="practice-panel">
             <div className="result-head"><div><div className="result-kicker"><span/> {practiceSecondsPerQuestion === 0 ? "SELF-PACED PRACTICE" : "TIMED PRACTICE TEST"}</div><h2>{result.title}</h2><p>{practiceComplete ? "Test results and missed answers" : `${result.items.length} questions · ${practiceSecondsPerQuestion === 0 ? "no time limit" : `${practiceSecondsPerQuestion} seconds per question`}`}</p></div><div className="practice-head-actions"><button className={`quiz-fullscreen-button ${isFullscreen ? "is-fullscreen" : ""}`} type="button" onClick={() => void toggleExerciseFullscreen()} aria-label={isFullscreen ? "Exit quiz fullscreen" : "Show quiz fullscreen"} aria-pressed={isFullscreen}><FullscreenIcon size={19}/><span>{isFullscreen ? "Exit fullscreen" : "Quiz fullscreen"}</span></button><button className="plain-icon" title="Exit practice test" onClick={() => { setPracticeActive(false); setPracticeComplete(false); }}><X size={18}/></button></div></div>
             {!practiceComplete && practiceCard ? <>
@@ -1513,7 +1511,7 @@ export default function Home() {
             {result.incomplete && <div className="incomplete-generation"><div><strong>{result.items.length} of {result.requested_count || result.items.length} questions generated</strong><span>{result.source_url ? "Your generated questions are held. Continue from the same public webpage when ready." : files.length ? "Your generated questions are held. Continue with the selected original files when ready." : "Re-select the original files to continue this set."}</span>{!result.source_url && files.length > 0 && <button type="button" className="resume-source-button" onClick={pickOriginalFiles}>Replace original files ({files.length} selected)</button>}</div><button className="continue-generation-button" disabled={continueBusy || busy || generationNeedsReconnect} onClick={() => { if (!files.length && !result.source_url) pickOriginalFiles(); else void continueGenerating(); }}>{continueBusy ? <><span className="spinner"/> Continuing…</> : <><Sparkles size={17}/> {!files.length && !result.source_url ? "Select original files" : "Continue generating"}</>}</button></div>}
             {shareUrl && <div className="share-link-row"><span>Anyone with this link can view this set:</span><a href={shareUrl} target="_blank" rel="noreferrer">{shareUrl}</a><button className="plain-icon" title="Copy share link" onClick={() => { void navigator.clipboard.writeText(shareUrl).then(() => setNotice("Share link copied.")).catch(() => setNotice("Select and copy the share link above.")); }}><Copy size={15}/></button><button className="share-revoke" disabled={shareBusy} onClick={() => void turnOffShareLink(result.id)}>Turn off link</button></div>}
             <div className="study-card"><div className="study-card-top"><span className="flashcard-label">{result.type === "flashcards" ? "FLASHCARD" : types.find((type) => type.id === result.type)?.title.toUpperCase()}</span><span className="card-number">{String(current + 1).padStart(2,"0")} <i>/</i> {String(result.items.length).padStart(2,"0")}</span></div>
-              {currentCard.answer_origin === "inferred" && <p className="import-review-note">AI-inferred answer · review for accuracy</p>}{renderCardInteraction(currentCard, result.type)}
+              {currentCard.answer_origin === "inferred" && <p className="import-review-note">AI-inferred answer · review for accuracy</p>}{renderQuestionImages(currentCard)}{renderCardInteraction(currentCard, result.type)}
               {currentCard.source_refs?.length ? <div className="material-citations"><strong>From your material</strong>{currentCard.source_refs.map((source) => <span key={source}>{source}</span>)}</div> : null}
               {revealed && currentCard.explanation && <p className="explanation">{currentCard.explanation}</p>}
               {revealed && account && authToken && currentCard.card_id && <><div className="rating-prompt">How well did you recall it? Your answer schedules this card for another review.</div><div className="rating-row"><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("again")}><b>Again</b><small>Hard to recall</small></button><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("hard")}><b>Hard</b><small>With effort</small></button><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("good")}><b>Good</b><small>Recalled it</small></button><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("easy")}><b>Easy</b><small>Very easy</small></button></div></>}

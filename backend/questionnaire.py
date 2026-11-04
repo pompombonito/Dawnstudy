@@ -374,15 +374,66 @@ def validate_completion(records, payload, choice_mode):
     return completed
 
 
-def convert_questionnaire(records, study_format, completions):
+def match_existing_questionnaire_items(records, existing_items):
+    """Match saved partial-import cards back to stable parsed questionnaire positions."""
+    if not existing_items:
+        return {}
+    record_by_index = {int(record["number"]): record for record in records}
+    matched, used_indexes = {}, set()
+    for item in existing_items:
+        if not isinstance(item, dict) or not item.get("imported") or not str(item.get("answer") or "").strip():
+            continue
+        try:
+            index = int(item.get("questionnaire_index"))
+        except (TypeError, ValueError):
+            index = 0
+        record = record_by_index.get(index)
+        if (record is not None and index not in used_indexes
+                and item.get("question") == record["question"]
+                and str(item.get("source_number", "")) == str(record.get("source_number", record["number"]))):
+            matched[index] = item
+            used_indexes.add(index)
+
+    # Older saved imports have no questionnaire_index. Fall back to an exact
+    # question/source-number match, consuming duplicate-number questions in order.
+    for item in existing_items:
+        if not isinstance(item, dict) or not item.get("imported") or not str(item.get("answer") or "").strip():
+            continue
+        if any(item is value for value in matched.values()):
+            continue
+        for index, record in record_by_index.items():
+            if index in used_indexes:
+                continue
+            if (item.get("question") == record["question"]
+                    and str(item.get("source_number", "")) == str(record.get("source_number", record["number"]))):
+                matched[index] = item
+                used_indexes.add(index)
+                break
+    return matched
+
+
+def convert_questionnaire(records, study_format, completions, existing_items=None, allow_incomplete=False):
     items = []
+    existing_by_index = match_existing_questionnaire_items(records, existing_items)
     for record in records:
+        questionnaire_index = int(record["number"])
+        existing = existing_by_index.get(questionnaire_index)
+        if existing:
+            saved = {**existing, "questionnaire_index": questionnaire_index}
+            if record.get("images"):
+                saved["images"] = record["images"]
+            if record.get("source_refs"):
+                saved["source_refs"] = record["source_refs"]
+            items.append(saved)
+            continue
         inferred = not bool(record["answer"])
         completion = completions.get(record["number"], {})
         answer = record["answer"] or completion.get("answer", "")
         if not answer:
+            if allow_incomplete:
+                continue
             raise QuestionnaireError(f"Supply an answer for question {record['number']}.")
-        item = {"question": record["question"], "answer": answer, "source_refs": record["source_refs"], "source_number": record.get("source_number", record["number"]), "imported": True, "answer_origin": "inferred" if inferred else "provided"}
+        item = {"question": record["question"], "answer": answer, "source_refs": record["source_refs"], "source_number": record.get("source_number", record["number"]), "questionnaire_index": questionnaire_index, "imported": True, "answer_origin": "inferred" if inferred else "provided"}
         if record.get("images"):
             item["images"] = record["images"]
         notices = []
@@ -405,7 +456,13 @@ def convert_questionnaire(records, study_format, completions):
         elif study_format in {"multiple_choice", "checkbox"}:
             options = record["options"][:]
             if not options:
-                options = [answer, *completion["distractors"]]
+                distractors = completion.get("distractors", [])
+                if (not isinstance(distractors, list) or len(distractors) != 3
+                        or any(not isinstance(value, str) or not value.strip() for value in distractors)):
+                    if allow_incomplete:
+                        continue
+                    raise QuestionnaireError(f"The choices for question {record['number']} could not be completed.")
+                options = [answer, *distractors]
                 # Vary new answer placement deterministically; original choices never move.
                 offset = len(items) % 4
                 options = options[offset:] + options[:offset]
