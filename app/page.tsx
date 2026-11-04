@@ -1383,14 +1383,22 @@ export default function Home() {
                 <div className="creation-steps" aria-label="Study set setup">{["Material", "Practice", "Create"].map((label, index) => <button type="button" key={label} className={composerStep === index ? "current" : composerStep > index ? "complete" : ""} aria-current={composerStep === index ? "step" : undefined} onClick={() => setComposerStep(index)}><i>{composerStep > index ? <Check size={14}/> : index + 1}</i><span>{label}</span></button>)}</div>
                 <div className="creator-content" key={composerStep}>
                   {composerStep === 0 && <div className="creator-material"><div className="creator-prompt"><h3>What are you learning from?</h3><p>Use your own files or a publicly readable link.</p></div>
+          <div className="questionnaire-mode" role="group" aria-label="Material type">
+            <button type="button" className="material-mode-card" aria-label="Generate from notes" aria-describedby="notes-mode-description" aria-pressed={inputMode === "notes"} onClick={() => { setInputMode("notes"); setError(""); }}>
+              <span className="material-mode-top" aria-hidden="true"><span className="material-mode-icon"><Sparkles size={21}/></span><span className="material-mode-state">{inputMode === "notes" && "Selected"}<span className="material-mode-indicator">{inputMode === "notes" && <Check size={13} strokeWidth={3}/>}</span></span></span>
+              <strong>Generate from notes</strong>
+              <span id="notes-mode-description" className="material-mode-description">Turn lessons and study notes into new questions.</span>
+            </button>
+            <button type="button" className="material-mode-card" aria-label="Import questionnaire" aria-describedby="questionnaire-mode-description" aria-pressed={inputMode === "questionnaire"} onClick={() => { setInputMode("questionnaire"); setSourceMode("file"); setError(""); }}>
+              <span className="material-mode-top" aria-hidden="true"><span className="material-mode-icon"><FileText size={21}/></span><span className="material-mode-state">{inputMode === "questionnaire" && "Selected"}<span className="material-mode-indicator">{inputMode === "questionnaire" && <Check size={13} strokeWidth={3}/>}</span></span></span>
+              <strong>Import questionnaire</strong>
+              <span id="questionnaire-mode-description" className="material-mode-description">Use existing questions and keep their original wording.</span>
+            </button>
+          </div>
           <div className="source-mode-toggle" id="study-source-toggle" role="group" aria-label="Choose a study material source">
             <button type="button" className={sourceMode === "file" ? "source-mode-choice chosen" : "source-mode-choice"} aria-pressed={sourceMode === "file"} onClick={() => { setSourceMode("file"); setError(""); }}><CloudUpload size={16}/> Upload materials</button>
             <button type="button" disabled={inputMode === "questionnaire"} className={sourceMode === "website" ? "source-mode-choice chosen" : "source-mode-choice"} aria-pressed={sourceMode === "website"} onClick={() => { setSourceMode("website"); setError(""); }}><Globe2 size={16}/> Public website</button>
             <button type="button" disabled={inputMode === "questionnaire"} className={sourceMode === "youtube" ? "source-mode-choice chosen" : "source-mode-choice"} aria-pressed={sourceMode === "youtube"} onClick={() => { setSourceMode("youtube"); setError(""); }}><Youtube size={16}/> YouTube</button>
-          </div>
-          <div className="questionnaire-mode" role="group" aria-label="Material type">
-            <button type="button" aria-pressed={inputMode === "notes"} onClick={() => setInputMode("notes")}>Generate from notes</button>
-            <button type="button" aria-pressed={inputMode === "questionnaire"} onClick={() => { setInputMode("questionnaire"); setSourceMode("file"); setError(""); }}>Import questionnaire</button>
           </div>
           {inputMode === "questionnaire" && <div className="questionnaire-help"><strong>Keep your original questions and answers.</strong><p>Import all questions (up to 200). Flashcards and identification show the correct answer without choices. Multiple choice keeps existing choices in order, or adds relevant choices to identification questions.</p><p>Use numbered questions or Q: / A: blocks, lettered choices, and Answer: lines or an Answer key section. Include key pages. Missing answers and new choices use AI and are marked for review. Text wording is preserved; scanned images may have OCR errors.</p></div>}
           {sourceMode === "file" ? <section className="materials-uploader">
