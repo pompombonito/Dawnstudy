@@ -21,6 +21,10 @@ def normalize(value):
 
 def correct_answer(card, kind, answer):
     expected = card.get("correct_answer") or card.get("answer", "")
+    if card.get("imported"):
+        values = answer if isinstance(answer, list) else [answer]
+        key = lambda value: re.sub(r"\s+", " ", value).strip().casefold()
+        return len(values) == 1 and isinstance(values[0], str) and key(values[0]) == key(expected)
     # Match whole options before splitting: commas may belong to an option.
     options = card.get("options", [])
     parts = expected if isinstance(expected, list) else str(expected).split("|")

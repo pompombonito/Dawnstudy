@@ -2,13 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
+import { importedAnswerMatches } from "../../imported-answers";
 import ThemePicker from "../../components/ThemePicker";
 import { applyTheme, DEFAULT_THEME, GUEST_THEME_STORAGE_KEY, normalizeTheme, readInitialTheme, THEME_STORAGE_KEY, SESSION_STORAGE_KEY, type Theme } from "../../community/themes";
 import { communityApi } from "../../community/api";
 import type { Bootstrap, Profile } from "../../community/types";
 import { ArrowUpRight, BookOpen, Check, ChevronLeft, ChevronRight, CircleHelp, ExternalLink, Maximize2, Minimize2, RotateCcw, Share2 } from "lucide-react";
 
-type SharedCard = { question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string; source_refs?: string[] };
+type SharedCard = { question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred" };
 type SharedSet = { title: string; type: string; items: SharedCard[]; sources?: { title: string; url: string }[] };
 type AnswerState = { selected: string | null; selectedMany: string[]; revealed: boolean };
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
@@ -179,6 +180,7 @@ export default function SharedStudySetPage() {
 
   function responseIsCorrect(item: SharedCard, saved: AnswerState | undefined) {
     if (!saved?.revealed || !studySet) return false;
+    if (item.imported) return importedAnswerMatches(item, studySet.type === "checkbox" ? saved.selectedMany : saved.selected);
     const raw = String(item.correct_answer || item.answer || "");
     const resolved = resolveChoiceAnswers(raw, item.options || []);
     const answers = (resolved.length ? resolved : raw.split("|")).map(normalizedAnswer).filter(Boolean);
@@ -193,9 +195,9 @@ export default function SharedStudySetPage() {
   const response = responses[index] || emptyAnswer();
   const rawExpectedAnswer = String(card?.correct_answer || card?.answer || "");
   const resolvedExpectedAnswers = resolveChoiceAnswers(rawExpectedAnswer, card?.options || []);
-  const expectedAnswer = resolvedExpectedAnswers.length ? resolvedExpectedAnswers.join(" | ") : rawExpectedAnswer;
+  const expectedAnswer = card?.imported ? rawExpectedAnswer : resolvedExpectedAnswers.length ? resolvedExpectedAnswers.join(" | ") : rawExpectedAnswer;
   const expectedAnswers = (resolvedExpectedAnswers.length ? resolvedExpectedAnswers : rawExpectedAnswer.split("|")).map(normalizedAnswer).filter(Boolean);
-  const isCorrect = (option: string) => expectedAnswers.includes(normalizedAnswer(option));
+  const isCorrect = (option: string) => card?.imported ? importedAnswerMatches(card, option) : expectedAnswers.includes(normalizedAnswer(option));
   const checkboxMode = studySet?.type === "checkbox";
   const identificationMode = studySet?.type === "identification";
   const scoreableCount = studySet ? studySet.items.filter((item) => Boolean(item.options?.length) || identificationMode).length : 0;

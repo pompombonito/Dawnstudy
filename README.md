@@ -1,12 +1,12 @@
 # Dawnstudy
 
-A student study desk that turns uploaded notes into flashcards, multiple-choice questions, select-all-that-apply questions, or identification prompts. Access currently requires a verified Google account ending in `@ceu.edu.ph`, `@mnl.ceu.edu.ph`, `@mkt.ceu.edu.ph`, or `@mls.ceu.edu.ph`, with one owner account exception. The interface is a Next.js app for Vercel; the Python API runs on Render and can use Groq, Gemini, Mistral, and OpenRouter's free-model router. The selected model is tried first and other configured models can help finish a partial response. Optional web enrichment uses Tavily Search and returns source links alongside the study set.
+A student study desk that turns uploaded notes into flashcards, multiple-choice questions, select-all-that-apply questions, or identification prompts. Access accepts any verified `@gmail.com` account, as well as existing CEU Google accounts. The interface is a Next.js app for Vercel; the Python API runs on Render and can use Groq, Gemini, Mistral, and OpenRouter's free-model router. The selected model is tried first and other configured models can help finish a partial response. Optional web enrichment uses Tavily Search and returns source links alongside the study set.
 
 ## Run locally
 
 1. Install Node.js 20 or newer. In the project root, run `npm install` and `npm run dev`.
 2. In `backend`, create a Python 3.11+ virtual environment, install `requirements.txt`, and start the API with `uvicorn main:app --reload --port 8000`.
-3. Add at least one server-side AI provider key (`GROQ_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`, or `OPENROUTER_API_KEY`). Auto mode chooses a model tier based on the upload, extracted text, and question count. It and manual selection can fall back across configured models if a model returns a rate-limit, service error, or incomplete response. Authorized students may generate up to 100 items in each format, with no Dawnstudy daily generation cap.
+3. Add at least one server-side AI provider key (`GROQ_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`, or `OPENROUTER_API_KEY`). Auto mode chooses a model tier based on the upload, extracted text, and question count. It and manual selection can fall back across configured models if a model returns a rate-limit, service error, or incomplete response. Authorized students may generate up to 200 items in each format, with no Dawnstudy daily generation cap.
 4. To enable the web-enrichment switch and PDF Finder, set `TAVILY_API_KEY` on the API. Without a key, web search features explain that the API is not configured.
 
 Supported materials are PDF, PowerPoint (`.pptx`), DOCX, TXT, Markdown, and PNG/JPG/JPEG/WEBP images up to 15 MB. Students can upload those files or paste a public webpage URL; pages that require sign-in or block public access return a clear access error. Direct links to supported file types can also be pasted. PowerPoint slides and PDF pages are labeled so generated cards can cite slide/page references. Uploaded images are OCR-processed with the bundled Tesseract engine and English language data before being sent to the selected AI model. The API truncates extracted content to a bounded context window before sending it to the model.
@@ -25,7 +25,7 @@ Create a Render web service from this repository using `render.yaml` (or configu
 
 **Model hosting:** Vercel hosts the frontend, Render hosts the API, and configured model providers run their hosted APIs. Render's compute plans provide CPU and RAM; neither service needs to load model weights for this architecture. Provider API keys stay on Render and are never sent to the browser. Configure `AI_MODEL_ORDER` to set model order; models added by Dawnstudy remain available even if Render has an older order value. Auto mode selects a compact, balanced, or larger-context model based on upload size, extracted text length, and requested question count. Auto and manual modes can try every configured model if a model returns a rate-limit, service error, invalid response, or incomplete response; complete questions from a partial response are retained and duplicates are skipped. Groq's supported models use strict JSON Schema output, and OpenRouter only routes requests to endpoints that honor the requested JSON format. OpenRouter adds free Qwen 3.8 and Gemma 4 choices; additional Mistral choices are available through the existing Mistral key and may be subject to that account's pricing and limits. Each provider request times out after 60 seconds. Dawnstudy cannot read shared live provider quota meters, and generation can stop if all tried models are rate-limited or unavailable.
 
-**Generation size and availability:** Each request accepts 1–100 questions; the UI offers 10 through 100 in steps of 10. All eligible signed-in accounts have no Dawnstudy daily generation cap. Generation no longer reserves or refunds daily usage counters; historical `AIUsage` rows are retained. AI providers still enforce their own quotas, and the active-job/queue protections remain in place. Partial results are saved and can be continued toward the original target.
+**Generation size and availability:** Each request accepts 1–200 questions; the UI offers 10 through 200 in steps of 10. All eligible signed-in accounts have no Dawnstudy daily generation cap. Generation no longer reserves or refunds daily usage counters; historical `AIUsage` rows are retained. AI providers still enforce their own quotas, and the active-job/queue protections remain in place. Partial results are saved and can be continued toward the original target.
 
 **Larger saved sets:** The API automatically extends `StudySets` with `items_json_2` through `items_json_10` and splits longer question JSON across cells within the existing per-cell size budget. Reads join the fragments before decoding JSON. Older single-cell sets remain readable, and updates clear unused fragments. Source-link and page-scope metadata retain their existing fields. No new credentials or manual data migration are needed.
 
@@ -39,7 +39,7 @@ Free services have limits: Render spins down after 15 minutes without traffic, a
 
 ### Google sign-in and Sheets storage
 
-Access requires Google sign-in through a Google Cloud OAuth client and a configured Google Sheet. Username/password and guest access are not available. Sign-in accepts verified Google accounts ending in `@ceu.edu.ph`, `@mnl.ceu.edu.ph`, `@mkt.ceu.edu.ph`, or `@mls.ceu.edu.ph`, plus the developer's `daquioagjairo30@gmail.com` account.
+Access requires Google sign-in through a Google Cloud OAuth client and a configured Google Sheet. Username/password and guest access are not available. Sign-in accepts any verified `@gmail.com` account and verified CEU Google accounts (`@ceu.edu.ph`, `@mnl.ceu.edu.ph`, `@mkt.ceu.edu.ph`, `@mls.ceu.edu.ph`). Token signature, audience, and verified-email checks remain required.
 
 1. In Google Cloud Console, create/select a project and enable the **Google Sheets API**.
 2. Create a Google spreadsheet. The API creates the `Users`, `StudySets`, `AIUsage`, `CardProgress`, `ReviewLogs`, `StudyShares`, and `CardReports` tabs and their header rows automatically on first account or generation use.
@@ -95,6 +95,35 @@ Profiles, classic and character themes with light/dark modes, companion chat, fr
 
 - `GET /api/health` reports API availability and the configured model fallback order; `GET /api/models` lists choices for manual selection.
 - `POST /api/material-search` searches for relevant learning resources using a topic, subject, book/article title, or tags. Results identify direct links to supported file formats when possible. It requires the same Tavily key as web enrichment and a bearer session token from an allowed Google account.
-- `POST /api/generate` accepts either a multipart `file` or public `source_url`, plus `format` (`flashcards`, `multiple_choice`, `checkbox`, `identification`), `use_web` (`true`/`false`), `model` (`auto` or a configured model ID), and optional `question_count` (1–100). It requires a bearer session token from an allowed Google account.
+- `POST /api/generate` accepts either a multipart `file` or public `source_url`, plus `format` (`flashcards`, `multiple_choice`, `checkbox`, `identification`), `use_web` (`true`/`false`), `model` (`auto` or a configured model ID), and optional `question_count` (1–200). It requires a bearer session token from an allowed Google account.
 
 Uploaded file contents are held in memory for extraction and generation. `POST /api/auth/google` verifies and allowlists Google sign-in, `GET /api/auth/me` returns the signed-in profile, and `GET/POST/DELETE /api/study-sets` list, save, and delete the signed-in user's study sets. `POST /api/study-sets/{id}/share`, `DELETE /api/study-sets/{id}/share`, and `GET /api/shared/{token}` create, revoke, and read tokenized share links. `POST /api/reports` lets signed-in students report a card. `GET /api/reviews/due`, `POST /api/reviews`, and `GET /api/progress` provide due cards, Anki-style Again/Hard/Good/Easy scheduling, and review/streak statistics. Study schedules and review history are stored in the `CardProgress` and `ReviewLogs` tabs; reports and share links are stored in their corresponding tabs. Generation and account endpoints require the bearer token returned by sign-in.
+
+
+### Import an existing questionnaire
+
+Choose **Import questionnaire** in the material step, upload the questionnaire (and its answer key, if separate), then choose the quiz format. All recognized questions are imported in source order, up to 200; the notes-generation count and difficulty do not apply.
+
+- Flashcards / identification keep each question and only its correct answer, without choices.
+- Multiple choice keeps the original choice text and order. Identification questions receive three AI-generated distractors alongside the original answer.
+- Missing answers are inferred by the configured model and marked for review. Supplied answers are never overwritten by AI. Fully keyed imports needing no new choices make no model calls.
+- Imported items retain their order on reopening, saving, sharing, and refresh. Existing history never excludes questions from an import.
+- Import is atomic: conflicting keys, unsupported layouts, model omissions, and oversized questionnaires return an error rather than silently dropping questions. Cancellation remains available before saving.
+
+Use numbered questions (`1. Question`), consecutive lettered choices (`A. Choice`), and `Answer: text` lines or a numbered `Answer key` section. `Q:` / `A:` blocks and same-line lettered choices are also supported. Include answer-key pages in the page selection; question numbers must be unique across files. This preserves text wording, not original typography or document layout. OCR can misread photographs; scanned PDFs need OCR before uploading. Review inferred answers and generated distractors before studying or sharing.
+
+Example:
+
+```text
+1. Which organelle releases usable energy?
+A. Nucleus
+B. Mitochondrion
+C. Ribosome
+D. Cell membrane
+
+2. Identify the green pigment in plants.
+
+Answer key:
+1. B
+2. Chlorophyll
+```

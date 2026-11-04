@@ -86,13 +86,13 @@ try {
       requested =
         req.postData().match(/name="question_count"\r\n\r\n(\d+)/)?.[1] || "";
       saved = {
-        id: "quiz-100",
+        id: "quiz-200",
         title: "A hundred questions",
         type: "multiple_choice",
         created_at: new Date().toISOString(),
-        requested_count: 100,
+        requested_count: 200,
         incomplete: false,
-        items: Array.from({ length: 100 }, (_, i) => ({
+        items: Array.from({ length: 200 }, (_, i) => ({
           card_id: `card-${i}`,
           question: `Question ${i + 1}?`,
           answer: "Alpha",
@@ -108,11 +108,11 @@ try {
         },
       };
       data = {
-        job_id: "job-100",
+        job_id: "job-200",
         status: "complete",
         stage: "complete",
-        completed: 100,
-        requested: 100,
+        completed: 200,
+        requested: 200,
         result: saved,
       };
       status = 202;
@@ -127,10 +127,10 @@ try {
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  await page.goto("http://localhost:3033");
+  await page.goto(process.env.DAWNSTUDY_TEST_URL || "http://127.0.0.1:3044");
   await page.getByRole("button", { name: "Choose practice" }).click();
-  await page.locator("#question-count").selectOption("100");
-  assert.equal(await page.locator("#question-count option").count(), 10);
+  await page.locator("#question-count").selectOption("200");
+  assert.equal(await page.locator("#question-count option").count(), 20);
   assert(
     !(await page.evaluate(
       () => document.documentElement.scrollWidth > innerWidth + 1,
@@ -138,11 +138,11 @@ try {
   );
   await page.getByRole("button", { name: /Multiple choice/ }).click();
   await page.getByRole("button", { name: "Review & create" }).click();
-  await page.getByText("100 questions", { exact: false }).first().waitFor();
+  await page.getByText("200 questions", { exact: false }).first().waitFor();
   await page.getByText("About generation", { exact: true }).click();
   await page
     .getByText(
-      /Create up to 100 questions per set, with no daily generation limit/,
+      /Create up to 200 questions per set, with no daily generation limit/,
     )
     .waitFor();
   assert.equal(
@@ -167,7 +167,7 @@ try {
   await page.getByRole("button", { name: "Review & create" }).click();
   await page.getByRole("button", { name: "Create study set" }).click();
   await page.getByRole("heading", { name: "A hundred questions" }).waitFor();
-  assert.equal(requested, "100");
+  assert.equal(requested, "200");
   assert.equal(
     await page
       .getByText(/generations left today|5 generations per day/)
@@ -176,7 +176,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    "PASS: mobile 100-question selection, no daily-cap messaging, 100-question request and completed result render without errors.",
+    "PASS: mobile 200-question selection, no daily-cap messaging, 200-question request and completed result render without errors.",
   );
 } finally {
   await browser.close();

@@ -1,6 +1,7 @@
 "use client";
 
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import { importedAnswerMatches } from "./imported-answers";
 import Avatar from "./components/Avatar";
 import ThemePicker from "./components/ThemePicker";
 import { applyTheme, DEFAULT_THEME, GUEST_THEME_STORAGE_KEY, getTheme, normalizeTheme, readInitialTheme, THEME_STORAGE_KEY } from "./community/themes";
@@ -23,7 +24,7 @@ import {
 } from "lucide-react";
 
 type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification";
-type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string; source_refs?: string[] };
+type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred" };
 type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; source_url?: string; created_at: string; material_fingerprint?: string; page_ranges?: Record<string, string>; focus_topic?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; usage?: { remaining: number | null; limit: number | null; resets_at: string | null; unlimited?: boolean } };
 type ActiveShare = { set_id: string; title: string; token: string; created_at: string };
 type ReviewItem = { study_set_id: string; study_set_title: string; type: Kind; card: Card; retried?: boolean; intervals: { again: string; hard: string; good: string; easy: string } };
@@ -147,12 +148,14 @@ function choiceAnswerOptions(answer: unknown, options: string[]) {
 
 function displayCorrectAnswer(card: Card) {
   const answer = card.correct_answer || card.answer;
+  if (card.imported) return answer;
   const resolved = choiceAnswerOptions(answer, card.options || []);
   return resolved.length ? resolved.join(" | ") : answer;
 }
 
 function isPracticeAnswerCorrect(card: Card, type: Kind, response: PracticeAnswer | undefined) {
   if (response === null || response === undefined) return false;
+  if (card.imported) return importedAnswerMatches(card, response);
   const rawExpected = card.correct_answer || card.answer || "";
   const resolved = choiceAnswerOptions(rawExpected, card.options || []);
   const expected = (resolved.length ? resolved : String(rawExpected).split("|")).map(normalizedAnswer).filter(Boolean).sort();
@@ -169,6 +172,7 @@ function displayPracticeAnswer(response: PracticeAnswer | undefined) {
 }
 
 function shuffleSavedItems(items: Card[], kind: Kind) {
+  if (items.some((card) => card.imported)) return [...items];
   let previousCorrectIndex: number | null = null;
   return shuffleItems(items).map((card) => {
     const options = [...(card.options || [])];
@@ -194,6 +198,7 @@ function shuffleSavedItems(items: Card[], kind: Kind) {
 
 export default function Home() {
   const [selected, setSelected] = useState<Kind>("flashcards");
+  const [inputMode, setInputMode] = useState<"notes" | "questionnaire">("notes");
   const [files, setFiles] = useState<File[]>([]);
   const [pageRanges, setPageRanges] = useState<Record<string, string>>({});
   const [websitePageRange, setWebsitePageRange] = useState("");
@@ -676,6 +681,7 @@ export default function Home() {
 
   async function applyGenerationResult(data: GenerationResult, token: string, signal: AbortSignal, base?: StudySet) {
     let studySet: GenerationResult = { ...data, id: data.id || crypto.randomUUID(), created_at: data.created_at || new Date().toISOString() };
+    setInputMode(data.items.some((card) => card.imported) ? "questionnaire" : "notes");
     const legacyContinuation = base && data.continued_set_id !== base.id;
     if (legacyContinuation) {
       const target = base.requested_count || base.items.length;
@@ -843,7 +849,7 @@ export default function Home() {
     if (busy || continueBusy || generationNeedsReconnect || generationController.current) return;
     if (!authToken || !account) {
       setAuthOpen(true);
-      setError("Sign in with your verified CEU Google account (@ceu.edu.ph, @mnl.ceu.edu.ph, @mkt.ceu.edu.ph, or @mls.ceu.edu.ph) to make a study set.");
+      setError("Sign in with a verified Gmail or CEU Google account to make a study set.");
       return;
     }
     if (sourceMode === "file" && !files.length) { setComposerStep(0); setError("Choose at least one study material first."); return; }
@@ -853,7 +859,8 @@ export default function Home() {
     const form = new FormData();
     if (sourceMode === "file") files.forEach((selectedFile) => form.append("files", selectedFile));
     else form.append("source_url", websiteUrl.trim());
-    form.append("format", selected); form.append("use_web", String(web));
+    form.append("input_mode", inputMode);
+    form.append("format", selected); form.append("use_web", String(inputMode === "notes" && web));
     form.append("model", modelChoice);
     form.append("question_count", String(questionCount));
     form.append("difficulty", difficulty);
@@ -861,7 +868,7 @@ export default function Home() {
       ? Object.fromEntries(Object.entries(pageRanges).filter(([, value]) => value.trim()))
       : websitePageRange.trim() ? { "0": websitePageRange.trim() } : {};
     form.append("page_ranges", JSON.stringify(requestPageRanges));
-    form.append("focus_topic", focusTopic.trim());
+    form.append("focus_topic", inputMode === "notes" ? focusTopic.trim() : "");
     await runGeneration(form);
   }
 
@@ -871,7 +878,7 @@ export default function Home() {
     setFinderSearched(false);
     setFinderResults([]);
     if (!authToken || !account) {
-      setFinderError("Sign in with your CEU Google account to search for learning materials.");
+      setFinderError("Sign in with your Google account to search for learning materials.");
       setAuthOpen(true);
       return;
     }
@@ -904,6 +911,7 @@ export default function Home() {
   }
 
   function useFinderMaterial(resource: MaterialSearchResult) {
+    setInputMode("notes");
     setActiveView("study");
     setResult(null);
     setReviewActive(false);
@@ -954,7 +962,7 @@ export default function Home() {
     setBusy(false); setContinueBusy(false); setGenerationStatus(null); setGenerationNeedsReconnect(false);
     localStorage.removeItem(TOKEN_KEY); setAuthToken(""); setAccount(null); setSets([]); setActiveShares([]); setResult(null); setProgress(null); setReviewActive(false); setReviewQueue([]);
     restoreGuestTheme();
-    setNotice("You’re signed out. Sign in with your CEU Google account to continue using Dawnstudy.");
+    setNotice("You’re signed out. Sign in with your Google account to continue using Dawnstudy.");
   }
 
   async function removeStudySet(studySet: StudySet) {
@@ -974,6 +982,7 @@ export default function Home() {
   }
 
   function openSavedSet(studySet: StudySet) {
+    setInputMode(studySet.items.some((card) => card.imported) ? "questionnaire" : "notes");
     setActiveView("study");
     if (studySet.incomplete && !studySet.source_url) setFiles([]);
     setSourceMode(studySet.source_url ? /(?:youtube\.com|youtu\.be)/i.test(studySet.source_url) ? "youtube" : "website" : "file");
@@ -1035,7 +1044,7 @@ export default function Home() {
 
   function beginVoiceReview() {
     if (!authToken || !account) {
-      setAuthOpen(true); setVoiceError("Sign in with your verified CEU Google account to use Voice Review.");
+      setAuthOpen(true); setVoiceError("Sign in with your verified Google account to use Voice Review.");
       return;
     }
     if (voiceTopic.trim().length < 2) { setVoiceError("Enter a topic you want to review first."); return; }
@@ -1246,7 +1255,7 @@ export default function Home() {
   function renderMultipleChoice(card: Card) {
     const correctOptions = choiceAnswerOptions(card.correct_answer || card.answer, card.options || []);
     const correctAnswers = correctOptions.length ? correctOptions.map(normalizedAnswer) : [normalizedAnswer(card.correct_answer || card.answer)];
-    const isCorrect = (option: string) => correctAnswers.includes(normalizedAnswer(option));
+    const isCorrect = (option: string) => card.imported ? importedAnswerMatches(card, option) : correctAnswers.includes(normalizedAnswer(option));
     const selectedAnswer = selectedOption === null ? undefined : card.options?.[selectedOption];
     const selectedIsCorrect = Boolean(selectedAnswer && isCorrect(selectedAnswer));
     return <div className={`study-face choice-study-face ${revealed ? "is-revealed" : ""}`}>
@@ -1269,10 +1278,10 @@ export default function Home() {
     const setSelectedAnswers = isReview ? setReviewSelectedOptions : setStudySelectedOptions;
     const correctOptions = choiceAnswerOptions(card.correct_answer || card.answer, card.options || []);
     const correctKeys = correctOptions.map(normalizedAnswer);
-    const isCorrect = (option: string) => correctKeys.includes(normalizedAnswer(option));
+    const isCorrect = (option: string) => card.imported ? importedAnswerMatches(card, option) : correctKeys.includes(normalizedAnswer(option));
     const typedAnswer = isReview ? reviewIdentificationAnswer : studyIdentificationAnswer;
     const setTypedAnswer = isReview ? setReviewIdentificationAnswer : setStudyIdentificationAnswer;
-    const exact = card.options?.length
+    const exact = card.imported ? importedAnswerMatches(card, card.options?.length ? selectedAnswers : typedAnswer) : card.options?.length
       ? selectedAnswers.length === correctOptions.length && selectedAnswers.every(isCorrect)
       : isPracticeAnswerCorrect(card, "checkbox", typedAnswer);
     return <div className={"study-face choice-study-face" + (revealed ? " is-revealed" : "")}>
@@ -1339,11 +1348,11 @@ export default function Home() {
         <div className="sidebar-bottom">
           <div className="sidebar-note"><DawnMark/><p>Built for class notes.<br/><strong>Made for your next exam.</strong></p><span>DAWNSTUDY BY DEVON</span></div>
           <button className={`nav-item about-nav ${activeView === "about" ? "active" : ""}`} title="About Dawnstudy" aria-current={activeView === "about" ? "page" : undefined} onClick={() => navigateTo("about")}><span className="nav-icon"><CircleHelp size={20}/></span><span className="nav-label">About Dawnstudy</span></button>
-          <div className="profile"><button className="profile-avatar-button" onClick={() => account ? navigateTo("profile") : setAuthOpen(true)} aria-label="Open profile"><Avatar id={community.data?.profile?.avatar_id || "cat"}/></button><span className="profile-name">{community.data?.profile?.nickname || account?.display_name || "Your study space"}<small>{account ? "CEU workspace" : "Sign in to get started"}</small></span><button className="profile-menu" title={account ? "Sign out" : "Sign in"} aria-label={account ? "Sign out" : "Sign in"} onClick={() => account ? signOut() : setAuthOpen(true)}>{account ? <LogOut size={17}/> : <ArrowUpRight size={18}/>}</button></div>
+          <div className="profile"><button className="profile-avatar-button" onClick={() => account ? navigateTo("profile") : setAuthOpen(true)} aria-label="Open profile"><Avatar id={community.data?.profile?.avatar_id || "cat"}/></button><span className="profile-name">{community.data?.profile?.nickname || account?.display_name || "Your study space"}<small>{account ? "Study workspace" : "Sign in to get started"}</small></span><button className="profile-menu" title={account ? "Sign out" : "Sign in"} aria-label={account ? "Sign out" : "Sign in"} onClick={() => account ? signOut() : setAuthOpen(true)}>{account ? <LogOut size={17}/> : <ArrowUpRight size={18}/>}</button></div>
         </div>
       </aside>
       <section className="main-area" id="home">
-        <header className="topbar"><div className="topbar-left"><button className="mobile-brand" type="button" aria-label="Dawnstudy home" onClick={() => navigateTo("study")}><DawnMark/></button><div className="crumb"><span>YOUR SPACE</span><b>{viewTitle[activeView]}</b></div></div><div className="top-actions">{account && <button className="online-friends" title="Recently online friends" onClick={() => navigateTo("friends")} aria-label={`${community.data?.friends.filter(p => p.online).length || 0} friends online`}><span className="online-friend-faces">{community.data?.friends.filter(p => p.online).slice(0, 3).map(p => <Avatar key={p.id} id={p.avatar_id}/>)}</span><Users size={16}/><span>{community.data?.friends.filter(p => p.online).length || 0} online</span></button>}{generationStatus && <button className="activity-pill" onClick={() => navigateTo("study")}><span/>{generationNeedsReconnect ? "Reconnect" : generationStopping ? "Stopping" : "Generating"}</button>}<ThemePicker value={theme} onChange={chooseTheme}/><span className="workspace-label"><span/> CEU WORKSPACE</span><button className="top-account" onClick={() => account ? signOut() : setAuthOpen(true)} title={account ? "Sign out" : "Sign in"}>{account ? <LogOut size={18}/> : <UserRound size={18}/>}<span>{account ? "Sign out" : "Sign in"}</span></button></div></header>
+        <header className="topbar"><div className="topbar-left"><button className="mobile-brand" type="button" aria-label="Dawnstudy home" onClick={() => navigateTo("study")}><DawnMark/></button><div className="crumb"><span>YOUR SPACE</span><b>{viewTitle[activeView]}</b></div></div><div className="top-actions">{account && <button className="online-friends" title="Recently online friends" onClick={() => navigateTo("friends")} aria-label={`${community.data?.friends.filter(p => p.online).length || 0} friends online`}><span className="online-friend-faces">{community.data?.friends.filter(p => p.online).slice(0, 3).map(p => <Avatar key={p.id} id={p.avatar_id}/>)}</span><Users size={16}/><span>{community.data?.friends.filter(p => p.online).length || 0} online</span></button>}{generationStatus && <button className="activity-pill" onClick={() => navigateTo("study")}><span/>{generationNeedsReconnect ? "Reconnect" : generationStopping ? "Stopping" : "Generating"}</button>}<ThemePicker value={theme} onChange={chooseTheme}/><span className="workspace-label"><span/> STUDY WORKSPACE</span><button className="top-account" onClick={() => account ? signOut() : setAuthOpen(true)} title={account ? "Sign out" : "Sign in"}>{account ? <LogOut size={18}/> : <UserRound size={18}/>}<span>{account ? "Sign out" : "Sign in"}</span></button></div></header>
         <div className="content">
           {(error || notice) && <div className="workspace-feedback" aria-live="polite">{error && <div className="error-box"><CircleHelp size={18}/><span>{error}</span><button className="plain-icon" aria-label="Dismiss error" onClick={() => setError("")}><X size={16}/></button></div>}{notice && <div className="notice-box"><Check size={18}/><span>{notice}</span><button className="plain-icon" aria-label="Dismiss message" onClick={() => setNotice("")}><X size={16}/></button></div>}</div>}
           {generationStatus && <div className="generation-status" role="status" aria-live="polite">
@@ -1361,7 +1370,7 @@ export default function Home() {
           </div>}
           {community.error && account && <div className="social-error" role="alert">{community.error} <button className="text-button" onClick={() => void community.refresh()}>Retry profile connection</button></div>}
           {activeView === "agreement" && <div className="workspace-view social-card agreement-page"><Agreement/></div>}
-          {(["friends", "games", "profile"] as WorkspaceView[]).includes(activeView) && !community.data?.profile?.onboarded && <div className="social-card social-empty"><h2>{account ? "Getting your space ready…" : "A little better together."}</h2><p>{account ? "Complete your profile to join the community." : "Sign in with your CEU account to meet friends and play together."}</p><button className="social-button primary" onClick={() => account ? void community.refresh() : setAuthOpen(true)}>{account ? "Retry" : "Sign in"}</button></div>}
+          {(["friends", "games", "profile"] as WorkspaceView[]).includes(activeView) && !community.data?.profile?.onboarded && <div className="social-card social-empty"><h2>{account ? "Getting your space ready…" : "A little better together."}</h2><p>{account ? "Complete your profile to join the community." : "Sign in with your Google account to meet friends and play together."}</p><button className="social-button primary" onClick={() => account ? void community.refresh() : setAuthOpen(true)}>{account ? "Retry" : "Sign in"}</button></div>}
           {community.data?.profile?.onboarded && activeView === "friends" && <FriendsPage community={community} initialPerson={friendToOpen} profile={() => navigateTo("profile")}/>}
           {community.data?.profile?.onboarded && activeView === "games" && <GameRoom community={community} sets={sets} initialSet={gameSet} friends={() => navigateTo("friends")}/>}
           {community.data?.profile?.onboarded && activeView === "profile" && <ProfilePage community={community} setTheme={setColorTheme} agreement={() => navigateTo("agreement")}/>}
@@ -1376,9 +1385,14 @@ export default function Home() {
                   {composerStep === 0 && <div className="creator-material"><div className="creator-prompt"><h3>What are you learning from?</h3><p>Use your own files or a publicly readable link.</p></div>
           <div className="source-mode-toggle" id="study-source-toggle" role="group" aria-label="Choose a study material source">
             <button type="button" className={sourceMode === "file" ? "source-mode-choice chosen" : "source-mode-choice"} aria-pressed={sourceMode === "file"} onClick={() => { setSourceMode("file"); setError(""); }}><CloudUpload size={16}/> Upload materials</button>
-            <button type="button" className={sourceMode === "website" ? "source-mode-choice chosen" : "source-mode-choice"} aria-pressed={sourceMode === "website"} onClick={() => { setSourceMode("website"); setError(""); }}><Globe2 size={16}/> Public website</button>
-            <button type="button" className={sourceMode === "youtube" ? "source-mode-choice chosen" : "source-mode-choice"} aria-pressed={sourceMode === "youtube"} onClick={() => { setSourceMode("youtube"); setError(""); }}><Youtube size={16}/> YouTube</button>
+            <button type="button" disabled={inputMode === "questionnaire"} className={sourceMode === "website" ? "source-mode-choice chosen" : "source-mode-choice"} aria-pressed={sourceMode === "website"} onClick={() => { setSourceMode("website"); setError(""); }}><Globe2 size={16}/> Public website</button>
+            <button type="button" disabled={inputMode === "questionnaire"} className={sourceMode === "youtube" ? "source-mode-choice chosen" : "source-mode-choice"} aria-pressed={sourceMode === "youtube"} onClick={() => { setSourceMode("youtube"); setError(""); }}><Youtube size={16}/> YouTube</button>
           </div>
+          <div className="questionnaire-mode" role="group" aria-label="Material type">
+            <button type="button" aria-pressed={inputMode === "notes"} onClick={() => setInputMode("notes")}>Generate from notes</button>
+            <button type="button" aria-pressed={inputMode === "questionnaire"} onClick={() => { setInputMode("questionnaire"); setSourceMode("file"); setError(""); }}>Import questionnaire</button>
+          </div>
+          {inputMode === "questionnaire" && <div className="questionnaire-help"><strong>Keep your original questions and answers.</strong><p>Import all questions (up to 200). Flashcards and identification show the correct answer without choices. Multiple choice keeps existing choices in order, or adds relevant choices to identification questions.</p><p>Use numbered questions or Q: / A: blocks, lettered choices, and Answer: lines or an Answer key section. Include key pages. Missing answers and new choices use AI and are marked for review. Text wording is preserved; scanned images may have OCR errors.</p></div>}
           {sourceMode === "file" ? <section className="materials-uploader">
             <div className={"upload-zone " + (dragging ? "dragging" : "")} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); selectFiles(event.dataTransfer.files); }}>
               <span className="upload-icon"><CloudUpload size={23}/></span>
@@ -1395,14 +1409,14 @@ export default function Home() {
               </article>;
             })}</div>}
           </section> : <section className="website-source-zone"><label htmlFor="website-source-url">{sourceMode === "youtube" ? "Public YouTube video" : "Public website link"}</label><div className="website-source-input"><Globe2 size={17}/><input id="website-source-url" type="url" inputMode="url" value={websiteUrl} onChange={(event) => setWebsiteUrl(event.target.value)} maxLength={2048} placeholder={sourceMode === "youtube" ? "https://www.youtube.com/watch?v=…" : "https://example.edu/biology/cell-division"}/><button type="button" onClick={() => setWebsiteUrl("")} disabled={!websiteUrl} aria-label="Clear website link"><X size={16}/></button></div><small>{sourceMode === "youtube" ? "Captions first, then video understanding if available. Public videos only; some videos cannot be read. Use the topic field to focus your quiz." : "Public pages only. Pages requiring sign-in will show a specific access message."}</small>{sourceMode !== "youtube" && <label className="file-page-range website-page-range">Pages <span>(optional, for direct PDF links)</span><input value={websitePageRange} onChange={(event) => setWebsitePageRange(event.target.value)} maxLength={120} placeholder="All pages, or 1-5, 8, 12-15"/></label>}</section>}
-                    <details className="scope-details"><summary><span><FileText size={17}/> Focus on a topic or chapter <small>OPTIONAL</small></span><ChevronDown size={16}/></summary><label className="focus-topic-field"><span>Topic or chapter</span><input value={focusTopic} onChange={(event) => setFocusTopic(event.target.value)} maxLength={300} placeholder="e.g. Chapter 4: cellular respiration"/><small>Leave blank to use all the selected material.</small></label></details>
+                    {inputMode === "notes" && <details className="scope-details"><summary><span><FileText size={17}/> Focus on a topic or chapter <small>OPTIONAL</small></span><ChevronDown size={16}/></summary><label className="focus-topic-field"><span>Topic or chapter</span><input value={focusTopic} onChange={(event) => setFocusTopic(event.target.value)} maxLength={300} placeholder="e.g. Chapter 4: cellular respiration"/><small>Leave blank to use all the selected material.</small></label></details>}
                     <button type="button" className="finder-shortcut" onClick={() => navigateTo("finder")}><Search size={17}/><span>No material yet? <b>Find something to study</b></span><ArrowUpRight size={17}/></button>
                   </div>}
                   {composerStep === 1 && <div className="creator-practice"><div className="creator-prompt"><h3>How do you want to practice?</h3><p>Choose the format that works for you.</p></div>
           <div className="type-grid">{types.map(({ id, title, detail, icon: Icon }) => <button key={id} className={`type-card ${selected === id ? "chosen" : ""}`} onClick={() => { setSelected(id); setResult(null); setCurrent(0); resetStudyAnswer(); resetReviewAnswer(); setError(""); }}><span className="type-icon"><Icon size={19}/></span><span className="type-text"><strong>{title}</strong><small>{detail}</small></span>{selected === id && <span className="check-icon"><Check size={13} strokeWidth={3}/></span>}</button>)}</div>
-                    <div className="session-options"><label htmlFor="question-count">Questions<select id="question-count" value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{[10,20,30,40,50,60,70,80,90,100].map((count) => <option key={count} value={count}>{count} questions</option>)}</select></label><fieldset className="difficulty-choice"><legend>Difficulty</legend><div>{["easy", "medium", "hard"].map((level) => <button type="button" key={level} aria-pressed={difficulty === level} className={difficulty === level ? "selected" : ""} onClick={() => setDifficulty(level as "easy" | "medium" | "hard")}>{level}</button>)}</div></fieldset></div>
+                    {inputMode === "questionnaire" ? <p className="questionnaire-help">All imported questions · original wording and difficulty. Missing answers will be inferred and marked for review.</p> : <div className="session-options"><label htmlFor="question-count">Questions<select id="question-count" value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{Array.from({ length: 20 }, (_, index) => (index + 1) * 10).map((count) => <option key={count} value={count}>{count} questions</option>)}</select></label><fieldset className="difficulty-choice"><legend>Difficulty</legend><div>{["easy", "medium", "hard"].map((level) => <button type="button" key={level} aria-pressed={difficulty === level} className={difficulty === level ? "selected" : ""} onClick={() => setDifficulty(level as "easy" | "medium" | "hard")}>{level}</button>)}</div></fieldset></div>}
                   </div>}
-                  {composerStep === 2 && <div className="creator-ready"><div className="creator-prompt"><h3>Your next session, ready to go.</h3><p>A quick look before we bring your material to life.</p></div><div className="session-summary"><span className="summary-icon"><BookOpen size={25}/></span><div><strong>{types.find((type) => type.id === selected)?.title}</strong><span>{questionCount} questions <i/> {difficulty} difficulty</span><small>{sourceMode === "file" ? files.length ? `${files.length} material${files.length === 1 ? "" : "s"} selected` : "Add your material in step 1" : websiteUrl.trim() ? sourceMode === "youtube" ? "YouTube video selected" : "Public website selected" : "Add a link in step 1"}{focusTopic ? ` · ${focusTopic}` : ""}</small></div><button type="button" className="plain-icon" aria-label="Edit practice choices" onClick={() => setComposerStep(1)}><ArrowUpRight size={18}/></button></div><label className="model-choice-field" htmlFor="model-choice"><span><Cpu size={18}/> AI model</span><select id="model-choice" value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}><option value="auto">Auto choose the best available model</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select></label><div className="options-row"><button type="button" className={`web-toggle ${web ? "on" : ""}`} aria-pressed={web} onClick={() => setWeb(!web)}><span className="toggle-track"><span/></span><span><b>Enrich with the web</b><small>Add relevant context and source links.</small></span><Globe2 size={19}/></button></div><details className="model-help-details"><summary>About generation <ChevronDown size={14}/></summary><p className="model-help">Create up to 100 questions per set, with no daily generation limit. AI providers may still have their own usage limits. If a model is busy, another available model can help. Completed questions are saved, and partial sets can be continued.</p></details></div>}
+                  {composerStep === 2 && <div className="creator-ready"><div className="creator-prompt"><h3>Your next session, ready to go.</h3><p>A quick look before we bring your material to life.</p></div><div className="session-summary"><span className="summary-icon"><BookOpen size={25}/></span><div><strong>{types.find((type) => type.id === selected)?.title}</strong><span>{inputMode === "questionnaire" ? "All imported questions · original wording" : <>{questionCount} questions <i/> {difficulty} difficulty</>}</span><small>{sourceMode === "file" ? files.length ? `${files.length} material${files.length === 1 ? "" : "s"} selected` : "Add your material in step 1" : websiteUrl.trim() ? sourceMode === "youtube" ? "YouTube video selected" : "Public website selected" : "Add a link in step 1"}{inputMode === "notes" && focusTopic ? ` · ${focusTopic}` : ""}</small></div><button type="button" className="plain-icon" aria-label="Edit practice choices" onClick={() => setComposerStep(1)}><ArrowUpRight size={18}/></button></div><label className="model-choice-field" htmlFor="model-choice"><span><Cpu size={18}/> AI model</span><select id="model-choice" value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}><option value="auto">Auto choose the best available model</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select></label>{inputMode === "notes" && <div className="options-row"><button type="button" className={`web-toggle ${web ? "on" : ""}`} aria-pressed={web} onClick={() => setWeb(!web)}><span className="toggle-track"><span/></span><span><b>Enrich with the web</b><small>Add relevant context and source links.</small></span><Globe2 size={19}/></button></div>}<details className="model-help-details"><summary>About generation <ChevronDown size={14}/></summary><p className="model-help">{inputMode === "questionnaire" ? "Imports preserve all recognized items, up to 200. AI is only used for missing answers or new choices. Supply an answer key for questions that need context. Ambiguous layouts or conflicting keys must be corrected before import." : <>Create up to 200 questions per set, with no daily generation limit. AI providers may still have their own usage limits. If a model is busy, another available model can help. Completed questions are saved, and partial sets can be continued.</>}</p></details></div>}
                 </div>
                 <div className="creator-footer"><span className="creator-footer-note">{composerStep === 0 ? <><Leaf size={15}/> One small step starts it.</> : <button type="button" className="creator-back" onClick={() => setComposerStep((step) => Math.max(0, step - 1))}><ChevronLeft size={16}/> Back</button>}</span>{composerStep < 2 ? <button className="creator-next" type="button" onClick={() => setComposerStep((step) => step + 1)}>{composerStep === 0 ? "Choose practice" : "Review & create"}<ArrowRight size={18}/></button> : <button className="generate-button" onClick={generate} disabled={busy || continueBusy || generationNeedsReconnect}>{busy ? <><span className="spinner"/> Generating...</> : <>Create study set <ArrowRight size={18}/></>}</button>}</div>
               </section>
@@ -1413,7 +1427,7 @@ export default function Home() {
               </aside>
             </div>
           </> : <div className="session-topline"><div><span className="section-overline">YOUR FOCUS SPACE</span><h1>One idea at a time.</h1></div><button type="button" className="outline-button" disabled={busy || continueBusy || generationNeedsReconnect} onClick={beginStudySet}><Plus size={17}/> New study set</button></div>}
-          {reviewActive && <section className="review-panel"><div className="result-head"><div><div className="result-kicker"><span/> SPACED REPETITION</div><h2>{reviewQueue.length ? reviewQueue[0].study_set_title : "Review complete"}</h2><p>{reviewQueue.length ? `${reviewQueue.length} cards in this session · ${reviewQueue[0].type.replaceAll("_", " ")}` : "You’re all caught up for now. Nice work showing up."}</p></div><button className="plain-icon" title="Close review" onClick={() => { setReviewActive(false); setReviewQueue([]); setSelectedOption(null); }}><X size={18}/></button></div>{reviewQueue.length ? <div className="study-card"><div className="study-card-top"><span className="flashcard-label">REVIEW {reviewQueue.length} LEFT</span></div>{renderCardInteraction(reviewQueue[0].card, reviewQueue[0].type, true)}{revealed && reviewQueue[0].card.explanation && <p className="explanation">{reviewQueue[0].card.explanation}</p>}{revealed && <div className="rating-row"><button disabled={reviewBusy} onClick={() => void gradeCard("again")}><b>Again</b><small>{reviewQueue[0].intervals.again}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("hard")}><b>Hard</b><small>{reviewQueue[0].intervals.hard}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("good")}><b>Good</b><small>{reviewQueue[0].intervals.good}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("easy")}><b>Easy</b><small>{reviewQueue[0].intervals.easy}</small></button></div>}</div> : <button className="review-done" onClick={() => { setReviewActive(false); setReviewQueue([]); }}>Back to study desk <ChevronRight size={15}/></button>}</section>}
+          {reviewActive && <section className="review-panel"><div className="result-head"><div><div className="result-kicker"><span/> SPACED REPETITION</div><h2>{reviewQueue.length ? reviewQueue[0].study_set_title : "Review complete"}</h2><p>{reviewQueue.length ? `${reviewQueue.length} cards in this session · ${reviewQueue[0].type.replaceAll("_", " ")}` : "You’re all caught up for now. Nice work showing up."}</p></div><button className="plain-icon" title="Close review" onClick={() => { setReviewActive(false); setReviewQueue([]); setSelectedOption(null); }}><X size={18}/></button></div>{reviewQueue.length ? <div className="study-card"><div className="study-card-top"><span className="flashcard-label">REVIEW {reviewQueue.length} LEFT</span></div>{reviewQueue[0].card.answer_origin === "inferred" && <p className="import-review-note">AI-inferred answer · review for accuracy</p>}{renderCardInteraction(reviewQueue[0].card, reviewQueue[0].type, true)}{revealed && reviewQueue[0].card.explanation && <p className="explanation">{reviewQueue[0].card.explanation}</p>}{revealed && <div className="rating-row"><button disabled={reviewBusy} onClick={() => void gradeCard("again")}><b>Again</b><small>{reviewQueue[0].intervals.again}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("hard")}><b>Hard</b><small>{reviewQueue[0].intervals.hard}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("good")}><b>Good</b><small>{reviewQueue[0].intervals.good}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("easy")}><b>Easy</b><small>{reviewQueue[0].intervals.easy}</small></button></div>}</div> : <button className="review-done" onClick={() => { setReviewActive(false); setReviewQueue([]); }}>Back to study desk <ChevronRight size={15}/></button>}</section>}
           {result && practiceActive && !reviewActive && <section ref={practicePanel} className="practice-panel">
             <div className="result-head"><div><div className="result-kicker"><span/> {practiceSecondsPerQuestion === 0 ? "SELF-PACED PRACTICE" : "TIMED PRACTICE TEST"}</div><h2>{result.title}</h2><p>{practiceComplete ? "Test results and missed answers" : `${result.items.length} questions · ${practiceSecondsPerQuestion === 0 ? "no time limit" : `${practiceSecondsPerQuestion} seconds per question`}`}</p></div><div className="practice-head-actions"><button className={`quiz-fullscreen-button ${isFullscreen ? "is-fullscreen" : ""}`} type="button" onClick={() => void toggleExerciseFullscreen()} aria-label={isFullscreen ? "Exit quiz fullscreen" : "Show quiz fullscreen"} aria-pressed={isFullscreen}><FullscreenIcon size={19}/><span>{isFullscreen ? "Exit fullscreen" : "Quiz fullscreen"}</span></button><button className="plain-icon" title="Exit practice test" onClick={() => { setPracticeActive(false); setPracticeComplete(false); }}><X size={18}/></button></div></div>
             {!practiceComplete && practiceCard ? <>
@@ -1439,7 +1453,7 @@ export default function Home() {
             {result.incomplete && <div className="incomplete-generation"><div><strong>{result.items.length} of {result.requested_count || result.items.length} questions generated</strong><span>{result.source_url ? "Your generated questions are held. Continue from the same public webpage when ready." : files.length ? "Your generated questions are held. Continue with the selected original files when ready." : "Re-select the original files to continue this set."}</span>{!result.source_url && files.length > 0 && <button type="button" className="resume-source-button" onClick={pickOriginalFiles}>Replace original files ({files.length} selected)</button>}</div><button className="continue-generation-button" disabled={continueBusy || busy || generationNeedsReconnect} onClick={() => { if (!files.length && !result.source_url) pickOriginalFiles(); else void continueGenerating(); }}>{continueBusy ? <><span className="spinner"/> Continuing…</> : <><Sparkles size={17}/> {!files.length && !result.source_url ? "Select original files" : "Continue generating"}</>}</button></div>}
             {shareUrl && <div className="share-link-row"><span>Anyone with this link can view this set:</span><a href={shareUrl} target="_blank" rel="noreferrer">{shareUrl}</a><button className="plain-icon" title="Copy share link" onClick={() => { void navigator.clipboard.writeText(shareUrl).then(() => setNotice("Share link copied.")).catch(() => setNotice("Select and copy the share link above.")); }}><Copy size={15}/></button><button className="share-revoke" disabled={shareBusy} onClick={() => void turnOffShareLink(result.id)}>Turn off link</button></div>}
             <div className="study-card"><div className="study-card-top"><span className="flashcard-label">{result.type === "flashcards" ? "FLASHCARD" : types.find((type) => type.id === result.type)?.title.toUpperCase()}</span><span className="card-number">{String(current + 1).padStart(2,"0")} <i>/</i> {String(result.items.length).padStart(2,"0")}</span></div>
-              {renderCardInteraction(currentCard, result.type)}
+              {currentCard.answer_origin === "inferred" && <p className="import-review-note">AI-inferred answer · review for accuracy</p>}{renderCardInteraction(currentCard, result.type)}
               {currentCard.source_refs?.length ? <div className="material-citations"><strong>From your material</strong>{currentCard.source_refs.map((source) => <span key={source}>{source}</span>)}</div> : null}
               {revealed && currentCard.explanation && <p className="explanation">{currentCard.explanation}</p>}
               {revealed && account && authToken && currentCard.card_id && <><div className="rating-prompt">How well did you recall it? Your answer schedules this card for another review.</div><div className="rating-row"><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("again")}><b>Again</b><small>Hard to recall</small></button><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("hard")}><b>Hard</b><small>With effort</small></button><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("good")}><b>Good</b><small>Recalled it</small></button><button disabled={reviewBusy} onClick={() => void gradeCurrentCard("easy")}><b>Easy</b><small>Very easy</small></button></div></>}
@@ -1474,8 +1488,8 @@ export default function Home() {
               return <article className="active-link-card" key={share.set_id}><div className="active-link-info"><span className="active-link-status"><i/> ACTIVE</span><strong>{share.title}</strong><a href={url} target="_blank" rel="noreferrer">{url}</a><small>Created {ageLabel(share.created_at)}</small></div><div className="active-link-actions"><button className="active-link-copy" type="button" onClick={() => { void navigator.clipboard.writeText(url).then(() => setNotice("Share link copied.")).catch(() => setNotice("Could not copy the share link. Select its address to copy.")); }}><Copy size={14}/> Copy</button><button className="share-revoke" disabled={shareBusy} onClick={() => void turnOffShareLink(share.set_id)}>{shareBusy ? "Working…" : "Turn off link"}</button></div></article>;
             })}</div> : <div className="active-links-empty"><Share2 size={18}/><span>{account ? "You have no active share links. Share a study set and it will appear here." : "Sign in to manage links you have shared."}</span></div>}
           </section>
-          <section className="recent-section" id="recent-sets"><div className="recent-head"><div><div className="section-title-row"><h2>Your recent sets</h2><span className="recent-count">{sets.length}</span></div><p>{account ? "Synced to your account." : "Sign in with your CEU Google account to view your sets."}</p></div>{sets.length > 3 && <button className="see-all" onClick={() => setShowAll(!showAll)}>{showAll ? "Show less" : "See all"} <ChevronRight size={15}/></button>}</div>
-            {sets.length ? <div className="recent-grid">{sets.slice(0, showAll ? sets.length : 3).map((studySet, index) => <div className="recent-card-wrap" key={studySet.id}><button className="recent-card" onClick={() => openSavedSet(studySet)}><span className={`recent-art art-${["aqua", "coral", "gold"][index % 3]}`}><BookOpen size={18}/><span className="art-orbit"/></span><span className="recent-info"><span className="subject-label">{types.find((type) => type.id === studySet.type)?.title.toUpperCase()}</span><strong>{studySet.title}</strong><small>{studySet.items.length} cards <i>·</i> {ageLabel(studySet.created_at)}</small></span><ChevronRight size={16} className="recent-arrow"/></button><button className="recent-delete" title={`Delete ${studySet.title}`} aria-label={`Delete ${studySet.title}`} onClick={() => void removeStudySet(studySet)}><Trash2 size={15}/></button></div>)}</div> : <div className="empty-sets"><Layers3 size={20}/><span>{account ? "Your study sets will appear here after you make one." : "Sign in with your CEU Google account to access Dawnstudy."}</span></div>}
+          <section className="recent-section" id="recent-sets"><div className="recent-head"><div><div className="section-title-row"><h2>Your recent sets</h2><span className="recent-count">{sets.length}</span></div><p>{account ? "Synced to your account." : "Sign in with your Google account to view your sets."}</p></div>{sets.length > 3 && <button className="see-all" onClick={() => setShowAll(!showAll)}>{showAll ? "Show less" : "See all"} <ChevronRight size={15}/></button>}</div>
+            {sets.length ? <div className="recent-grid">{sets.slice(0, showAll ? sets.length : 3).map((studySet, index) => <div className="recent-card-wrap" key={studySet.id}><button className="recent-card" onClick={() => openSavedSet(studySet)}><span className={`recent-art art-${["aqua", "coral", "gold"][index % 3]}`}><BookOpen size={18}/><span className="art-orbit"/></span><span className="recent-info"><span className="subject-label">{types.find((type) => type.id === studySet.type)?.title.toUpperCase()}</span><strong>{studySet.title}</strong><small>{studySet.items.length} cards <i>·</i> {ageLabel(studySet.created_at)}</small></span><ChevronRight size={16} className="recent-arrow"/></button><button className="recent-delete" title={`Delete ${studySet.title}`} aria-label={`Delete ${studySet.title}`} onClick={() => void removeStudySet(studySet)}><Trash2 size={15}/></button></div>)}</div> : <div className="empty-sets"><Layers3 size={20}/><span>{account ? "Your study sets will appear here after you make one." : "Sign in with your Google account to access Dawnstudy."}</span></div>}
             <div className="bottom-note"><span>✳</span> Little by little, a little becomes a lot. <i>— A study reminder</i></div>
           </section>
           </div>}
@@ -1528,7 +1542,7 @@ export default function Home() {
       {authOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) { setAuthOpen(false); setAuthError(""); } }}>
         <section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title">
           <button className="modal-close" aria-label="Close" onClick={() => { setAuthOpen(false); setAuthError(""); }}><X size={18}/></button>
-          <div className="auth-main"><div className="auth-brand"><DawnMark/><span>dawnstudy</span></div><p className="auth-eyebrow">YOUR NEXT CHAPTER STARTS HERE</p><h2 id="auth-title">Welcome to your<br/>study space.</h2><p className="auth-subtitle">A place for your notes, your curiosity, and the small steps that make things click.</p>{GOOGLE_CLIENT_ID ? <div className="google-button-wrap"><div ref={googleButton} className="google-signin-container"/></div> : <div className="google-not-ready">Google sign-in is not configured yet. Please try again later.</div>}<p className="auth-school-note">Use your verified CEU school Google account. Dawnstudy currently welcomes @ceu.edu.ph, @mnl.ceu.edu.ph, @mkt.ceu.edu.ph, and @mls.ceu.edu.ph accounts.</p>{authError && <div className="auth-error">{authError}</div>}</div><div className="auth-art" aria-hidden="true"><DawnArtwork variant="botanical"/><div className="auth-art-copy"><strong>Good things grow<br/>one day at a time.</strong><p>Make learning a little lighter.<br/>Make today a little brighter.</p></div></div>
+          <div className="auth-main"><div className="auth-brand"><DawnMark/><span>dawnstudy</span></div><p className="auth-eyebrow">YOUR NEXT CHAPTER STARTS HERE</p><h2 id="auth-title">Welcome to your<br/>study space.</h2><p className="auth-subtitle">A place for your notes, your curiosity, and the small steps that make things click.</p>{GOOGLE_CLIENT_ID ? <div className="google-button-wrap"><div ref={googleButton} className="google-signin-container"/></div> : <div className="google-not-ready">Google sign-in is not configured yet. Please try again later.</div>}<p className="auth-school-note">Any verified Gmail account is welcome. You can also use your Google account.</p>{authError && <div className="auth-error">{authError}</div>}</div><div className="auth-art" aria-hidden="true"><DawnArtwork variant="botanical"/><div className="auth-art-copy"><strong>Good things grow<br/>one day at a time.</strong><p>Make learning a little lighter.<br/>Make today a little brighter.</p></div></div>
         </section>
       </div>}
     </main>

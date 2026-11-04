@@ -67,20 +67,20 @@ class GenerationLimitTests(unittest.TestCase):
     def generate(self, count, path="/api/generate", **fields):
         return self.client.post(path, data={"format": "flashcards", "question_count": str(count), **fields}, files={"files": ("notes.txt", self.material, "text/plain")})
 
-    def test_100_questions_run_through_real_batching_and_save_and_update(self):
-        generated = self.generate(100)
+    def test_200_questions_run_through_real_batching_and_save_and_update(self):
+        generated = self.generate(200)
         self.assertEqual(generated.status_code, 200, generated.text)
         data = generated.json()
-        self.assertEqual(len(data["items"]), 100)
+        self.assertEqual(len(data["items"]), 200)
         self.assertFalse(data["incomplete"])
-        self.assertEqual(self.provider.call_count, 13)
+        self.assertEqual(self.provider.call_count, 25)
         self.assertEqual(data["usage"], {"remaining": None, "limit": None, "resets_at": None, "unlimited": True})
         saved = self.client.post("/api/study-sets", json=data)
         self.assertEqual(saved.status_code, 200, saved.text)
         set_id = saved.json()["id"]
-        updated = self.client.put(f"/api/study-sets/{set_id}", json={**data, "title": "Renamed 100-question set"})
+        updated = self.client.put(f"/api/study-sets/{set_id}", json={**data, "title": "Renamed 200-question set"})
         self.assertEqual(updated.status_code, 200, updated.text)
-        self.assertEqual(len(updated.json()["items"]), 100)
+        self.assertEqual(len(updated.json()["items"]), 200)
         self.storage_api.assert_not_called()
 
     def test_more_than_five_generations_are_allowed_for_an_ordinary_account(self):
@@ -90,67 +90,67 @@ class GenerationLimitTests(unittest.TestCase):
             self.assertTrue(result.json()["usage"]["unlimited"])
         self.storage_api.assert_not_called()
 
-    def test_real_storage_accepts_100_questions_longer_than_one_cell(self):
-        items = [{"question": f"Question {i}", "answer": "Detailed explanation. " * 30} for i in range(100)]
+    def test_real_storage_accepts_200_questions_longer_than_one_cell(self):
+        items = [{"question": f"Question {i}", "answer": "Detailed explanation. " * 30} for i in range(200)]
         with patch.object(main, "save_study_set", accounts.save_study_set), patch.object(accounts, "_append") as append:
-            saved = self.client.post("/api/study-sets", json={"title": "Long set", "type": "flashcards", "items": items, "requested_count": 100})
+            saved = self.client.post("/api/study-sets", json={"title": "Long set", "type": "flashcards", "items": items, "requested_count": 200})
         self.assertEqual(saved.status_code, 200, saved.text)
         row = dict(zip(accounts.SET_COLUMNS, append.call_args.args[1]))
         self.assertTrue(row["items_json_2"])
-        self.assertEqual(len(json.loads("".join(row[c] for c in accounts.SET_ITEM_COLUMNS))), 100)
+        self.assertEqual(len(json.loads("".join(row[c] for c in accounts.SET_ITEM_COLUMNS))), 200)
 
-    def test_background_generation_saves_all_100_and_is_recoverable(self):
-        submitted = self.generate(100, "/api/generation-jobs")
+    def test_background_generation_saves_all_200_and_is_recoverable(self):
+        submitted = self.generate(200, "/api/generation-jobs")
         self.assertEqual(submitted.status_code, 202, submitted.text)
         job = self.client.get(f"/api/generation-jobs/{submitted.json()['job_id']}").json()
         self.assertEqual(job["status"], "complete", job)
-        self.assertEqual(job["requested"], 100)
-        self.assertEqual(len(job["result"]["items"]), 100)
+        self.assertEqual(job["requested"], 200)
+        self.assertEqual(len(job["result"]["items"]), 200)
         self.assertNotIn("persistence_error", job["result"])
-        self.assertEqual(len(self.sets[job["result"]["id"]]["items"]), 100)
+        self.assertEqual(len(self.sets[job["result"]["id"]]["items"]), 200)
 
-    def test_continuation_preserves_60_existing_questions_and_finishes_at_100(self):
+    def test_continuation_preserves_60_existing_questions_and_finishes_at_200(self):
         original = self.generate(60).json()
-        original.update(requested_count=100, incomplete=True)
+        original.update(requested_count=200, incomplete=True)
         saved = self.client.post("/api/study-sets", json=original).json()
         first_card = saved["items"][0]
-        result = self.generate(40, "/api/generation-jobs", study_set_id=saved["id"])
+        result = self.generate(140, "/api/generation-jobs", study_set_id=saved["id"])
         self.assertEqual(result.status_code, 202, result.text)
         job = self.client.get(f"/api/generation-jobs/{result.json()['job_id']}").json()
         self.assertEqual(job["status"], "complete", job)
-        self.assertEqual(job["result"]["requested_count"], 100)
-        self.assertEqual(len(job["result"]["items"]), 100)
+        self.assertEqual(job["result"]["requested_count"], 200)
+        self.assertEqual(len(job["result"]["items"]), 200)
         self.assertEqual(job["result"]["items"][0], first_card)
         self.assertFalse(job["result"]["incomplete"])
         self.assertNotIn("persistence_error", job["result"])
-        self.assertEqual(len(self.sets[saved["id"]]["items"]), 100)
+        self.assertEqual(len(self.sets[saved["id"]]["items"]), 200)
 
-    def test_existing_question_exclusions_include_all_100(self):
-        prior = [f"What is earlier concept {i}?" for i in range(100)]
+    def test_existing_question_exclusions_include_all_200(self):
+        prior = [f"What is earlier concept {i}?" for i in range(200)]
         result = self.generate(1, existing_questions=json.dumps(prior))
         self.assertEqual(result.status_code, 200, result.text)
-        self.assertEqual(result.json()["previous_question_count"], 100)
+        self.assertEqual(result.json()["previous_question_count"], 200)
         self.assertIn(prior[-1], self.provider.call_args.args[3])
 
-    def test_zero_and_101_are_rejected_before_ai_work_on_both_routes(self):
+    def test_zero_and_201_are_rejected_before_ai_work_on_both_routes(self):
         for path in ("/api/generate", "/api/generation-jobs"):
-            for count in (0, 101):
+            for count in (0, 201):
                 result = self.generate(count, path)
                 self.assertEqual(result.status_code, 422, result.text)
         self.provider.assert_not_called()
 
-    def test_saved_sets_cannot_exceed_100_items_or_requested_questions(self):
+    def test_saved_sets_cannot_exceed_200_items_or_requested_questions(self):
         item = {"question": "Sample", "answer": "Answer"}
-        for body in ({"items": [item] * 101, "requested_count": 100}, {"items": [item], "requested_count": 101}):
+        for body in ({"items": [item] * 201, "requested_count": 200}, {"items": [item], "requested_count": 201}):
             result = self.client.post("/api/study-sets", json={"title": "Too many", "type": "flashcards", **body})
             self.assertEqual(result.status_code, 422, result.text)
 
-    def test_openapi_advertises_100_for_generation_and_saved_sets(self):
+    def test_openapi_advertises_200_for_generation_and_saved_sets(self):
         schema = self.client.get("/openapi.json").json()
         for path in ("/api/generate", "/api/generation-jobs"):
             ref = schema["paths"][path]["post"]["requestBody"]["content"]["multipart/form-data"]["schema"]["$ref"].split("/")[-1]
-            self.assertEqual(schema["components"]["schemas"][ref]["properties"]["question_count"]["maximum"], 100)
-        self.assertEqual(schema["components"]["schemas"]["SavedStudySet"]["properties"]["items"]["maxItems"], 100)
+            self.assertEqual(schema["components"]["schemas"][ref]["properties"]["question_count"]["maximum"], 200)
+        self.assertEqual(schema["components"]["schemas"]["SavedStudySet"]["properties"]["items"]["maxItems"], 200)
 
 
 if __name__ == "__main__":
