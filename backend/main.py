@@ -21,6 +21,8 @@ from uuid import uuid4
 from material_scope import selected_pages, focus_excerpt
 from study_quality import QUESTION_QUALITY_INSTRUCTIONS, is_source_lookup_question
 from questionnaire import QuestionnaireError, parse_questionnaire, validate_completion, convert_questionnaire, docx_questionnaire_text
+from questionnaire_ocr import prepare_questionnaire_image, questionnaire_text_from_tsv
+from pdf_questionnaire import extract_pdf_questionnaire
 from public_fetch import pinned_public_connection
 from generation_jobs import GenerationAlreadyRunning, GenerationCancelled, GenerationJobs, GenerationQueueFull, merge_continued_generation
 
@@ -735,6 +737,8 @@ def extract_material(filename: str, raw: bytes, pages: str = "", questionnaire: 
     try:
         if suffix == "pdf":
             reader = PdfReader(BytesIO(raw))
+            if questionnaire:
+                return extract_pdf_questionnaire(raw, reader, selected_pages(pages, len(reader.pages)))
             segments = [(f"PDF page {index + 1}", reader.pages[index].extract_text() or "") for index in selected_pages(pages, len(reader.pages))]
             sources = [(label, text) for label, text in segments if text.strip()]
             return "\n\n".join(f"[SOURCE: {label}]\n{text}" for label, text in sources), [label for label, _ in sources]
@@ -762,9 +766,15 @@ def extract_material(filename: str, raw: bytes, pages: str = "", questionnaire: 
         if suffix in {"png", "jpg", "jpeg", "webp"}:
             image = ImageOps.exif_transpose(Image.open(BytesIO(raw))).convert("RGB")
             image.thumbnail((2600, 2600))
+            if questionnaire:
+                image, highlight_mask = prepare_questionnaire_image(image)
             with tesserocr.PyTessBaseAPI(path=tessdata.data_path(), lang="eng", psm=tesserocr.PSM.SINGLE_BLOCK) as ocr:
                 ocr.SetImage(image)
-                text = ocr.GetUTF8Text().strip()
+                if questionnaire:
+                    ocr.Recognize()
+                    text = questionnaire_text_from_tsv(ocr.GetTSVText(0), highlight_mask)
+                else:
+                    text = ocr.GetUTF8Text().strip()
             return f"[SOURCE: Uploaded image]\n{text}", ["Uploaded image"]
         if suffix in {"txt", "md"}:
             return f"[SOURCE: Document]\n{raw.decode('utf-8-sig')}", ["Document"]

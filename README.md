@@ -110,7 +110,7 @@ Choose **Import questionnaire** in the material step, upload the questionnaire (
 - Imported items retain their order on reopening, saving, sharing, and refresh. Existing history never excludes questions from an import.
 - Import is atomic: conflicting keys, unsupported layouts, model omissions, and oversized questionnaires return an error rather than silently dropping questions. Cancellation remains available before saving.
 
-Use numbered questions (`1. Question`), consecutive lettered choices (`A. Choice`), and `Answer: text` lines or a numbered `Answer key` section. `Q:` / `A:` blocks and same-line lettered choices are also supported. Include answer-key pages in the page selection; question numbers must be unique across files. This preserves text wording, not original typography or document layout. OCR can misread photographs; scanned PDFs need OCR before uploading. Review inferred answers and generated distractors before studying or sharing.
+Use numbered questions (`1. Question`), lettered choices (`A. Choice`), and `Answer: text` lines or a numbered `Answer key` section. `Q:` / `A:` blocks and same-line or two-column lettered choices are supported; choices are matched to their printed labels before resolving keys. Native PDF highlight annotations and yellow-highlighted choices in uploaded images are read as supplied answers. Highlighted titles and stems are not answer keys. Include answer-key pages in the page selection; question numbers must be unique across files. This preserves text wording, not original typography or document layout. OCR can misread photographs; scanned PDFs need OCR before uploading. Review OCR text, inferred answers, and generated distractors before studying or sharing.
 
 Example:
 

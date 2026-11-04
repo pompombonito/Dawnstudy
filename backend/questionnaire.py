@@ -143,6 +143,9 @@ def parse_questionnaire(documents, limit=200):
             if current is None:
                 # Titles/instructions before the first numbered question aren't items.
                 continue
+            if current["options"] and re.match(r"^[-–—]\s+", line):
+                current["commentary"] = True
+                continue
             answer = ANSWER.match(line)
             if answer:
                 value = answer[1].strip()
@@ -167,6 +170,9 @@ def parse_questionnaire(documents, limit=200):
                         raise QuestionnaireError(f"Repeated choice {label} in question {current['number']}. Put each question on its own numbered line.")
                     current["labels"].append(label)
                     current["options"].append(match[3])
+                current["commentary"] = False
+                continue
+            if current.get("commentary"):
                 continue
             if current["answer"]:
                 current["answer"] += "\n" + line
@@ -184,8 +190,14 @@ def parse_questionnaire(documents, limit=200):
         raise QuestionnaireError("The answer key refers to questions outside this upload. Include their pages or remove the unmatched key entries.")
     for item in records:
         options, labels = item["options"], item["labels"]
-        if options and (len(options) < 2 or labels != list("ABCDEFGH"[:len(options)])):
-            raise QuestionnaireError(f"Question {item['number']} has missing or out-of-order choices. Use consecutive labels starting at A.")
+        if options and (len(options) < 2 or set(labels) != set("ABCDEFGH"[:len(options)])):
+            raise QuestionnaireError(f"Question {item['number']} has missing choices or unreadable labels. Make sure every choice from A onward is readable, or upload a clearer copy.")
+        if options:
+            # OCR often reads two columns as A,C,B,D. Match text to its printed
+            # label before resolving answer keys, so 'Both A and B' stays valid.
+            pairs = sorted(zip(labels, options))
+            item["labels"] = labels = [label for label, _ in pairs]
+            item["options"] = options = [option for _, option in pairs]
         if len({_normalized(option) for option in options}) != len(options):
             raise QuestionnaireError(f"Question {item['number']} has duplicate choices; fix them before importing.")
         explicit = item["answer"] if not re.fullmatch(r"[_\s.\-]+", item["answer"]) else ""
