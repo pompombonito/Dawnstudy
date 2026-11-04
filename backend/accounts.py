@@ -612,6 +612,9 @@ def list_study_sets(user_id: str) -> list[dict[str, Any]]:
             requested_count = int(row.get("requested_count") or len(items))
         except ValueError:
             requested_count = len(items)
+        questionnaire_policy = next((item.get("questionnaire_type_policy") for item in items
+                                     if item.get("questionnaire_type_confirmed")
+                                     and item.get("questionnaire_type_policy") in {"convert", "mixed"}), None)
         result.append({
             "id": set_id,
             "title": row["title"],
@@ -626,6 +629,8 @@ def list_study_sets(user_id: str) -> list[dict[str, Any]]:
             "incomplete": row.get("incomplete", "").casefold() == "true",
             "requested_count": max(len(items), requested_count),
             "include_images": row.get("include_images", "").casefold() == "true",
+            "questionnaire_type_confirmed": questionnaire_policy is not None,
+            "questionnaire_type_policy": questionnaire_policy,
         })
     return sorted(result, key=lambda item: item["created_at"], reverse=True)[:100]
 

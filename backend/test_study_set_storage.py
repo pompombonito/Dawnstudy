@@ -52,6 +52,19 @@ class LargeStudySetStorageTests(unittest.TestCase):
         self.assertEqual(restored["type"], "flashcards")
         self.assertEqual(restored["items"][0]["options"], ["Alpha", "Bravo"])
 
+    def test_questionnaire_type_choice_survives_sheet_round_trip_for_partial_continuation(self):
+        self.study_set["items"] = [{
+            "card_id": "mixed-card", "question": "Name the process.", "answer": "Photosynthesis",
+            "imported": True, "quiz_type": "identification", "questionnaire_type_confirmed": True,
+            "questionnaire_type_policy": "mixed",
+        }]
+        row = dict(zip(accounts.SET_COLUMNS, self.packed_row()))
+        with patch.object(accounts, "_rows", return_value=[(2, row)]):
+            restored = accounts.list_study_sets("student")[0]
+        self.assertTrue(restored["questionnaire_type_confirmed"])
+        self.assertEqual(restored["questionnaire_type_policy"], "mixed")
+        self.assertEqual(restored["items"][0]["questionnaire_type_policy"], "mixed")
+
     def test_image_inclusion_preference_round_trips_without_shifting_legacy_item_chunks(self):
         self.study_set["include_images"] = True
         row = dict(zip(accounts.SET_COLUMNS, self.packed_row()))

@@ -163,7 +163,7 @@ class ImportRouteTests(unittest.TestCase):
         return {"title": "Ignored model title", "items": [{"number": item["number"], "question": item["question"], "answer": item["answer"] or (item["options"][1] if item["options"] else "Mitochondrion"), "uncertain": False, "distractors": [] if item["options"] else ["Nucleus", "Ribosome", "Chloroplast"]} for item in batch]}
 
     def request(self, text=CHOICES, kind="multiple_choice", route="/api/generate", **fields):
-        return self.client.post(route, data={"format": kind, "input_mode": "questionnaire", **fields}, files={"files": ("quiz.txt", text.encode(), "text/plain")})
+        return self.client.post(route, data={"format": kind, "input_mode": "questionnaire", "questionnaire_type_confirmed": "true", "questionnaire_type_policy": "convert", **fields}, files={"files": ("quiz.txt", text.encode(), "text/plain")})
 
     def test_fully_keyed_import_no_ai_and_short_documents_work(self):
         for kind in ("flashcards", "identification", "multiple_choice", "checkbox"):
@@ -213,6 +213,80 @@ class ImportRouteTests(unittest.TestCase):
         self.assertTrue(self.saved[0]["items"][0]["imported"])
         self.assertEqual(self.saved[0]["items"][0]["answer_origin"], "provided")
 
+    def test_generation_job_previews_mismatched_question_types_before_ai_or_saving(self):
+        source = ("1. Which color is primary?\nA. Red\nB. Blue\nC. Green\nAnswer: A\n"
+                  "2. Name the process plants use to make food.\nAnswer: Photosynthesis")
+        result = self.request(source, "multiple_choice", route="/api/generation-jobs", questionnaire_type_confirmed="false")
+        self.assertEqual(result.status_code, 409, result.text)
+        preview = result.json()
+        self.assertEqual(preview["code"], "questionnaire_type_mismatch")
+        self.assertEqual(len(preview["mismatches"]), 1)
+        self.assertEqual(preview["mismatches"][0]["question"], "Name the process plants use to make food.")
+        self.assertEqual(preview["mismatches"][0]["source_type"], "identification")
+        self.assertEqual(preview["mismatches"][0]["answer"], "Photosynthesis")
+        self.assertIsNone(main.generation_jobs.recover(self.user["user_id"]))
+        self.provider.assert_not_called()
+        self.assertEqual(self.saved, [])
+
+    def test_synchronous_import_route_uses_the_same_type_review_gate(self):
+        source = "1. State one cell component.\nAnswer: Nucleus"
+        result = self.request(source, "multiple_choice", route="/api/generate", questionnaire_type_confirmed="false")
+        self.assertEqual(result.status_code, 409, result.text)
+        self.assertEqual(result.json()["code"], "questionnaire_type_mismatch")
+        self.provider.assert_not_called()
+        self.assertEqual(self.saved, [])
+
+    def test_user_can_confirm_conversion_or_keep_a_mixed_set_and_continue_policy_is_saved(self):
+        source = ("1. Which color is primary?\nA. Red\nB. Blue\nC. Green\nAnswer: A\n"
+                  "2. Name the process plants use to make food.\nAnswer: Photosynthesis")
+        converted = self.request(source, "multiple_choice", route="/api/generation-jobs",
+                                 questionnaire_type_confirmed="true", questionnaire_type_policy="convert")
+        self.assertEqual(converted.status_code, 202, converted.text)
+        converted_job = self.client.get("/api/generation-jobs/" + converted.json()["job_id"]).json()
+        self.assertEqual(converted_job["status"], "complete", converted_job)
+        converted_set = converted_job["result"]
+        self.assertTrue(converted_set["questionnaire_type_confirmed"])
+        self.assertEqual(converted_set["questionnaire_type_policy"], "convert")
+        self.assertEqual(set(converted_set["items"][1]["options"]), {"Photosynthesis", "Nucleus", "Ribosome", "Chloroplast"})
+        self.assertNotIn("quiz_type", converted_set["items"][1])
+
+        mixed = self.request(source, "multiple_choice", route="/api/generation-jobs",
+                             questionnaire_type_confirmed="true", questionnaire_type_policy="mixed")
+        self.assertEqual(mixed.status_code, 202, mixed.text)
+        mixed_job = self.client.get("/api/generation-jobs/" + mixed.json()["job_id"]).json()
+        self.assertEqual(mixed_job["status"], "complete", mixed_job)
+        mixed_set = mixed_job["result"]
+        self.assertEqual(mixed_set["type"], "multiple_choice")
+        self.assertEqual(mixed_set["questionnaire_type_policy"], "mixed")
+        self.assertEqual(mixed_set["items"][1]["quiz_type"], "identification")
+        self.assertEqual(mixed_set["items"][1]["answer"], "Photosynthesis")
+        from live_games import card_kind
+        self.assertEqual(card_kind(mixed_set["items"][1], mixed_set["type"]), "identification")
+
+    def test_matching_is_previewed_and_preserved_when_single_answer_format_cannot_represent_it(self):
+        source = ("1. Match each term to its description.\n__ First term\n__ Second term\n"
+                  "A. First description\nB. Second description\nAnswer: 1-B; 2-A")
+        preview = self.request(source, "multiple_choice", route="/api/generation-jobs", questionnaire_type_confirmed="false")
+        self.assertEqual(preview.status_code, 409, preview.text)
+        item_preview = preview.json()["mismatches"][0]
+        self.assertEqual(item_preview["source_type"], "matching")
+        self.assertTrue(item_preview["must_preserve"])
+        self.assertEqual(item_preview["matching_prompts"], ["First term", "Second term"])
+        confirmed = self.request(source, "multiple_choice", route="/api/generation-jobs",
+                                 questionnaire_type_confirmed="true", questionnaire_type_policy="convert")
+        self.assertEqual(confirmed.status_code, 202, confirmed.text)
+        job = self.client.get("/api/generation-jobs/" + confirmed.json()["job_id"]).json()
+        card = job["result"]["items"][0]
+        self.assertEqual(card["quiz_type"], "matching")
+        self.assertEqual(card["matching_pairs"][0], {"prompt": "First term", "answer": "Second description"})
+
+    def test_same_as_source_does_not_request_a_mismatch_confirmation(self):
+        source = "1. Name a mammal.\nAnswer: Dolphin"
+        result = self.request(source, "same_as_source", route="/api/generation-jobs", questionnaire_type_confirmed="false")
+        self.assertEqual(result.status_code, 202, result.text)
+        job = self.client.get("/api/generation-jobs/" + result.json()["job_id"]).json()
+        self.assertEqual(job["status"], "complete", job)
+
     def test_partial_questionnaire_is_saved_when_providers_are_unavailable(self):
         source = "1. First question?\nAnswer: Alpha\n2. Second question?"
         with patch.object(main, "configured_ai_models", return_value=[]):
@@ -256,7 +330,8 @@ class ImportRouteTests(unittest.TestCase):
         base = {
             "id": "partial-import", "title": "quiz", "type": "flashcards",
             "items": [{"question": "First question?", "answer": "Alpha", "source_number": "1", "questionnaire_index": 1,
-                       "imported": True, "answer_origin": "provided", "card_id": "saved-card"}],
+                       "imported": True, "answer_origin": "provided", "card_id": "saved-card", "quiz_type": "identification",
+                       "questionnaire_type_confirmed": True, "questionnaire_type_policy": "mixed"}],
             "created_at": "2026-11-04T00:00:00+00:00", "requested_count": 2, "incomplete": True,
             "material_fingerprint": fingerprint, "page_ranges": {}, "focus_topic": "", "source_url": "", "sources": [],
         }
@@ -268,7 +343,8 @@ class ImportRouteTests(unittest.TestCase):
             return True
 
         with patch.object(main, "list_study_sets", side_effect=list_sets), patch.object(main, "update_study_set", side_effect=update_set):
-            response = self.request(source, "flashcards", route="/api/generation-jobs", question_count="1", study_set_id=base["id"])
+            response = self.request(source, "flashcards", route="/api/generation-jobs", question_count="1", study_set_id=base["id"],
+                                    questionnaire_type_confirmed="false", questionnaire_type_policy="convert")
             self.assertEqual(response.status_code, 202, response.text)
             job = self.client.get("/api/generation-jobs/" + response.json()["job_id"]).json()
         self.assertEqual(job["status"], "complete", job)
@@ -276,6 +352,8 @@ class ImportRouteTests(unittest.TestCase):
         self.assertEqual([item["question"] for item in job["result"]["items"]], ["First question?", "Second question?"])
         self.assertEqual(job["result"]["items"][0]["answer"], "Alpha")
         self.assertEqual(job["result"]["items"][0]["card_id"], "saved-card")
+        self.assertEqual(job["result"]["questionnaire_type_policy"], "mixed")
+        self.assertEqual(job["result"]["items"][1]["quiz_type"], "identification")
         self.assertEqual(self.provider.call_count, 1)
 
     def test_import_ignores_count_instead_of_dropping_or_inventing_questions(self):

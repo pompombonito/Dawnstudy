@@ -16,7 +16,7 @@ import GameRoom from "./community/GameRoom";
 import CompanionDock from "./community/CompanionDock";
 import Agreement from "./community/Agreement";
 import { DawnArtwork, DawnMark } from "./components/DawnArtwork";
-import { cancelGenerationJob, findGenerationJob, GenerationCancelledError, GenerationJobError, pollGenerationJob, startGenerationJob, type GenerationJob, type GenerationStatus } from "./generation-jobs";
+import { cancelGenerationJob, findGenerationJob, GenerationCancelledError, GenerationJobError, pollGenerationJob, startGenerationJob, QuestionnaireTypeMismatchError, type GenerationJob, type GenerationStatus, type QuestionnaireMismatchPreview } from "./generation-jobs";
 import { deleteUnsyncedStudyDraft, getUnsyncedStudyDraft, saveUnsyncedStudyDraft } from "./unsynced-study-drafts";
 import {
   AlarmClock, ArrowLeftRight, BookOpen, Check, CheckSquare, ChevronLeft, ChevronRight, CircleHelp, Clock3,
@@ -26,8 +26,8 @@ import {
 } from "lucide-react";
 
 type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification" | "same_as_source";
-type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; correct_answers?: string[]; explanation?: string; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred"; images?: string[]; image_captions?: string[]; questionnaire_index?: number; quiz_type?: "multiple_choice" | "checkbox" | "identification" | "matching"; matching_prompts?: string[]; matching_options?: string[]; matching_pairs?: { prompt: string; answer: string }[] };
-type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; source_url?: string; include_images?: boolean; created_at: string; material_fingerprint?: string; page_ranges?: Record<string, string>; focus_topic?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; notices?: string[]; usage?: { remaining: number | null; limit: number | null; resets_at: string | null; unlimited?: boolean } };
+type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; correct_answers?: string[]; explanation?: string; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred"; images?: string[]; image_captions?: string[]; questionnaire_index?: number; quiz_type?: "multiple_choice" | "checkbox" | "identification" | "matching"; questionnaire_type_confirmed?: boolean; questionnaire_type_policy?: "convert" | "mixed"; matching_prompts?: string[]; matching_options?: string[]; matching_pairs?: { prompt: string; answer: string }[] };
+type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; source_url?: string; include_images?: boolean; created_at: string; material_fingerprint?: string; page_ranges?: Record<string, string>; focus_topic?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; questionnaire_type_confirmed?: boolean; questionnaire_type_policy?: "convert" | "mixed" | null; notices?: string[]; usage?: { remaining: number | null; limit: number | null; resets_at: string | null; unlimited?: boolean } };
 type ActiveShare = { set_id: string; title: string; token: string; created_at: string };
 type ReviewItem = { study_set_id: string; study_set_title: string; type: Kind; card: Card; retried?: boolean; intervals: { again: string; hard: string; good: string; easy: string } };
 type Progress = { total_reviews: number; reviewed_today: number; accuracy: number; current_streak: number; best_streak: number; due_count: number; total_cards: number; week: { date: string; reviews: number }[] };
@@ -138,6 +138,20 @@ function displayPracticeAnswer(response: PracticeAnswer | undefined) {
   return response || "No answer";
 }
 
+function quizTypeLabel(value: string) {
+  const labels: Record<string, string> = {
+    flashcards: "Flashcards", multiple_choice: "Multiple choice", checkbox: "Select all that apply",
+    identification: "Identification", matching: "Matching", same_as_source: "Same type as the questionnaire",
+  };
+  return labels[value] || value.replaceAll("_", " ");
+}
+
+function studySetTypeLabel(studySet: Pick<StudySet, "type" | "items">) {
+  if (studySet.type === "same_as_source") return quizTypeLabel(studySet.type);
+  if (studySet.items.some((card) => card.quiz_type && card.quiz_type !== studySet.type)) return "Mixed question types";
+  return types.find((type) => type.id === studySet.type)?.title || quizTypeLabel(studySet.type);
+}
+
 function shuffleSavedItems(items: Card[], kind: Kind) {
   if (items.some((card) => card.imported)) return [...items];
   let previousCorrectIndex: number | null = null;
@@ -204,6 +218,7 @@ export default function Home() {
   const [generationCancelError, setGenerationCancelError] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [questionnaireMismatch, setQuestionnaireMismatch] = useState<QuestionnaireMismatchPreview | null>(null);
   const [result, setResult] = useState<StudySet | null>(null);
   const [current, setCurrent] = useState(0);
   const [revealed, setRevealed] = useState(false);
@@ -271,6 +286,9 @@ export default function Home() {
   const generationJobId = useRef<string | null>(null);
   const generationCancelIntent = useRef(false);
   const generationCancelPost = useRef<string | null>(null);
+  const questionnaireReviewForm = useRef<FormData | null>(null);
+  const questionnaireNoticeAudio = useRef<AudioContext | null>(null);
+  const questionnaireDialog = useRef<HTMLElement | null>(null);
 
   async function loadAccountSets(token: string) {
     if (!API_BASE) return;
@@ -406,6 +424,35 @@ export default function Home() {
       previousFocus?.focus();
     };
   }, [authOpen]);
+
+  useEffect(() => {
+    if (!questionnaireMismatch) return;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const dialog = questionnaireDialog.current;
+    const focusFrame = window.requestAnimationFrame(() => dialog?.querySelector<HTMLButtonElement>(".questionnaire-type-continue")?.focus());
+    const closeReview = () => {
+      questionnaireReviewForm.current = null;
+      setQuestionnaireMismatch(null);
+      setNotice("Questionnaire import canceled. No questions were generated or saved.");
+    };
+    const handleDialogKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { closeReview(); return; }
+      if (event.key !== "Tab" || !dialog) return;
+      const controls = Array.from(dialog.querySelectorAll<HTMLElement>('button:not([disabled]), [tabindex="0"]'));
+      const first = controls[0], last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    document.addEventListener("keydown", handleDialogKey);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", handleDialogKey);
+      document.body.style.overflow = previousOverflow;
+      previousFocus?.focus();
+    };
+  }, [questionnaireMismatch]);
 
   useEffect(() => {
     if (!practiceActive || practiceComplete || practiceSecondsPerQuestion === 0) return;
@@ -777,6 +824,48 @@ export default function Home() {
     setBusy(false); setContinueBusy(false);
   }
 
+  function primeQuestionnaireMismatchSound() {
+    if (typeof window === "undefined" || !window.AudioContext) return;
+    try {
+      if (!questionnaireNoticeAudio.current || questionnaireNoticeAudio.current.state === "closed") {
+        questionnaireNoticeAudio.current = new window.AudioContext();
+      }
+      if (questionnaireNoticeAudio.current.state === "suspended") void questionnaireNoticeAudio.current.resume().catch(() => {});
+    } catch { /* The blocking visual review remains available if audio is disabled. */ }
+  }
+
+  function playQuestionnaireMismatchSound() {
+    const context = questionnaireNoticeAudio.current;
+    if (!context || context.state === "closed") return;
+    try {
+      if (context.state === "suspended") void context.resume().catch(() => {});
+      const now = context.currentTime;
+      [660, 880].forEach((frequency, index) => {
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        const start = now + index * 0.13;
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(frequency, start);
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(0.12, start + 0.025);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.18);
+        oscillator.connect(gain); gain.connect(context.destination);
+        oscillator.start(start); oscillator.stop(start + 0.19);
+      });
+    } catch { /* Keep the visual mismatch alert usable on restricted browsers. */ }
+  }
+
+  function resumeQuestionnaireWithPolicy(policy: "convert" | "mixed") {
+    const form = questionnaireReviewForm.current;
+    if (!form || generationController.current) return;
+    form.set("questionnaire_type_confirmed", "true");
+    form.set("questionnaire_type_policy", policy);
+    questionnaireReviewForm.current = null;
+    setQuestionnaireMismatch(null);
+    setNotice("");
+    void runGeneration(form);
+  }
+
   async function runGeneration(form: FormData, base?: StudySet) {
     if (!account || !authToken || generationController.current) return;
     if (!API_BASE) { setError("The API address is not configured for this site."); setBusy(false); setContinueBusy(false); return; }
@@ -791,7 +880,15 @@ export default function Home() {
       const previous = pendingGeneration(userId);
       const pending = previous?.job_id === jobId ? previous : { job_id: jobId, base: job.resumed ? undefined : base };
       await watchGeneration(job, pending, token, userId, controller);
-    } catch (caught) { await generationFailure(caught, userId, token, controller, jobId); }
+    } catch (caught) {
+      if (caught instanceof QuestionnaireTypeMismatchError && form.get("input_mode") === "questionnaire") {
+        questionnaireReviewForm.current = form;
+        setQuestionnaireMismatch(caught.preview);
+        setGenerationStatus(null); setGenerationNeedsReconnect(false);
+        setError(""); setNotice("");
+        playQuestionnaireMismatchSound();
+      } else await generationFailure(caught, userId, token, controller, jobId);
+    }
     finally { releaseGeneration(controller); }
   }
 
@@ -853,6 +950,7 @@ export default function Home() {
     }
     if (sourceMode === "file" && !files.length) { setComposerStep(0); setError("Choose at least one study material first."); return; }
     if (sourceMode !== "file" && !websiteUrl.trim()) { setComposerStep(0); setError("Paste a public website link first."); return; }
+    if (inputMode === "questionnaire") primeQuestionnaireMismatchSound();
     setBusy(true); setError(""); setNotice("");
     setGenerationStatus({ status: "queued", stage: "queued", message: "Joining the study queue…", completed: 0, requested: questionCount });
     const form = new FormData();
@@ -860,6 +958,8 @@ export default function Home() {
     else form.append("source_url", websiteUrl.trim());
     form.append("input_mode", inputMode);
     form.append("format", selected); form.append("use_web", String(inputMode === "notes" && web));
+    form.append("questionnaire_type_confirmed", String(selected === "same_as_source"));
+    form.append("questionnaire_type_policy", "convert");
     form.append("include_images", String(inputMode === "notes" && includeImages));
     form.append("model", modelChoice);
     form.append("question_count", String(questionCount));
@@ -944,6 +1044,10 @@ export default function Home() {
     const questionnaireImport = result.items.some((item) => item.imported);
     form.append("input_mode", questionnaireImport ? "questionnaire" : "notes");
     form.append("format", result.type);
+    if (questionnaireImport) {
+      form.append("questionnaire_type_confirmed", String(result.questionnaire_type_confirmed || result.type === "same_as_source"));
+      form.append("questionnaire_type_policy", result.questionnaire_type_policy || "convert");
+    }
     form.append("use_web", String(!questionnaireImport && web));
     form.append("include_images", String(!questionnaireImport && Boolean(result.include_images)));
     form.append("model", modelChoice);
@@ -1419,7 +1523,7 @@ export default function Home() {
                 <div className="creator-content" key={composerStep}>
                   {composerStep === 0 && <div className="creator-material"><div className="creator-prompt"><h3>What are you learning from?</h3><p>Use your own files or a publicly readable link.</p></div>
           <div className="questionnaire-mode" role="group" aria-label="Material type">
-            <button type="button" className="material-mode-card" aria-label="Generate from notes" aria-describedby="notes-mode-description" aria-pressed={inputMode === "notes"} onClick={() => { setInputMode("notes"); setError(""); }}>
+            <button type="button" className="material-mode-card" aria-label="Generate from notes" aria-describedby="notes-mode-description" aria-pressed={inputMode === "notes"} onClick={() => { setInputMode("notes"); setSelected((current) => current === "same_as_source" ? "flashcards" : current); setError(""); }}>
               <span className="material-mode-top" aria-hidden="true"><span className="material-mode-icon"><Sparkles size={21}/></span><span className="material-mode-state">{inputMode === "notes" && "Selected"}<span className="material-mode-indicator">{inputMode === "notes" && <Check size={13} strokeWidth={3}/>}</span></span></span>
               <strong>Generate from notes</strong>
               <span id="notes-mode-description" className="material-mode-description">Turn lessons and study notes into new questions.</span>
@@ -1470,7 +1574,7 @@ export default function Home() {
               </aside>
             </div>
           </> : <div className="session-topline"><div><span className="section-overline">YOUR FOCUS SPACE</span><h1>One idea at a time.</h1></div><button type="button" className="outline-button" disabled={busy || continueBusy || generationNeedsReconnect} onClick={beginStudySet}><Plus size={17}/> New study set</button></div>}
-          {reviewActive && <section className="review-panel"><div className="result-head"><div><div className="result-kicker"><span/> SPACED REPETITION</div><h2>{reviewQueue.length ? reviewQueue[0].study_set_title : "Review complete"}</h2><p>{reviewQueue.length ? `${reviewQueue.length} cards in this session · ${reviewQueue[0].type.replaceAll("_", " ")}` : "You’re all caught up for now. Nice work showing up."}</p></div><button className="plain-icon" title="Close review" onClick={() => { setReviewActive(false); setReviewQueue([]); setSelectedOption(null); }}><X size={18}/></button></div>{reviewQueue.length ? <div className="study-card"><div className="study-card-top"><span className="flashcard-label">REVIEW {reviewQueue.length} LEFT</span></div>{reviewQueue[0].card.answer_origin === "inferred" && <p className="import-review-note">AI-inferred answer · review for accuracy</p>}{renderQuestionImages(reviewQueue[0].card)}{renderCardInteraction(reviewQueue[0].card, reviewQueue[0].type, true)}{revealed && reviewQueue[0].card.explanation && <p className="explanation">{reviewQueue[0].card.explanation}</p>}{revealed && <div className="rating-row"><button disabled={reviewBusy} onClick={() => void gradeCard("again")}><b>Again</b><small>{reviewQueue[0].intervals.again}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("hard")}><b>Hard</b><small>{reviewQueue[0].intervals.hard}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("good")}><b>Good</b><small>{reviewQueue[0].intervals.good}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("easy")}><b>Easy</b><small>{reviewQueue[0].intervals.easy}</small></button></div>}</div> : <button className="review-done" onClick={() => { setReviewActive(false); setReviewQueue([]); }}>Back to study desk <ChevronRight size={15}/></button>}</section>}
+          {reviewActive && <section className="review-panel"><div className="result-head"><div><div className="result-kicker"><span/> SPACED REPETITION</div><h2>{reviewQueue.length ? reviewQueue[0].study_set_title : "Review complete"}</h2><p>{reviewQueue.length ? `${reviewQueue.length} cards in this session · ${quizTypeLabel(quizKind(reviewQueue[0].card, reviewQueue[0].type))}` : "You’re all caught up for now. Nice work showing up."}</p></div><button className="plain-icon" title="Close review" onClick={() => { setReviewActive(false); setReviewQueue([]); setSelectedOption(null); }}><X size={18}/></button></div>{reviewQueue.length ? <div className="study-card"><div className="study-card-top"><span className="flashcard-label">REVIEW {reviewQueue.length} LEFT</span></div>{reviewQueue[0].card.answer_origin === "inferred" && <p className="import-review-note">AI-inferred answer · review for accuracy</p>}{renderQuestionImages(reviewQueue[0].card)}{renderCardInteraction(reviewQueue[0].card, reviewQueue[0].type, true)}{revealed && reviewQueue[0].card.explanation && <p className="explanation">{reviewQueue[0].card.explanation}</p>}{revealed && <div className="rating-row"><button disabled={reviewBusy} onClick={() => void gradeCard("again")}><b>Again</b><small>{reviewQueue[0].intervals.again}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("hard")}><b>Hard</b><small>{reviewQueue[0].intervals.hard}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("good")}><b>Good</b><small>{reviewQueue[0].intervals.good}</small></button><button disabled={reviewBusy} onClick={() => void gradeCard("easy")}><b>Easy</b><small>{reviewQueue[0].intervals.easy}</small></button></div>}</div> : <button className="review-done" onClick={() => { setReviewActive(false); setReviewQueue([]); }}>Back to study desk <ChevronRight size={15}/></button>}</section>}
           {result && practiceActive && !reviewActive && <section ref={practicePanel} className="practice-panel">
             <div className="result-head"><div><div className="result-kicker"><span/> {practiceSecondsPerQuestion === 0 ? "SELF-PACED PRACTICE" : "TIMED PRACTICE TEST"}</div><h2>{result.title}</h2><p>{practiceComplete ? "Test results and missed answers" : `${result.items.length} questions · ${practiceSecondsPerQuestion === 0 ? "no time limit" : `${practiceSecondsPerQuestion} seconds per question`}`}</p></div><div className="practice-head-actions"><button className={`quiz-fullscreen-button ${isFullscreen ? "is-fullscreen" : ""}`} type="button" onClick={() => void toggleExerciseFullscreen()} aria-label={isFullscreen ? "Exit quiz fullscreen" : "Show quiz fullscreen"} aria-pressed={isFullscreen}><FullscreenIcon size={19}/><span>{isFullscreen ? "Exit fullscreen" : "Quiz fullscreen"}</span></button><button className="plain-icon" title="Exit practice test" onClick={() => { setPracticeActive(false); setPracticeComplete(false); }}><X size={18}/></button></div></div>
             {!practiceComplete && practiceCard ? <>
@@ -1492,11 +1596,11 @@ export default function Home() {
               <button className="finish-test" onClick={() => { setPracticeActive(false); setPracticeComplete(false); }}>Back to study cards</button>
             </> : null}
           </section>}
-          {result && currentCard && !reviewActive && !practiceActive && <section className="result-panel"><div className="result-head"><div><div className="result-kicker"><span/> YOUR STUDY SET</div><h2>{result.title}</h2><p>{result.items.length} {types.find((type) => type.id === result.type)?.title.toLowerCase()} · ready when you are{result.model ? ` · ${modelName(result.model)}` : ""}</p></div><button className="plain-icon" title="Close study set" onClick={() => setResult(null)}><X size={18}/></button></div>
-            <div className="set-action-row"><label>Test pace<select value={practiceSecondsPerQuestion} onChange={(event) => setPracticeSecondsPerQuestion(Number(event.target.value))}><option value={0}>No timer</option><option value={20}>20 sec / question</option><option value={30}>30 sec / question</option><option value={45}>45 sec / question</option></select></label>{result.type !== "flashcards" && <button className="action-button" onClick={() => { if (result) setGameSet(result.id); navigateTo("games"); }}><Gamepad2 size={15}/> Play with friends</button>}<button className="action-button" onClick={startPractice}><AlarmClock size={15}/> {practiceSecondsPerQuestion === 0 ? "Start practice" : "Start timed test"}</button><button className="action-button" onClick={() => void shareCurrentSet()} disabled={shareBusy}><Share2 size={15}/>{shareBusy ? "Working…" : "Share set"}</button></div>
+          {result && currentCard && !reviewActive && !practiceActive && <section className="result-panel"><div className="result-head"><div><div className="result-kicker"><span/> YOUR STUDY SET</div><h2>{result.title}</h2><p>{result.items.length} {studySetTypeLabel(result).toLowerCase()} · ready when you are{result.model ? ` · ${modelName(result.model)}` : ""}</p></div><button className="plain-icon" title="Close study set" onClick={() => setResult(null)}><X size={18}/></button></div>
+            <div className="set-action-row"><label>Test pace<select value={practiceSecondsPerQuestion} onChange={(event) => setPracticeSecondsPerQuestion(Number(event.target.value))}><option value={0}>No timer</option><option value={20}>20 sec / question</option><option value={30}>30 sec / question</option><option value={45}>45 sec / question</option></select></label>{result.items.some((card) => quizKind(card, result.type) !== "flashcards") && <button className="action-button" onClick={() => { if (result) setGameSet(result.id); navigateTo("games"); }}><Gamepad2 size={15}/> Play with friends</button>}<button className="action-button" onClick={startPractice}><AlarmClock size={15}/> {practiceSecondsPerQuestion === 0 ? "Start practice" : "Start timed test"}</button><button className="action-button" onClick={() => void shareCurrentSet()} disabled={shareBusy}><Share2 size={15}/>{shareBusy ? "Working…" : "Share set"}</button></div>
             {result.incomplete && <div className="incomplete-generation"><div><strong>{result.items.length} of {result.requested_count || result.items.length} questions generated</strong><span>{result.source_url ? "Your generated questions are held. Continue from the same public webpage when ready." : files.length ? "Your generated questions are held. Continue with the selected original files when ready." : "Re-select the original files to continue this set."}</span>{!result.source_url && files.length > 0 && <button type="button" className="resume-source-button" onClick={pickOriginalFiles}>Replace original files ({files.length} selected)</button>}</div><button className="continue-generation-button" disabled={continueBusy || busy || generationNeedsReconnect} onClick={() => { if (!files.length && !result.source_url) pickOriginalFiles(); else void continueGenerating(); }}>{continueBusy ? <><span className="spinner"/> Continuing…</> : <><Sparkles size={17}/> {!files.length && !result.source_url ? "Select original files" : "Continue generating"}</>}</button></div>}
             {shareUrl && <div className="share-link-row"><span>Anyone with this link can view this set:</span><a href={shareUrl} target="_blank" rel="noreferrer">{shareUrl}</a><button className="plain-icon" title="Copy share link" onClick={() => { void navigator.clipboard.writeText(shareUrl).then(() => setNotice("Share link copied.")).catch(() => setNotice("Select and copy the share link above.")); }}><Copy size={15}/></button><button className="share-revoke" disabled={shareBusy} onClick={() => void turnOffShareLink(result.id)}>Turn off link</button></div>}
-            <div className="study-card"><div className="study-card-top"><span className="flashcard-label">{result.type === "flashcards" ? "FLASHCARD" : types.find((type) => type.id === result.type)?.title.toUpperCase()}</span><span className="card-number">{String(current + 1).padStart(2,"0")} <i>/</i> {String(result.items.length).padStart(2,"0")}</span></div>
+            <div className="study-card"><div className="study-card-top"><span className="flashcard-label">{quizTypeLabel(quizKind(currentCard, result.type)).toUpperCase()}</span><span className="card-number">{String(current + 1).padStart(2,"0")} <i>/</i> {String(result.items.length).padStart(2,"0")}</span></div>
               {currentCard.answer_origin === "inferred" && <p className="import-review-note">AI-inferred answer · review for accuracy</p>}{renderQuestionImages(currentCard)}{renderCardInteraction(currentCard, result.type)}
               {currentCard.source_refs?.length ? <div className="material-citations"><strong>From your material</strong>{currentCard.source_refs.map((source) => <span key={source}>{source}</span>)}</div> : null}
               {revealed && currentCard.explanation && <p className="explanation">{currentCard.explanation}</p>}
@@ -1533,7 +1637,7 @@ export default function Home() {
             })}</div> : <div className="active-links-empty"><Share2 size={18}/><span>{account ? "You have no active share links. Share a study set and it will appear here." : "Sign in to manage links you have shared."}</span></div>}
           </section>
           <section className="recent-section" id="recent-sets"><div className="recent-head"><div><div className="section-title-row"><h2>Your recent sets</h2><span className="recent-count">{sets.length}</span></div><p>{account ? "Synced to your account." : "Sign in with your Google account to view your sets."}</p></div>{sets.length > 3 && <button className="see-all" onClick={() => setShowAll(!showAll)}>{showAll ? "Show less" : "See all"} <ChevronRight size={15}/></button>}</div>
-            {sets.length ? <div className="recent-grid">{sets.slice(0, showAll ? sets.length : 3).map((studySet, index) => <div className="recent-card-wrap" key={studySet.id}><button className="recent-card" onClick={() => openSavedSet(studySet)}><span className={`recent-art art-${["aqua", "coral", "gold"][index % 3]}`}><BookOpen size={18}/><span className="art-orbit"/></span><span className="recent-info"><span className="subject-label">{types.find((type) => type.id === studySet.type)?.title.toUpperCase()}</span><strong>{studySet.title}</strong><small>{studySet.items.length} cards <i>·</i> {ageLabel(studySet.created_at)}</small></span><ChevronRight size={16} className="recent-arrow"/></button><button className="recent-delete" title={`Delete ${studySet.title}`} aria-label={`Delete ${studySet.title}`} onClick={() => void removeStudySet(studySet)}><Trash2 size={15}/></button></div>)}</div> : <div className="empty-sets"><Layers3 size={20}/><span>{account ? "Your study sets will appear here after you make one." : "Sign in with your Google account to access Dawnstudy."}</span></div>}
+            {sets.length ? <div className="recent-grid">{sets.slice(0, showAll ? sets.length : 3).map((studySet, index) => <div className="recent-card-wrap" key={studySet.id}><button className="recent-card" onClick={() => openSavedSet(studySet)}><span className={`recent-art art-${["aqua", "coral", "gold"][index % 3]}`}><BookOpen size={18}/><span className="art-orbit"/></span><span className="recent-info"><span className="subject-label">{studySetTypeLabel(studySet).toUpperCase()}</span><strong>{studySet.title}</strong><small>{studySet.items.length} cards <i>·</i> {ageLabel(studySet.created_at)}</small></span><ChevronRight size={16} className="recent-arrow"/></button><button className="recent-delete" title={`Delete ${studySet.title}`} aria-label={`Delete ${studySet.title}`} onClick={() => void removeStudySet(studySet)}><Trash2 size={15}/></button></div>)}</div> : <div className="empty-sets"><Layers3 size={20}/><span>{account ? "Your study sets will appear here after you make one." : "Sign in with your Google account to access Dawnstudy."}</span></div>}
             <div className="bottom-note"><span>✳</span> Little by little, a little becomes a lot. <i>— A study reminder</i></div>
           </section>
           </div>}
@@ -1582,6 +1686,30 @@ export default function Home() {
       {moreOpen && <div className="more-menu-backdrop" onClick={() => setMoreOpen(false)}><nav className="more-menu" aria-label="More pages" onClick={e => e.stopPropagation()}><div><strong>Find your way</strong><button className="plain-icon" onClick={() => setMoreOpen(false)} aria-label="Close more pages"><X size={19}/></button></div>{([ ["finder", "PDF Finder"], ["voice", "Voice review"], ["profile", "My profile"], ["agreement", "Agreement & privacy"], ["about", "About Dawnstudy"] ] as [WorkspaceView, string][]).map(([id, title]) => <button key={id} onClick={() => navigateTo(id)}>{title}<ArrowRight size={16}/></button>)}</nav></div>}
       <CompanionDock key={`buddy-${account?.id || "guest"}`} community={community} friends={() => navigateTo("friends")} signIn={() => setAuthOpen(true)}/>
       {account && community.data && !community.data.profile?.onboarded && <Onboarding key={`setup-${account.id}`} community={community} setTheme={setColorTheme} signOut={signOut}/>}
+
+      {questionnaireMismatch && <div className="modal-backdrop questionnaire-mismatch-backdrop">
+        <section ref={questionnaireDialog} className="questionnaire-mismatch-modal" role="alertdialog" aria-modal="true" aria-labelledby="questionnaire-mismatch-title" aria-describedby="questionnaire-mismatch-description">
+          <div className="questionnaire-mismatch-heading"><span className="questionnaire-mismatch-icon"><Volume2 size={20}/></span><div><p>PLEASE REVIEW BEFORE GENERATING</p><h2 id="questionnaire-mismatch-title">Question type mismatch</h2></div></div>
+          <p id="questionnaire-mismatch-description" className="questionnaire-mismatch-description">You selected <strong>{quizTypeLabel(questionnaireMismatch.selected_type)}</strong>, but {questionnaireMismatch.mismatches.length === 1 ? "this question uses" : `${questionnaireMismatch.mismatches.length} questions use`} a different format. Review the original question, choices, and answer below. Nothing has been generated or saved yet.</p>
+          <div className="questionnaire-mismatch-list" aria-label="Questions with a different type">
+            {questionnaireMismatch.mismatches.map((item, index) => <article key={`${item.questionnaire_index}-${index}`} className="questionnaire-mismatch-item">
+              <div className="questionnaire-mismatch-item-top"><span>QUESTION {item.number}</span><span>{quizTypeLabel(item.source_type)}</span></div>
+              <p className="questionnaire-mismatch-question">{item.question}</p>
+              {item.answer ? <div className="questionnaire-mismatch-answer"><strong>Answer from the questionnaire</strong><p>{item.answer}</p></div> : <p className="questionnaire-mismatch-no-answer">No answer key was supplied for this question.</p>}
+              {item.options.length > 0 && <div className="questionnaire-mismatch-options"><strong>Original choices</strong><ol type="A">{item.options.map((option, optionIndex) => <li key={`${optionIndex}-${option}`}>{option}</li>)}</ol></div>}
+              {item.matching_prompts.length > 0 && <div className="questionnaire-mismatch-options"><strong>Matching prompts</strong><ol>{item.matching_prompts.map((prompt, promptIndex) => <li key={`${promptIndex}-${prompt}`}>{prompt}</li>)}</ol>{item.matching_pairs.length > 0 && <div className="questionnaire-mismatch-pairs"><strong>Provided matches</strong>{item.matching_pairs.map((pair) => <p key={pair.prompt}><b>{pair.prompt}</b> — {pair.answer}</p>)}</div>}</div>}
+              {item.source_refs.length > 0 && <small className="questionnaire-mismatch-source">{item.source_refs.join(" · ")}</small>}
+              {item.image_count > 0 && <small className="questionnaire-mismatch-source">{item.image_count} attached figure{item.image_count === 1 ? "" : "s"} stays with this question.</small>}
+              {item.must_preserve && <p className="questionnaire-mismatch-preserve">A single-answer quiz cannot safely represent this {quizTypeLabel(item.source_type).toLowerCase()} item, so it will keep its original format.</p>}
+            </article>)}
+          </div>
+          <div className="questionnaire-mismatch-actions">
+            <button type="button" className="questionnaire-type-continue" onClick={() => resumeQuestionnaireWithPolicy("convert")}>Continue as {quizTypeLabel(questionnaireMismatch.selected_type)}</button>
+            <button type="button" className="questionnaire-type-mixed" onClick={() => resumeQuestionnaireWithPolicy("mixed")}>Include the original question types</button>
+            <button type="button" className="questionnaire-type-cancel" onClick={() => { questionnaireReviewForm.current = null; setQuestionnaireMismatch(null); setNotice("Questionnaire import canceled. No questions were generated or saved."); }}>Cancel import</button>
+          </div>
+        </section>
+      </div>}
 
       {authOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) { setAuthOpen(false); setAuthError(""); } }}>
         <section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title">
