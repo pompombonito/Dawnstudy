@@ -4,7 +4,7 @@ from unittest.mock import patch, Mock
 from PIL import Image, ImageDraw
 from pypdf import PdfWriter, PdfReader
 from pypdf.generic import NameObject, DictionaryObject, ArrayObject, FloatObject, DecodedStreamObject
-from questionnaire import parse_questionnaire, convert_questionnaire, QuestionnaireError
+from questionnaire import parse_questionnaire, convert_questionnaire, validate_completion, QuestionnaireError
 from questionnaire_ocr import prepare_questionnaire_image, questionnaire_text_from_tsv
 from pdf_questionnaire import extract_pdf_questionnaire
 from test_generation_limits import main
@@ -36,6 +36,41 @@ def highlighted_pdf(two_highlights=False):
 
 
 class QuestionnaireLayoutTests(unittest.TestCase):
+    def test_questionnaire_text_keeps_c_difficile_and_consecutive_choices(self):
+        record = parse_questionnaire(["79. Which organism is isolated?\na. One\nb. Isolation of C. difficile from stool\nc. Three\nd. Four\nAnswer: B"])[0]
+        self.assertEqual(record["labels"], ["A", "B", "C", "D"])
+        self.assertEqual(record["options"][1], "Isolation of C. difficile from stool")
+        self.assertEqual(record["answer"], "Isolation of C. difficile from stool")
+
+    def test_numeric_lines_inside_questions_or_choices_are_not_new_questions(self):
+        records = parse_questionnaire(["1. What does the Tween\n80 test measure?\na. A method using Tween\n80 from the reagent\nb. Another method\n2. Next question?\nAnswer: Done"])
+        self.assertEqual(len(records), 2)
+        self.assertIn("Tween\n80 test", records[0]["question"])
+        self.assertEqual(records[0]["options"][0], "A method using Tween\n80 from the reagent")
+
+    def test_page_break_choices_and_pdf_figure_marker_are_preserved(self):
+        image = "data:image/webp;base64,AA=="
+        source = f"9. Which structure is shown?\na. First\nb. Second\n[SOURCE: PDF page 2]\n[PDF_IMAGE: {image}]\nc. Third\nd. Fourth\nAnswer: C"
+        record = parse_questionnaire([source])[0]
+        self.assertEqual(record["labels"], ["A", "B", "C", "D"])
+        self.assertEqual(record["source_refs"], ["PDF page 2"])
+        for quiz_format in ("flashcards", "multiple_choice", "identification", "same_as_source"):
+            with self.subTest(quiz_format=quiz_format):
+                item = convert_questionnaire([record], quiz_format, {})[0]
+                self.assertEqual(item["images"], [image])
+                self.assertEqual(item["answer"], "Third")
+
+    def test_same_as_source_keeps_matching_prompts_and_verified_pairs(self):
+        record = parse_questionnaire(["1. Match each term to its description\n__First term\n__Second term\nA. First description\nB. Second description"])[0]
+        payload = {"items": [{"number": "1", "question": record["question"], "answer": "Completed matching question", "uncertain": False, "distractors": [], "matching_pairs": [
+            {"prompt": "First term", "match": "A"}, {"prompt": "Second term", "match": "B"},
+        ]}]}
+        completion = validate_completion([record], payload, False)
+        item = convert_questionnaire([record], "same_as_source", completion)[0]
+        self.assertEqual(item["quiz_type"], "matching")
+        self.assertEqual(item["matching_prompts"], ["First term", "Second term"])
+        self.assertEqual(item["matching_pairs"][0]["answer"], "First description")
+
     def test_two_columns_are_reordered_by_label_without_changing_answer(self):
         source = "1. Original stem?\na. First c. Third\nb. Second d. Fourth\nAnswer: c"
         record = parse_questionnaire([source])[0]

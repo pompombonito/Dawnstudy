@@ -6,13 +6,14 @@ class QuestionnaireError(ValueError):
     pass
 
 
-QUESTION = re.compile(r"^(?:Q(?:uestion)?\s*)?(\d+)[.) :]\s*(\S.*)$", re.I)
+QUESTION = re.compile(r"^(?:Q(?:uestion)?\s*)?(\d+)(?:[.)]|:\s+)\s*(\S.*)$", re.I)
 QA = re.compile(r"^(?:Q|Question)\s*:\s*(\S.*)$", re.I)
 OPTION = re.compile(r"^(?:\(([A-Ha-h])\)|([A-Ha-h])[.)])\s+(.+)$")
 ANSWER = re.compile(r"^(?:Correct\s+answer|Answer|Ans|A)\s*[:=]\s*(.*)$", re.I)
 KEY_HEADING = re.compile(r"^(?:answer\s*key|answers|key\s+to\s+answers)\s*:?(.*)$", re.I)
 SOURCE = re.compile(r"^\[SOURCE: (.+)\]$")
-SECTION = re.compile(r"^(?:(?:section|part|quiz|test|chapter|unit|set)\s+(?:\d+|[ivxlcdm]+|[a-z])(?:\b|[:.)])|[ivxlcdm]+[.)]\s+\S|#{1,6}\s+\S)", re.I)
+PDF_IMAGE = re.compile(r"^\[PDF_IMAGE:\s*(data:image/(?:jpeg|webp);base64,[A-Za-z0-9+/=_-]+)\]$", re.I)
+SECTION = re.compile(r"^(?:(?:section|part|quiz|test|chapter|unit|set)\s+(?:\d+|[ivxlcdm]+|[a-z])(?:\b|[:.)])|(?-i:[IVXLCDM]+[.)]\s+(?:[A-Z][a-z]+|[A-Z0-9\s,:;—-]{3,}))|#{1,6}\s+\S)", re.I)
 
 
 def docx_questionnaire_text(document):
@@ -138,6 +139,7 @@ def parse_questionnaire(documents, limit=200):
 
     for document_index, document in enumerate(documents):
         current, in_key, source = None, False, ""
+        pending_images = []
         scope = new_scope(document_index)
         lines = document.splitlines()
         # Split same-line choices only at explicit labels; preserve their order.
@@ -145,11 +147,27 @@ def parse_questionnaire(documents, limit=200):
             line = raw_line.strip()
             if not line:
                 continue
+            image = PDF_IMAGE.match(line)
+            if image:
+                if current is None:
+                    pending_images.append(image[1])
+                else:
+                    current.setdefault("images", []).append(image[1])
+                continue
             marker = SOURCE.match(line)
             if marker:
                 source = marker[1]
+                following = next((value.strip() for value in lines[line_index + 1:] if value.strip() and not SOURCE.match(value.strip()) and not PDF_IMAGE.match(value.strip())), "")
+                continues_current = current is not None and not (QUESTION.match(following) or QA.match(following) or KEY_HEADING.match(following))
+                if continues_current and source not in current["source_refs"]:
+                    current["source_refs"].append(source)
                 continue
             if SECTION.match(line) and not OPTION.match(line):
+                following = next((value.strip() for value in lines[line_index + 1:] if value.strip()), "")
+                if current is not None and OPTION.match(following):
+                    # A page/section heading can interrupt the choices of a
+                    # question that started on the previous printed page.
+                    continue
                 current, in_key = None, False
                 if scope["records"]:
                     scope = new_scope(document_index)
@@ -183,7 +201,11 @@ def parse_questionnaire(documents, limit=200):
                 if any(item["number"] == number for item in scope["records"]):
                     scope = new_scope(document_index)
                 question = numbered[2] if numbered else qa[1]
-                current = {"number": number, "source_number": printed_number, "question": question, "options": [], "labels": [], "answer": "", "source_refs": [source] if source else []}
+                current = {"number": number, "source_number": printed_number, "question": question, "options": [], "labels": [], "answer": "", "answer_after_option": False, "source_refs": [source] if source else []}
+                current["matching_prompts"] = []
+                if pending_images:
+                    current["images"] = pending_images[:]
+                    pending_images.clear()
                 records.append(current)
                 scope["records"].append(current)
                 if len(records) > limit:
@@ -206,12 +228,17 @@ def parse_questionnaire(documents, limit=200):
             if current["options"] and re.match(r"^[-–—]\s+", line):
                 current["commentary"] = True
                 continue
+            matching_prompt = re.match(r"^_{2,}\s*(\S.*)$", line)
+            if matching_prompt and re.match(r"\s*match\b", current["question"], re.I):
+                current["matching_prompts"].append(matching_prompt[1].strip())
+                continue
             answer = ANSWER.match(line)
             if answer:
                 value = answer[1].strip()
                 if current["answer"] and current["answer"] != value:
                     raise QuestionnaireError(f"Conflicting answers for question {current['number']}.")
                 current["answer"] = value
+                current["answer_after_option"] = bool(current["options"] and re.fullmatch(r"\(?[A-Ha-h]\)?[.)]?", value))
                 continue
             option = OPTION.match(line)
             if option:
@@ -223,6 +250,26 @@ def parse_questionnaire(documents, limit=200):
                     current["answer"] = value
                     line = line[:inline_answer.start()].rstrip()
                 parts = re.split(r"\s+(?=\([A-Ha-h]\)\s+|[A-Ha-h][.)]\s+)", line)
+                # A scientific abbreviation such as "C. difficile" can look
+                # like an inline choice. If that label occurs again as a
+                # standalone option before the next question, preserve the
+                # entire current option line.
+                if len(parts) > 1:
+                    later_labels = set()
+                    for future in lines[line_index + 1:]:
+                        future = future.strip()
+                        if QUESTION.match(future) or QA.match(future):
+                            break
+                        later_option = OPTION.match(future)
+                        if later_option:
+                            later_labels.add((later_option[1] or later_option[2]).upper())
+                    split_labels = {
+                        (match[1] or match[2]).upper()
+                        for part in parts[1:]
+                        if (match := OPTION.match(part))
+                    }
+                    if split_labels & later_labels:
+                        parts = [line]
                 for part in parts:
                     match = OPTION.match(part)
                     label = (match[1] or match[2]).upper()
@@ -234,7 +281,9 @@ def parse_questionnaire(documents, limit=200):
                 continue
             if current.get("commentary"):
                 continue
-            if current["answer"]:
+            if current.get("answer_after_option") and current["options"]:
+                current["options"][-1] += "\n" + line
+            elif current["answer"]:
                 current["answer"] += "\n" + line
             elif current["options"]:
                 current["options"][-1] += "\n" + line
@@ -242,12 +291,13 @@ def parse_questionnaire(documents, limit=200):
                 current["question"] += "\n" + line
 
     if not records:
-        raise QuestionnaireError("No questions were recognized. Use numbered questions (1. Question), A./B./C./D. choices, and Answer: text or a numbered Answer key section. Scanned PDFs need OCR first.")
+        raise QuestionnaireError("No questions were recognized. Use numbered questions (1. Question or 1) Question), A./B./C./D. choices, and Answer: text or a numbered Answer key section. Scanned PDFs need OCR first.")
     _apply_answer_keys(records, scopes, blocks)
     for item in records:
         options, labels = item["options"], item["labels"]
         if options and (len(options) < 2 or set(labels) != set("ABCDEFGH"[:len(options)])):
-            raise QuestionnaireError(f"Question {item['number']} has missing choices or unreadable labels. Make sure every choice from A onward is readable, or upload a clearer copy.")
+            found = ", ".join(labels) or "none"
+            raise QuestionnaireError(f"Question {item['number']} has missing choices or unreadable labels (found: {found}). Make sure every choice from A onward is readable, or upload a clearer copy.")
         if options:
             # OCR often reads two columns as A,C,B,D. Match text to its printed
             # label before resolving answer keys, so 'Both A and B' stays valid.
@@ -285,6 +335,31 @@ def validate_completion(records, payload, choice_mode):
         answer = entry.get("answer")
         if entry.get("question") != record["question"] or not isinstance(answer, str) or not answer.strip() or entry.get("uncertain") is not False:
             raise QuestionnaireError(f"An answer for question {record['number']} could not be established. Supply an answer key and retry.")
+        if record.get("matching_prompts"):
+            raw_pairs = entry.get("matching_pairs")
+            if not isinstance(raw_pairs, list) or len(raw_pairs) != len(record["matching_prompts"]):
+                raise QuestionnaireError(f"The model did not complete every match in question {record['number']}.")
+            mapping, used_prompts = [], set()
+            for pair in raw_pairs:
+                if not isinstance(pair, dict) or pair.get("prompt") not in record["matching_prompts"] or pair["prompt"] in used_prompts:
+                    raise QuestionnaireError(f"The model returned invalid matches for question {record['number']}.")
+                if not isinstance(pair.get("match"), str) or not pair["match"].strip():
+                    raise QuestionnaireError(f"The model returned an empty match for question {record['number']}.")
+                match = resolve_answer(pair["match"], record["options"], record["labels"])
+                used_prompts.add(pair["prompt"])
+                mapping.append({"prompt": pair["prompt"], "answer": match})
+            if used_prompts != set(record["matching_prompts"]):
+                raise QuestionnaireError(f"The model omitted a match in question {record['number']}.")
+            if len({_normalized(pair["answer"]) for pair in mapping}) != len(mapping):
+                raise QuestionnaireError(f"The model repeated a match in question {record['number']}.")
+            completed[record["number"]] = {
+                "answer": "\n".join(f"{pair['prompt']} — {pair['answer']}" for pair in mapping),
+                "matching_pairs": mapping,
+                "distractors": [],
+            }
+            continue
+        if entry.get("question") != record["question"] or not isinstance(answer, str) or not answer.strip() or entry.get("uncertain") is not False:
+            raise QuestionnaireError(f"An answer for question {record['number']} could not be established. Supply an answer key and retry.")
         if record["answer"] and answer != record["answer"]:
             raise QuestionnaireError("The model changed a supplied answer.")
         if record["options"] and answer not in record["options"]:
@@ -308,10 +383,26 @@ def convert_questionnaire(records, study_format, completions):
         if not answer:
             raise QuestionnaireError(f"Supply an answer for question {record['number']}.")
         item = {"question": record["question"], "answer": answer, "source_refs": record["source_refs"], "source_number": record.get("source_number", record["number"]), "imported": True, "answer_origin": "inferred" if inferred else "provided"}
+        if record.get("images"):
+            item["images"] = record["images"]
         notices = []
         if inferred:
             notices.append("AI-inferred answer: no answer key was supplied. Review it for accuracy.")
-        if study_format in {"multiple_choice", "checkbox"}:
+        if study_format == "same_as_source":
+            if record.get("matching_prompts"):
+                if completion.get("matching_pairs"):
+                    item["answer"] = "\n".join(f"{pair['prompt']} — {pair['answer']}" for pair in completion["matching_pairs"])
+                item.update(
+                    quiz_type="matching",
+                    matching_prompts=record["matching_prompts"],
+                    matching_options=record["options"],
+                    matching_pairs=completion.get("matching_pairs", []),
+                )
+            elif record["options"]:
+                item.update(quiz_type="multiple_choice", options=record["options"], correct_answer=answer)
+            else:
+                item["quiz_type"] = "identification"
+        elif study_format in {"multiple_choice", "checkbox"}:
             options = record["options"][:]
             if not options:
                 options = [answer, *completion["distractors"]]

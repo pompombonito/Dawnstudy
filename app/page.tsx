@@ -17,14 +17,14 @@ import Agreement from "./community/Agreement";
 import { DawnArtwork, DawnMark } from "./components/DawnArtwork";
 import { cancelGenerationJob, findGenerationJob, GenerationCancelledError, GenerationJobError, pollGenerationJob, startGenerationJob, type GenerationJob, type GenerationStatus } from "./generation-jobs";
 import {
-  AlarmClock, BookOpen, Check, CheckSquare, ChevronLeft, ChevronRight, CircleHelp, Clock3,
+  AlarmClock, ArrowLeftRight, BookOpen, Check, CheckSquare, ChevronLeft, ChevronRight, CircleHelp, Clock3,
   CloudUpload, Copy, Cpu, ExternalLink, FileText, Flag, Globe2, GraduationCap, Layers3, LogOut, Menu, Mic,
   MicOff, Maximize2, Minimize2, Plus, Send, Share2, Sparkles, Trash2, UserRound,
   Search, Volume2, X, ArrowUpRight, ArrowRight, FolderOpen, ChevronDown, Leaf, Users, Gamepad2, ShieldCheck, Youtube,
 } from "lucide-react";
 
-type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification";
-type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred" };
+type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification" | "same_as_source";
+type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred"; images?: string[]; quiz_type?: "multiple_choice" | "checkbox" | "identification" | "matching"; matching_prompts?: string[]; matching_options?: string[]; matching_pairs?: { prompt: string; answer: string }[] };
 type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; source_url?: string; created_at: string; material_fingerprint?: string; page_ranges?: Record<string, string>; focus_topic?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; usage?: { remaining: number | null; limit: number | null; resets_at: string | null; unlimited?: boolean } };
 type ActiveShare = { set_id: string; title: string; token: string; created_at: string };
 type ReviewItem = { study_set_id: string; study_set_title: string; type: Kind; card: Card; retried?: boolean; intervals: { again: string; hard: string; good: string; easy: string } };
@@ -33,7 +33,7 @@ type Account = { id: string; username: string; email: string; display_name: stri
 type LoginResult = { token: string; user: Account };
 type ModelOption = { id: string; provider: string; name: string };
 type MaterialSearchResult = { title: string; url: string; snippet: string; file_type: string };
-type PracticeAnswer = string | string[] | null;
+type PracticeAnswer = string | string[] | Record<string, string> | null;
 type WorkspaceView = "study" | "library" | "finder" | "voice" | "about" | "friends" | "games" | "profile" | "agreement";
 type GenerationResult = StudySet & { auto_model?: string; auto_reason?: string; persistence_error?: string; continued_set_id?: string };
 type PendingGeneration = { job_id: string; base?: StudySet };
@@ -86,6 +86,7 @@ const types: { id: Kind; title: string; detail: string; icon: typeof Layers3 }[]
   { id: "multiple_choice", title: "Multiple choice", detail: "Choose the best answer", icon: CircleHelp },
   { id: "checkbox", title: "Select all that apply", detail: "Find every correct answer", icon: CheckSquare },
   { id: "identification", title: "Identification", detail: "Recall key terms", icon: FileText },
+  { id: "same_as_source", title: "Same type as the questionnaire", detail: "Keep multiple choice and matching questions", icon: ArrowLeftRight },
 ];
 
 function ageLabel(value: string) {
@@ -147,6 +148,9 @@ function choiceAnswerOptions(answer: unknown, options: string[]) {
 }
 
 function displayCorrectAnswer(card: Card) {
+  if (card.quiz_type === "matching" && card.matching_pairs?.length) {
+    return card.matching_pairs.map((pair) => `${pair.prompt} — ${pair.answer}`).join(" · ");
+  }
   const answer = card.correct_answer || card.answer;
   if (card.imported) return answer;
   const resolved = choiceAnswerOptions(answer, card.options || []);
@@ -155,6 +159,13 @@ function displayCorrectAnswer(card: Card) {
 
 function isPracticeAnswerCorrect(card: Card, type: Kind, response: PracticeAnswer | undefined) {
   if (response === null || response === undefined) return false;
+  if ((card.quiz_type || type) === "matching") {
+    if (!response || typeof response !== "object" || Array.isArray(response)) return false;
+    const matches = card.matching_pairs || [];
+    return matches.length === (card.matching_prompts || []).length
+      && matches.length > 0
+      && matches.every((pair) => normalizedAnswer((response as Record<string, string>)[pair.prompt]) === normalizedAnswer(pair.answer));
+  }
   if (card.imported) return importedAnswerMatches(card, response);
   const rawExpected = card.correct_answer || card.answer || "";
   const resolved = choiceAnswerOptions(rawExpected, card.options || []);
@@ -168,7 +179,9 @@ function isPracticeAnswerCorrect(card: Card, type: Kind, response: PracticeAnswe
 }
 
 function displayPracticeAnswer(response: PracticeAnswer | undefined) {
-  return Array.isArray(response) ? response.join(" · ") : response || "No answer";
+  if (Array.isArray(response)) return response.join(" · ");
+  if (response && typeof response === "object") return Object.entries(response).map(([prompt, answer]) => `${prompt} — ${answer}`).join(" · ") || "No answer";
+  return response || "No answer";
 }
 
 function shuffleSavedItems(items: Card[], kind: Kind) {
@@ -244,6 +257,7 @@ export default function Home() {
   const [reviewSelectedOptions, setReviewSelectedOptions] = useState<string[]>([]);
   const [studyIdentificationAnswer, setStudyIdentificationAnswer] = useState("");
   const [reviewIdentificationAnswer, setReviewIdentificationAnswer] = useState("");
+  const [matchingResponses, setMatchingResponses] = useState<Record<string, Record<string, string>>>({});
   const [practiceActive, setPracticeActive] = useState(false);
   const [practiceComplete, setPracticeComplete] = useState(false);
   const [practiceIndex, setPracticeIndex] = useState(0);
@@ -592,6 +606,7 @@ export default function Home() {
     setSelectedOption(null);
     setStudySelectedOptions([]);
     setStudyIdentificationAnswer("");
+    setMatchingResponses({});
   }
 
   function resetReviewAnswer() {
@@ -599,6 +614,7 @@ export default function Home() {
     setSelectedOption(null);
     setReviewSelectedOptions([]);
     setReviewIdentificationAnswer("");
+    setMatchingResponses({});
   }
 
   function navigateToLibrarySection(sectionId: string) {
@@ -1191,12 +1207,12 @@ export default function Home() {
   }
 
   function updatePracticeAnswer(index: number, answer: PracticeAnswer) {
-    setPracticeAnswers((old) => old.map((entry, position) => position === index ? answer : entry));
+    setPracticeAnswers((old) => { const next = [...old]; next[index] = answer; return next; });
   }
 
   function togglePracticeChoice(index: number, option: string) {
     const currentAnswer = practiceAnswers[index];
-    const selected = Array.isArray(currentAnswer) ? currentAnswer : currentAnswer ? [currentAnswer] : [];
+    const selected: string[] = Array.isArray(currentAnswer) ? currentAnswer : typeof currentAnswer === "string" && currentAnswer ? [currentAnswer] : [];
     updatePracticeAnswer(index, selected.includes(option) ? selected.filter((item) => item !== option) : [...selected, option]);
   }
 
@@ -1252,6 +1268,34 @@ export default function Home() {
     ["incorrect_answer", "Incorrect answer"], ["unclear_question", "Unclear question"],
     ["bad_source", "Source reference is wrong"], ["other", "Other issue"],
   ];
+  function renderQuestionImages(card: Card) {
+    return card.images?.length ? <div className="study-figure-list">{card.images.map((image, index) => <img key={`${card.card_id || card.question}-figure-${index}`} src={image} alt={`Figure ${index + 1} from the uploaded questionnaire`} loading="lazy"/>)}</div> : null;
+  }
+
+  function renderMatchingQuiz(card: Card, isReview = false, practiceAt?: number) {
+    const prompts = card.matching_prompts || [];
+    const options = card.matching_options || [];
+    const cardKey = `${isReview ? "review" : "study"}:${card.card_id || card.question}`;
+    const practiceResponse = practiceAt === undefined ? undefined : practiceAnswers[practiceAt];
+    const answers = practiceAt === undefined
+      ? matchingResponses[cardKey] || {}
+      : practiceResponse && typeof practiceResponse === "object" && !Array.isArray(practiceResponse) ? practiceResponse as Record<string, string> : {};
+    const complete = prompts.length > 0 && prompts.every((prompt) => Boolean(answers[prompt]))
+      && new Set(Object.values(answers).map(normalizedAnswer)).size === prompts.length;
+    const correct = complete && (card.matching_pairs || []).every((pair) => normalizedAnswer(answers[pair.prompt]) === normalizedAnswer(pair.answer));
+    const update = (prompt: string, value: string) => {
+      const next = { ...answers, [prompt]: value };
+      if (practiceAt !== undefined) updatePracticeAnswer(practiceAt, next);
+      else setMatchingResponses((old) => ({ ...old, [cardKey]: next }));
+    };
+    return <div className={practiceAt === undefined ? `study-face choice-study-face matching-quiz ${revealed ? "is-revealed" : ""}` : "matching-quiz practice-matching"}>
+      {practiceAt === undefined && <><span className="face-label">{revealed ? "MATCHES" : "MATCH EACH ITEM"}</span><span className="face-question">{card.question}</span>{renderQuestionImages(card)}</>}
+      <div className="matching-rows">{prompts.map((prompt, index) => <label className="matching-row" key={`${index}-${prompt}`}><span>{prompt}</span><select value={answers[prompt] || ""} disabled={practiceAt === undefined && revealed} onChange={(event) => update(prompt, event.target.value)}><option value="">Choose a match</option>{options.map((option, optionIndex) => <option key={`${optionIndex}-${option}`} value={option}>{String.fromCharCode(65 + optionIndex)}. {option}</option>)}</select></label>)}</div>
+      {practiceAt === undefined && !revealed && <button className="check-answer-button" type="button" disabled={!complete} onClick={() => setRevealed(true)}>Check matches</button>}
+      {practiceAt === undefined && revealed && <p className={`choice-feedback ${correct ? "correct" : "wrong"}`} role="status">{correct ? "All matches are correct." : `Correct matches: ${displayCorrectAnswer(card)}`}</p>}
+    </div>;
+  }
+
   function renderMultipleChoice(card: Card) {
     const correctOptions = choiceAnswerOptions(card.correct_answer || card.answer, card.options || []);
     const correctAnswers = correctOptions.length ? correctOptions.map(normalizedAnswer) : [normalizedAnswer(card.correct_answer || card.answer)];
@@ -1261,6 +1305,7 @@ export default function Home() {
     return <div className={`study-face choice-study-face ${revealed ? "is-revealed" : ""}`}>
       <span className="face-label">{revealed ? "ANSWER FEEDBACK" : "CHOOSE YOUR ANSWER"}</span>
       <span className="face-question">{card.question}</span>
+      {renderQuestionImages(card)}
       <div className="choice-options">{card.options?.map((option, index) => {
         const correct = isCorrect(option);
         const selected = selectedOption === index;
@@ -1287,6 +1332,7 @@ export default function Home() {
     return <div className={"study-face choice-study-face" + (revealed ? " is-revealed" : "")}>
       <span className="face-label">{revealed ? "ANSWER FEEDBACK" : "SELECT EVERY CORRECT ANSWER"}</span>
       <span className="face-question">{card.question}</span>
+      {renderQuestionImages(card)}
       {card.options?.length ? <div className="choice-options" role="group" aria-label="Choose all correct answers">{card.options.map((option, index) => {
         const picked = selectedAnswers.includes(option);
         const correct = isCorrect(option);
@@ -1306,18 +1352,26 @@ export default function Home() {
     return <div className={"study-face choice-study-face" + (revealed ? " is-revealed" : "")}>
       <span className="face-label">{revealed ? "ANSWER FEEDBACK" : "IDENTIFY THE TERM OR CONCEPT"}</span>
       <span className="face-question">{card.question}</span>
+      {renderQuestionImages(card)}
       <label className="practice-written study-identification-input"><span>Your answer</span><input value={answer} disabled={revealed} onChange={(event) => setAnswer(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && answer.trim() && !revealed) setRevealed(true); }} placeholder="Type the term or concept"/></label>
       {!revealed ? <button type="button" className="check-answer-button" disabled={!answer.trim()} onClick={() => setRevealed(true)}>Check answer</button> : <p className={"choice-feedback " + (correct ? "correct" : "wrong")} role="status">{correct ? "Correct! Nice work." : "Correct answer: " + displayCorrectAnswer(card)}</p>}
     </div>;
   }
 
   function renderCardInteraction(card: Card, kind: Kind, isReview = false) {
+    if (kind === "same_as_source") {
+      if (card.quiz_type === "matching") return renderMatchingQuiz(card, isReview);
+      if (card.quiz_type === "multiple_choice") return renderMultipleChoice(card);
+      if (card.quiz_type === "checkbox") return renderCheckboxQuiz(card, isReview);
+      if (card.quiz_type === "identification") return renderIdentificationQuiz(card, isReview);
+    }
     if (kind === "multiple_choice") return card.options?.length ? renderMultipleChoice(card) : renderIdentificationQuiz(card, isReview);
     if (kind === "checkbox") return renderCheckboxQuiz(card, isReview);
     if (kind === "identification") return renderIdentificationQuiz(card, isReview);
     return <button className={"study-face" + (revealed ? " is-revealed" : "")} onClick={() => setRevealed(!revealed)}>
       <span className="face-label">{revealed ? "THE ANSWER" : "YOUR QUESTION"}</span>
       <span className="face-question">{revealed ? card.answer : card.question}</span>
+      {!revealed && renderQuestionImages(card)}
       {!revealed && <span className="tap-hint">Tap to reveal <span>↗</span></span>}
     </button>;
   }
@@ -1421,8 +1475,8 @@ export default function Home() {
                     <button type="button" className="finder-shortcut" onClick={() => navigateTo("finder")}><Search size={17}/><span>No material yet? <b>Find something to study</b></span><ArrowUpRight size={17}/></button>
                   </div>}
                   {composerStep === 1 && <div className="creator-practice"><div className="creator-prompt"><h3>How do you want to practice?</h3><p>Choose the format that works for you.</p></div>
-          <div className="type-grid">{types.map(({ id, title, detail, icon: Icon }) => <button key={id} className={`type-card ${selected === id ? "chosen" : ""}`} onClick={() => { setSelected(id); setResult(null); setCurrent(0); resetStudyAnswer(); resetReviewAnswer(); setError(""); }}><span className="type-icon"><Icon size={19}/></span><span className="type-text"><strong>{title}</strong><small>{detail}</small></span>{selected === id && <span className="check-icon"><Check size={13} strokeWidth={3}/></span>}</button>)}</div>
-                    {inputMode === "questionnaire" ? <p className="questionnaire-help">All imported questions · original wording and difficulty. Missing answers will be inferred and marked for review.</p> : <div className="session-options"><label htmlFor="question-count">Questions<select id="question-count" value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{Array.from({ length: 20 }, (_, index) => (index + 1) * 10).map((count) => <option key={count} value={count}>{count} questions</option>)}</select></label><fieldset className="difficulty-choice"><legend>Difficulty</legend><div>{["easy", "medium", "hard"].map((level) => <button type="button" key={level} aria-pressed={difficulty === level} className={difficulty === level ? "selected" : ""} onClick={() => setDifficulty(level as "easy" | "medium" | "hard")}>{level}</button>)}</div></fieldset></div>}
+          <div className="type-grid">{types.filter(({ id }) => inputMode === "questionnaire" || id !== "same_as_source").map(({ id, title, detail, icon: Icon }) => <button key={id} className={`type-card ${selected === id ? "chosen" : ""}`} onClick={() => { setSelected(id); setResult(null); setCurrent(0); resetStudyAnswer(); resetReviewAnswer(); setError(""); }}><span className="type-icon"><Icon size={19}/></span><span className="type-text"><strong>{title}</strong><small>{detail}</small></span>{selected === id && <span className="check-icon"><Check size={13} strokeWidth={3}/></span>}</button>)}</div>
+                    {inputMode === "questionnaire" ? <p className="questionnaire-help">{selected === "same_as_source" ? "Keep multiple-choice and matching questions in their original formats. Extracted PDF figures stay with their questions." : "All imported questions · original wording and difficulty. Missing answers will be inferred and marked for review."}</p> : <div className="session-options"><label htmlFor="question-count">Questions<select id="question-count" value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{Array.from({ length: 20 }, (_, index) => (index + 1) * 10).map((count) => <option key={count} value={count}>{count} questions</option>)}</select></label><fieldset className="difficulty-choice"><legend>Difficulty</legend><div>{["easy", "medium", "hard"].map((level) => <button type="button" key={level} aria-pressed={difficulty === level} className={difficulty === level ? "selected" : ""} onClick={() => setDifficulty(level as "easy" | "medium" | "hard")}>{level}</button>)}</div></fieldset></div>}
                   </div>}
                   {composerStep === 2 && <div className="creator-ready"><div className="creator-prompt"><h3>Your next session, ready to go.</h3><p>A quick look before we bring your material to life.</p></div><div className="session-summary"><span className="summary-icon"><BookOpen size={25}/></span><div><strong>{types.find((type) => type.id === selected)?.title}</strong><span>{inputMode === "questionnaire" ? "All imported questions · original wording" : <>{questionCount} questions <i/> {difficulty} difficulty</>}</span><small>{sourceMode === "file" ? files.length ? `${files.length} material${files.length === 1 ? "" : "s"} selected` : "Add your material in step 1" : websiteUrl.trim() ? sourceMode === "youtube" ? "YouTube video selected" : "Public website selected" : "Add a link in step 1"}{inputMode === "notes" && focusTopic ? ` · ${focusTopic}` : ""}</small></div><button type="button" className="plain-icon" aria-label="Edit practice choices" onClick={() => setComposerStep(1)}><ArrowUpRight size={18}/></button></div><label className="model-choice-field" htmlFor="model-choice"><span><Cpu size={18}/> AI model</span><select id="model-choice" value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}><option value="auto">Auto choose the best available model</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select></label>{inputMode === "notes" && <div className="options-row"><button type="button" className={`web-toggle ${web ? "on" : ""}`} aria-pressed={web} onClick={() => setWeb(!web)}><span className="toggle-track"><span/></span><span><b>Enrich with the web</b><small>Add relevant context and source links.</small></span><Globe2 size={19}/></button></div>}<details className="model-help-details"><summary>About generation <ChevronDown size={14}/></summary><p className="model-help">{inputMode === "questionnaire" ? "Imports preserve all recognized items, up to 200. AI is only used for missing answers or new choices. Supply an answer key for questions that need context. Ambiguous layouts or conflicting keys must be corrected before import." : <>Create up to 200 questions per set, with no daily generation limit. AI providers may still have their own usage limits. If a model is busy, another available model can help. Completed questions are saved, and partial sets can be continued.</>}</p></details></div>}
                 </div>
@@ -1441,7 +1495,8 @@ export default function Home() {
             {!practiceComplete && practiceCard ? <>
               <div className="practice-timer"><AlarmClock size={18}/><span>{practiceSecondsPerQuestion === 0 ? "No time limit" : `${Math.floor(practiceTimeLeft / 60)}:${String(practiceTimeLeft % 60).padStart(2, "0")} remaining`}</span><span className="practice-progress">Question {practiceIndex + 1} of {result.items.length}</span></div>
               <div className="practice-question"><span className="face-label">QUESTION {practiceIndex + 1}</span><h3>{practiceCard.question}</h3>
-                {practiceCard.options?.length ? <div className="practice-choices">{practiceCard.options.map((option, index) => {
+                {renderQuestionImages(practiceCard)}
+                {(practiceCard.quiz_type || result.type) === "matching" ? renderMatchingQuiz(practiceCard, false, practiceIndex) : practiceCard.options?.length ? <div className="practice-choices">{practiceCard.options.map((option, index) => {
                   const checkboxMode = result.type === "checkbox";
                   const answer = practiceAnswers[practiceIndex];
                   const selected = checkboxMode ? Array.isArray(answer) && answer.includes(option) : answer === option;

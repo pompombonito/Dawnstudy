@@ -1,17 +1,189 @@
-"""Read native PDF highlight annotations as questionnaire answer keys."""
+"""Extract questionnaire text, highlighted keys, and question figures from PDFs."""
+import base64
 import re
 import threading
+from io import BytesIO
+
+from PIL import Image
 
 from questionnaire import OPTION, QuestionnaireError
 
 # PDFium is not thread-safe. Generation workers may import PDFs concurrently.
 _pdfium_lock = threading.RLock()
+_QUESTION_START = re.compile(r"(?m)^[ \t]*(?:Q(?:uestion)?\s*)?(\d+)[.)]\s*\S", re.I)
+_OPTION_START = re.compile(r"(?m)^[ \t]*(?:\([A-Ha-h]\)|[A-Ha-h][.)])\s+\S")
+_FIGURE = re.compile(r"\bFIGURE\s+\d+(?:[-.]\d+)*\b", re.I)
+
+
+def _line_bounds(textpage, text, start):
+    boxes = []
+    for offset, character in enumerate(text):
+        if character.isspace():
+            continue
+        try:
+            box = textpage.get_charbox(start + offset)
+        except Exception:
+            continue
+        if box:
+            boxes.append(box)
+    if not boxes:
+        return None
+    return (min(box[0] for box in boxes), min(box[1] for box in boxes),
+            max(box[2] for box in boxes), max(box[3] for box in boxes))
+
+
+def _rect_distance(first, second):
+    dx = max(0, first[0] - second[2], second[0] - first[2])
+    dy = max(0, first[1] - second[3], second[1] - first[3])
+    return (dx * dx + dy * dy) ** 0.5
+
+
+def _image_data_url(image_object, bounds, page_area):
+    width, height = bounds[2] - bounds[0], bounds[3] - bounds[1]
+    # Ignore tiny decorative images and full-page scans; those are not figures.
+    if width < 38 or height < 38 or width * height > page_area * 0.4:
+        return None
+    bitmap = image_object.get_bitmap()
+    image = bitmap.to_pil().convert("RGB")
+
+    for dimensions, quality in (((420, 420), 68), ((360, 360), 58), ((280, 280), 50)):
+        candidate = image.copy()
+        candidate.thumbnail(dimensions, Image.Resampling.LANCZOS)
+        output = BytesIO()
+        try:
+            candidate.save(output, format="WEBP", quality=quality, method=5)
+            mime = "image/webp"
+        except (OSError, ValueError):
+            output = BytesIO()
+            candidate.save(output, format="JPEG", quality=quality, optimize=True)
+            mime = "image/jpeg"
+        payload = output.getvalue()
+        if len(payload) <= 30_000:
+            return f"data:{mime};base64,{base64.b64encode(payload).decode('ascii')}"
+    raise QuestionnaireError("A PDF figure is too large to attach. Select fewer pages or upload a smaller copy.")
+
+
+def _read_page_images(page, textpage, text, has_previous_question=False):
+    import pypdfium2 as pdfium
+
+    page_width, page_height = page.get_size()
+    image_objects = []
+    for image_object in page.get_objects(filter=[pdfium.raw.FPDF_PAGEOBJ_IMAGE]):
+        bounds = image_object.get_bounds()
+        data_url = _image_data_url(image_object, bounds, page_width * page_height)
+        if data_url:
+            image_objects.append({"bounds": bounds, "data": data_url})
+
+    lines = []
+    for match in re.finditer(r"[^\n]*(?:\n|$)", text):
+        line = match.group(0).rstrip("\r\n")
+        if not line.strip():
+            continue
+        figure = _FIGURE.search(line)
+        lines.append({
+            "start": match.start(), "text": line,
+            "bounds": _line_bounds(textpage, line, match.start()),
+            "figure_bounds": _line_bounds(textpage, line[figure.start():figure.end()], match.start() + figure.start()) if figure else None,
+        })
+
+    question_anchors = []
+    matches = list(_QUESTION_START.finditer(text))
+    for position, match in enumerate(matches):
+        try:
+            box = textpage.get_charbox(match.start(1))
+        except Exception:
+            box = None
+        if not box:
+            continue
+        end = matches[position + 1].start() if position + 1 < len(matches) else len(text)
+        block = text[match.start():end]
+        stem = re.split(r"(?m)^\s*(?:\([A-Ha-h]\)|[A-Ha-h][.)])\s+", block, maxsplit=1)[0]
+        question_anchors.append({
+            "line_start": text.rfind("\n", 0, match.start()) + 1,
+            "x": (box[0] + box[2]) / 2,
+            "y": (box[1] + box[3]) / 2,
+            "references_image": bool(re.search(r"\b(?:image|figure|shown|pictured|smear|slide|photograph)\b", stem, re.I)),
+        })
+
+    markers_after_question = {}
+    leading_markers = []
+    for image_object in image_objects:
+        if not question_anchors:
+            if has_previous_question:
+                leading_markers.append(image_object["data"])
+            else:
+                leading_markers.append(image_object["data"])
+            continue
+        center_x = (image_object["bounds"][0] + image_object["bounds"][2]) / 2
+        closest_x = min(abs(anchor["x"] - center_x) for anchor in question_anchors)
+        same_column = [anchor for anchor in question_anchors if abs(anchor["x"] - center_x) <= closest_x + 18]
+        image_top, image_bottom = image_object["bounds"][3], image_object["bounds"][1]
+        above = [anchor for anchor in same_column if anchor["y"] >= image_top]
+        below = [anchor for anchor in same_column if anchor["y"] <= image_bottom]
+        if above:
+            anchor = min(above, key=lambda item: item["y"] - image_top)
+            markers_after_question.setdefault(anchor["line_start"], []).append(image_object["data"])
+            continue
+        if below and not (has_previous_question and not below[0]["references_image"]):
+            anchor = min(below, key=lambda item: image_bottom - item["y"])
+            markers_after_question.setdefault(anchor["line_start"], []).append(image_object["data"])
+            continue
+        if has_previous_question:
+            leading_markers.append(image_object["data"])
+            continue
+        anchor = min(same_column or question_anchors, key=lambda item: abs(item["y"] - ((image_top + image_bottom) / 2)))
+        markers_after_question.setdefault(anchor["line_start"], []).append(image_object["data"])
+
+    output, skipping_caption = [], False
+    for line in lines:
+        value = line["text"]
+        figure = _FIGURE.search(value)
+        if figure:
+            # Keep a choice that PDF text extraction placed after its figure
+            # caption on the same line, while removing the caption itself.
+            trailing = value[figure.end():]
+            option = re.search(r"(?i)(?<![A-Za-z])(?:\([A-H]\)|[A-H][.)])\s+\S", trailing)
+            if option:
+                output.append(trailing[option.start():].strip())
+            skipping_caption = True
+            continue
+
+        if skipping_caption:
+            if not (_QUESTION_START.match(value) or _OPTION_START.match(value) or re.match(r"(?i)^\s*(?:Answer|Ans)\s*[:=]", value)):
+                continue
+            skipping_caption = False
+
+        bounds = line["bounds"]
+        if bounds and not (_QUESTION_START.match(value) or _OPTION_START.match(value)):
+            characters = [character for character in value if not character.isspace()]
+            inside = 0
+            for offset, character in enumerate(value):
+                if character.isspace():
+                    continue
+                try:
+                    box = textpage.get_charbox(line["start"] + offset)
+                except Exception:
+                    continue
+                if not box:
+                    continue
+                x = (box[0] + box[2]) / 2
+                y = (box[1] + box[3]) / 2
+                if any(image["bounds"][0] <= x <= image["bounds"][2] and image["bounds"][1] <= y <= image["bounds"][3] for image in image_objects):
+                    inside += 1
+            if characters and inside / len(characters) >= 0.65:
+                continue
+        output.append(value)
+        if line["start"] in markers_after_question:
+            output.extend(f"[PDF_IMAGE: {data}]" for data in markers_after_question[line["start"]])
+
+    return "\n".join(output), leading_markers
 
 
 def extract_pdf_questionnaire(raw, reader, page_indices):
     import pypdfium2 as pdfium
 
     segments = []
+    has_previous_question = False
     with _pdfium_lock:
         document = pdfium.PdfDocument(raw)
         try:
@@ -19,7 +191,17 @@ def extract_pdf_questionnaire(raw, reader, page_indices):
                 page = document[index]
                 textpage = page.get_textpage()
                 try:
-                    text = textpage.get_text_bounded().replace("\r\n", "\n")
+                    original = textpage.get_text_bounded()
+                    page_width, page_height = page.get_size()
+                    has_page_scan = any(
+                        (bounds := image.get_bounds()) and (bounds[2] - bounds[0]) * (bounds[3] - bounds[1]) > page_width * page_height * .4
+                        for image in page.get_objects(filter=[pdfium.raw.FPDF_PAGEOBJ_IMAGE])
+                    )
+                    if has_page_scan and not _QUESTION_START.search(original):
+                        raise QuestionnaireError(f"PDF page {index + 1} is a scanned image, and its choice labels cannot be read reliably. Upload a clearer text-based copy or select readable pages.")
+                    text, leading_markers = _read_page_images(page, textpage, original, has_previous_question)
+                    if leading_markers:
+                        text = "\n".join(f"[PDF_IMAGE: {data}]" for data in leading_markers) + "\n" + text
                     label = f"PDF page {index + 1}"
                     keys = {}
                     for reference in reader.pages[index].get("/Annots", []):
@@ -39,16 +221,14 @@ def extract_pdf_questionnaire(raw, reader, page_indices):
                                 first_index = textpage.get_index(left + min(2, (right - left) / 2), (top + bottom) / 2, 4, 4)
                         if first_index is None:
                             continue
-                        prefix = textpage.get_text_range(index=0, count=first_index).replace("\r\n", "\n")
-                        starts = list(re.finditer(r"(?m)^\s*(?:Q(?:uestion)?\s*)?(\d+)[.) :]\s*\S", prefix, re.I))
+                        prefix = original[:first_index]
+                        starts = list(_QUESTION_START.finditer(prefix))
                         if not starts:
                             continue
                         question = starts[-1]
                         value = " ".join(part for part in selected if part)
                         labeled = OPTION.match(value)
-                        # Ignore highlighted titles/stems. Full option labels or
-                        # an option section before the selection identify a key.
-                        if not labeled and not any(OPTION.match(line.strip()) for line in prefix[question.start():].splitlines()[1:]):
+                        if not labeled and not any(_OPTION_START.match(line.strip()) for line in prefix[question.start():].splitlines()[1:]):
                             continue
                         key = (labeled[1] or labeled[2]).upper() if labeled else value
                         if not key:
@@ -58,9 +238,8 @@ def extract_pdf_questionnaire(raw, reader, page_indices):
                         if occurrence in keys and keys[occurrence] != key:
                             raise QuestionnaireError(f"Question {number} has multiple highlighted answers. Use one clear correct answer or supply a written key.")
                         keys[occurrence] = key
-                    # Attach a highlight to its actual question occurrence,
-                    # rather than a global printed number that may restart.
-                    starts = list(re.finditer(r"(?m)^[ \t]*(?:Q(?:uestion)?\s*)?(\d+)[.) :]\s*\S", text, re.I))
+
+                    starts = list(_QUESTION_START.finditer(text))
                     seen, insertions = {}, []
                     for position, match in enumerate(starts):
                         number = match[1]
@@ -70,13 +249,15 @@ def extract_pdf_questionnaire(raw, reader, page_indices):
                             continue
                         end = starts[position + 1].start() if position + 1 < len(starts) else len(text)
                         block = text[match.start():end]
-                        choice = re.search(r"(?m)^[ \t]*(?:\([A-Ha-h]\)|[A-Ha-h][.)])\s+\S", block)
+                        choice = _OPTION_START.search(block)
                         insertion = match.start() + choice.start() if choice else end
                         insertions.append((insertion, f"\nAnswer: {key}\n"))
                     for insertion, value in reversed(insertions):
                         text = text[:insertion] + value + text[insertion:]
                     if text.strip():
                         segments.append((label, text))
+                    if _QUESTION_START.search(original):
+                        has_previous_question = True
                 finally:
                     textpage.close()
                     page.close()
