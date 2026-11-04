@@ -44,6 +44,13 @@ class LargeStudySetStorageTests(unittest.TestCase):
             result = accounts.list_study_sets("student")[0]
         self.assertEqual(result["items"][0]["answer"], "Old answer")
 
+    def test_legacy_flashcard_type_is_recovered_when_saved_cards_have_choices(self):
+        items = [{"question": f"Question {index}?", "answer": "Alpha", "options": ["Alpha", "Bravo"]} for index in range(2)]
+        row = dict(zip(accounts.SET_COLUMNS, ["legacy-choice-set", "student", "Old quiz", "flashcards", json.dumps(items), "[]", self.study_set["created_at"], "", "false", "2", "", "{}", "", *("" for _ in accounts.SET_ITEM_COLUMNS[1:])]))
+        with patch.object(accounts, "_rows", return_value=[(2, row)]):
+            restored = accounts.list_study_sets("student")[0]
+        self.assertEqual(restored["type"], "multiple_choice")
+
     def test_schema_upgrade_appends_headers_without_rewriting_existing_data(self):
         headers = {accounts.USERS_TAB: accounts.USER_COLUMNS, accounts.SETS_TAB: accounts.SET_COLUMNS[:13], accounts.USAGE_TAB: accounts.USAGE_COLUMNS,
                    accounts.PROGRESS_TAB: accounts.PROGRESS_COLUMNS, accounts.REVIEWS_TAB: accounts.REVIEW_COLUMNS,

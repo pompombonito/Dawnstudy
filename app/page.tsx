@@ -205,6 +205,15 @@ function shuffleSavedItems(items: Card[], kind: Kind) {
   });
 }
 
+function effectiveStudyType(type: Kind, items: Card[]): Kind {
+  // Old or cross-device saves can have MC choices on the cards but retain a
+  // stale "flashcards" set type. The card data is sufficient to recover MC.
+  if (type === "flashcards" && items.length > 0 && items.every((card) => Boolean(card.options?.length))) {
+    return "multiple_choice";
+  }
+  return type;
+}
+
 export default function Home() {
   const [selected, setSelected] = useState<Kind>("flashcards");
   const [inputMode, setInputMode] = useState<"notes" | "questionnaire">("notes");
@@ -318,7 +327,9 @@ export default function Home() {
     try {
       const response = await fetch(`${API_BASE}/api/study-sets`, { headers: { Authorization: `Bearer ${token}` } });
       if (response.ok) {
-        const saved: StudySet[] = await response.json();
+        const saved: StudySet[] = (await response.json()).map((studySet: StudySet) => ({
+          ...studySet, type: effectiveStudyType(studySet.type, studySet.items || []),
+        }));
         setSets(saved);
       }
     } catch { /* Auth can still be used if study-set sync is briefly unavailable. */ }
@@ -692,7 +703,7 @@ export default function Home() {
   }
 
   async function applyGenerationResult(data: GenerationResult, token: string, signal: AbortSignal, base?: StudySet) {
-    let studySet: GenerationResult = { ...data, id: data.id || crypto.randomUUID(), created_at: data.created_at || new Date().toISOString() };
+    let studySet: GenerationResult = { ...data, type: effectiveStudyType(data.type, data.items), id: data.id || crypto.randomUUID(), created_at: data.created_at || new Date().toISOString() };
     setInputMode(data.items.some((card) => card.imported) ? "questionnaire" : "notes");
     const legacyContinuation = base && data.continued_set_id !== base.id;
     if (legacyContinuation) {
@@ -997,12 +1008,13 @@ export default function Home() {
   }
 
   function openSavedSet(studySet: StudySet) {
-    setInputMode(studySet.items.some((card) => card.imported) ? "questionnaire" : "notes");
+    const normalizedSet = { ...studySet, type: effectiveStudyType(studySet.type, studySet.items) };
+    setInputMode(normalizedSet.items.some((card) => card.imported) ? "questionnaire" : "notes");
     setActiveView("study");
-    if (studySet.incomplete && !studySet.source_url) setFiles([]);
-    setSourceMode(studySet.source_url ? /(?:youtube\.com|youtu\.be)/i.test(studySet.source_url) ? "youtube" : "website" : "file");
-    if (studySet.source_url) setWebsiteUrl(studySet.source_url);
-    setReviewActive(false); setPracticeActive(false); setPracticeComplete(false); setShareUrl(""); setResult({ ...studySet, items: shuffleSavedItems(studySet.items, studySet.type) }); setSelected(studySet.type); setCurrent(0); resetStudyAnswer(); resetReviewAnswer(); setPageRanges(studySet.source_url ? {} : studySet.page_ranges || {}); setWebsitePageRange(studySet.source_url ? studySet.page_ranges?.["0"] || "" : ""); setFocusTopic(studySet.focus_topic || ""); setError(""); setNotice("");
+    if (normalizedSet.incomplete && !normalizedSet.source_url) setFiles([]);
+    setSourceMode(normalizedSet.source_url ? /(?:youtube\.com|youtu\.be)/i.test(normalizedSet.source_url) ? "youtube" : "website" : "file");
+    if (normalizedSet.source_url) setWebsiteUrl(normalizedSet.source_url);
+    setReviewActive(false); setPracticeActive(false); setPracticeComplete(false); setShareUrl(""); setResult({ ...normalizedSet, items: shuffleSavedItems(normalizedSet.items, normalizedSet.type) }); setSelected(normalizedSet.type); setCurrent(0); resetStudyAnswer(); resetReviewAnswer(); setPageRanges(normalizedSet.source_url ? {} : normalizedSet.page_ranges || {}); setWebsitePageRange(normalizedSet.source_url ? normalizedSet.page_ranges?.["0"] || "" : ""); setFocusTopic(normalizedSet.focus_topic || ""); setError(""); setNotice("");
     window.requestAnimationFrame(() => document.querySelector(".result-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
 
@@ -1355,15 +1367,16 @@ export default function Home() {
   }
 
   function renderCardInteraction(card: Card, kind: Kind, isReview = false) {
-    if (kind === "same_as_source") {
+    const effectiveKind = kind === "flashcards" && card.options?.length ? "multiple_choice" : kind;
+    if (effectiveKind === "same_as_source") {
       if (card.quiz_type === "matching") return renderMatchingQuiz(card, isReview);
       if (card.quiz_type === "multiple_choice") return renderMultipleChoice(card);
       if (card.quiz_type === "checkbox") return renderCheckboxQuiz(card, isReview);
       if (card.quiz_type === "identification") return renderIdentificationQuiz(card, isReview);
     }
-    if (kind === "multiple_choice") return card.options?.length ? renderMultipleChoice(card) : renderIdentificationQuiz(card, isReview);
-    if (kind === "checkbox") return renderCheckboxQuiz(card, isReview);
-    if (kind === "identification") return renderIdentificationQuiz(card, isReview);
+    if (effectiveKind === "multiple_choice") return card.options?.length ? renderMultipleChoice(card) : renderIdentificationQuiz(card, isReview);
+    if (effectiveKind === "checkbox") return renderCheckboxQuiz(card, isReview);
+    if (effectiveKind === "identification") return renderIdentificationQuiz(card, isReview);
     return <button className={"study-face" + (revealed ? " is-revealed" : "")} onClick={() => setRevealed(!revealed)}>
       <span className="face-label">{revealed ? "THE ANSWER" : "YOUR QUESTION"}</span>
       <span className="face-question">{revealed ? card.answer : card.question}</span>

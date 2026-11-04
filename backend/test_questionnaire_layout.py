@@ -6,7 +6,7 @@ from pypdf import PdfWriter, PdfReader
 from pypdf.generic import NameObject, DictionaryObject, ArrayObject, FloatObject, DecodedStreamObject
 from questionnaire import parse_questionnaire, convert_questionnaire, validate_completion, QuestionnaireError
 from questionnaire_ocr import prepare_questionnaire_image, questionnaire_text_from_tsv
-from pdf_questionnaire import extract_pdf_questionnaire
+from pdf_questionnaire import extract_pdf_questionnaire, _clean_pdf_text
 from test_generation_limits import main
 from fastapi.testclient import TestClient
 
@@ -56,6 +56,20 @@ def flattened_highlighted_pdf():
 
 
 class QuestionnaireLayoutTests(unittest.TestCase):
+    def test_pdf_soft_wrap_glyphs_do_not_break_words(self):
+        source = "laborat\x02ory and identi\ufffdfied with a soft hyphen\u00ad"
+        self.assertEqual(_clean_pdf_text(source), "laboratory and identified with a soft hyphen")
+
+    def test_continuation_matches_and_repairs_previously_saved_pdf_artifacts(self):
+        record = parse_questionnaire(["1. Which laboratory test is used?\nA. First\nB. Second\nAnswer: A"])[0]
+        existing = {"question": "Which labora\x02tory test is used?", "answer": "First",
+                    "source_number": "1", "questionnaire_index": 1, "imported": True,
+                    "options": ["First", "Second"], "correct_answer": "First", "card_id": "saved-card"}
+        item = convert_questionnaire([record], "multiple_choice", {}, existing_items=[existing])[0]
+        self.assertEqual(item["question"], record["question"])
+        self.assertEqual(item["answer"], "First")
+        self.assertEqual(item["card_id"], "saved-card")
+
     def test_questionnaire_text_keeps_c_difficile_and_consecutive_choices(self):
         record = parse_questionnaire(["79. Which organism is isolated?\na. One\nb. Isolation of C. difficile from stool\nc. Three\nd. Four\nAnswer: B"])[0]
         self.assertEqual(record["labels"], ["A", "B", "C", "D"])

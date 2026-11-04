@@ -6,6 +6,45 @@ from test_generation_limits import main
 
 
 class QuestionnaireResilienceTests(unittest.TestCase):
+    def test_partial_provider_response_keeps_valid_items_and_retries_only_the_unresolved_one(self):
+        models = [
+            ("groq:test", "groq", "test", "groq-key", "Groq test"),
+            ("zai:test", "zai", "test", "zai-key", "Z.ai test"),
+        ]
+        calls = []
+
+        def provide(provider, _model, _key, prompt, _schema, _max_tokens):
+            batch = json.loads(prompt.rsplit("\n", 1)[-1])
+            calls.append((provider, [item["number"] for item in batch]))
+            if provider == "groq":
+                return {"items": [
+                    {"number": item["number"], "question": item["question"],
+                     "answer": item["options"][0], "uncertain": item["number"] == "2",
+                     "distractors": [], "matching_pairs": []}
+                    for item in batch
+                ]}
+            return {"items": [
+                {"number": item["number"], "question": item["question"],
+                 "answer": item["options"][2], "uncertain": False,
+                 "distractors": [], "matching_pairs": []}
+                for item in batch
+            ]}
+
+        source = "\n".join(
+            f"{number}. Choose item {number}?\nA. Alpha\nB. Bravo\nC. Charlie\nD. Delta"
+            for number in range(1, 4)
+        )
+        with patch.object(main, "configured_ai_models", return_value=models), patch.object(main, "generate_with_provider", side_effect=provide):
+            items, used_models, incomplete, requested_count, unresolved = main.import_questionnaire([source], "multiple_choice", "auto")
+
+        self.assertEqual(calls, [("groq", ["1", "2", "3"]), ("zai", ["2"])])
+        self.assertEqual(len(items), 3)
+        self.assertEqual([item["answer"] for item in items], ["Alpha", "Charlie", "Alpha"])
+        self.assertEqual(used_models, ["groq:test", "zai:test"])
+        self.assertFalse(incomplete)
+        self.assertEqual(requested_count, 3)
+        self.assertEqual(unresolved, [])
+
     def test_fifty_questions_complete_after_provider_level_fallbacks(self):
         models = []
         for provider, count in (("groq", 3), ("gemini", 5), ("openrouter", 4), ("mistral", 3)):
@@ -29,7 +68,7 @@ class QuestionnaireResilienceTests(unittest.TestCase):
             for number in range(1, 51)
         )
         with patch.object(main, "configured_ai_models", return_value=models), patch.object(main, "generate_with_provider", side_effect=provide):
-            items, used_models, incomplete, requested_count = main.import_questionnaire([source], "multiple_choice", "auto")
+            items, used_models, incomplete, requested_count, _unresolved = main.import_questionnaire([source], "multiple_choice", "auto")
 
         self.assertEqual(len(items), 50)
         self.assertEqual(requested_count, 50)

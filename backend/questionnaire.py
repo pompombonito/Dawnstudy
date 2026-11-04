@@ -1,5 +1,6 @@
 """Lossless questionnaire import. Models may fill gaps, never rewrite source text."""
 import re
+import unicodedata
 
 
 class QuestionnaireError(ValueError):
@@ -374,6 +375,50 @@ def validate_completion(records, payload, choice_mode):
     return completed
 
 
+def validate_completion_partial(records, payload, choice_mode):
+    """Keep independently verified answers when another item in the batch fails."""
+    entries = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(entries, list):
+        reason = "The model did not return a usable question list."
+        return {}, {str(record["number"]): reason for record in records}
+
+    expected = {str(record["number"]) for record in records}
+    by_number = {}
+    duplicates = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        number = str(entry.get("number", ""))
+        if number not in expected:
+            continue
+        if number in by_number:
+            duplicates.add(number)
+        else:
+            by_number[number] = entry
+
+    completed, errors = {}, {}
+    for record in records:
+        number = str(record["number"])
+        if number in duplicates:
+            errors[number] = f"The model returned question {number} more than once."
+            continue
+        entry = by_number.get(number)
+        if entry is None:
+            errors[number] = f"The model omitted question {number}."
+            continue
+        try:
+            completed.update(validate_completion([record], {"items": [entry]}, choice_mode))
+        except QuestionnaireError as exc:
+            errors[number] = str(exc)
+    return completed, errors
+
+
+def _question_match_key(value):
+    value = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    value = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\u00ad\ufffd\u200b\u2060\ufeff]", "", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
 def match_existing_questionnaire_items(records, existing_items):
     """Match saved partial-import cards back to stable parsed questionnaire positions."""
     if not existing_items:
@@ -389,7 +434,7 @@ def match_existing_questionnaire_items(records, existing_items):
             index = 0
         record = record_by_index.get(index)
         if (record is not None and index not in used_indexes
-                and item.get("question") == record["question"]
+                and _question_match_key(item.get("question")) == _question_match_key(record["question"])
                 and str(item.get("source_number", "")) == str(record.get("source_number", record["number"]))):
             matched[index] = item
             used_indexes.add(index)
@@ -404,7 +449,7 @@ def match_existing_questionnaire_items(records, existing_items):
         for index, record in record_by_index.items():
             if index in used_indexes:
                 continue
-            if (item.get("question") == record["question"]
+            if (_question_match_key(item.get("question")) == _question_match_key(record["question"])
                     and str(item.get("source_number", "")) == str(record.get("source_number", record["number"]))):
                 matched[index] = item
                 used_indexes.add(index)
@@ -419,7 +464,9 @@ def convert_questionnaire(records, study_format, completions, existing_items=Non
         questionnaire_index = int(record["number"])
         existing = existing_by_index.get(questionnaire_index)
         if existing:
-            saved = {**existing, "questionnaire_index": questionnaire_index}
+            saved = {**existing, "question": record["question"],
+                     "source_number": record.get("source_number", record["number"]),
+                     "questionnaire_index": questionnaire_index}
             if record.get("images"):
                 saved["images"] = record["images"]
             if record.get("source_refs"):

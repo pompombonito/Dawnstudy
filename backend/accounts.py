@@ -546,6 +546,11 @@ def list_study_sets(user_id: str) -> list[dict[str, Any]]:
             {**item, "card_id": item.get("card_id") or hashlib.sha256(f"{set_id}:{index}:{item.get('question', '')}".encode()).hexdigest()[:24]}
             for index, item in enumerate(items)
         ]
+        study_type = row["type"]
+        if study_type == "flashcards" and items and all(item.get("options") for item in items):
+            # Repair older/cross-device rows whose cards retained MC choices
+            # while the set-level type was saved as flashcards.
+            study_type = "multiple_choice"
         try:
             requested_count = int(row.get("requested_count") or len(items))
         except ValueError:
@@ -553,7 +558,7 @@ def list_study_sets(user_id: str) -> list[dict[str, Any]]:
         result.append({
             "id": set_id,
             "title": row["title"],
-            "type": row["type"],
+            "type": study_type,
             "items": items,
             "sources": sources,
             "created_at": row["created_at"],

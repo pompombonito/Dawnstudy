@@ -210,6 +210,7 @@ class ImportRouteTests(unittest.TestCase):
         self.assertTrue(job["result"]["incomplete"])
         self.assertEqual(job["result"]["requested_count"], 2)
         self.assertEqual([item["answer"] for item in job["result"]["items"]], ["Alpha"])
+        self.assertIn("Questions 2 still need a verified answer", job["result"]["notices"][0])
         self.assertTrue(self.saved[0]["incomplete"])
         self.assertEqual(self.saved[0]["requested_count"], 2)
 

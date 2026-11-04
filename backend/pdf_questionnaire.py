@@ -16,6 +16,13 @@ _OPTION_TOKEN = re.compile(r"(?i)(?<![A-Za-z])(?:\(([A-H])\)|([A-H])[.)])\s+\S")
 _FIGURE = re.compile(r"\bFIGURE\s+\d+(?:[-.]\d+)*\b", re.I)
 
 
+def _clean_pdf_text(text):
+    """Remove extraction-only soft-wrap/control glyphs before saving question text."""
+    text = text.replace("\x02", "").replace("\u00ad", "").replace("\ufffd", "")
+    text = text.replace("\u200b", "").replace("\u2060", "").replace("\ufeff", "")
+    return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
+
+
 def _line_bounds(textpage, text, start):
     boxes = []
     for offset, character in enumerate(text):
@@ -357,7 +364,11 @@ def extract_pdf_questionnaire(raw, reader, page_indices, include_skipped=False):
                     for insertion, value in reversed(insertions):
                         text = text[:insertion] + value + text[insertion:]
                     if text.strip():
-                        segments.append((label, text))
+                        # Keep the original string intact until text-position
+                        # based highlight and figure extraction is complete.
+                        # Then strip PDFium's soft-wrap marker so mid-word boxes
+                        # such as "laborato▤ry" become readable text.
+                        segments.append((label, _clean_pdf_text(text)))
                     if _QUESTION_START.search(original):
                         has_previous_question = True
                 finally:
