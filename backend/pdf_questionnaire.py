@@ -179,10 +179,11 @@ def _read_page_images(page, textpage, text, has_previous_question=False):
     return "\n".join(output), leading_markers
 
 
-def extract_pdf_questionnaire(raw, reader, page_indices):
+def extract_pdf_questionnaire(raw, reader, page_indices, include_skipped=False):
     import pypdfium2 as pdfium
 
     segments = []
+    skipped_pages = []
     has_previous_question = False
     with _pdfium_lock:
         document = pdfium.PdfDocument(raw)
@@ -198,7 +199,8 @@ def extract_pdf_questionnaire(raw, reader, page_indices):
                         for image in page.get_objects(filter=[pdfium.raw.FPDF_PAGEOBJ_IMAGE])
                     )
                     if has_page_scan and not _QUESTION_START.search(original):
-                        raise QuestionnaireError(f"PDF page {index + 1} is a scanned image, and its choice labels cannot be read reliably. Upload a clearer text-based copy or select readable pages.")
+                        skipped_pages.append(f"PDF page {index + 1}")
+                        continue
                     text, leading_markers = _read_page_images(page, textpage, original, has_previous_question)
                     if leading_markers:
                         text = "\n".join(f"[PDF_IMAGE: {data}]" for data in leading_markers) + "\n" + text
@@ -264,4 +266,5 @@ def extract_pdf_questionnaire(raw, reader, page_indices):
         finally:
             document.close()
     text = "\n\n".join(f"[SOURCE: {label}]\n{content}" for label, content in segments)
-    return text, [label for label, _ in segments]
+    result = (text, [label for label, _ in segments])
+    return (*result, skipped_pages) if include_skipped else result

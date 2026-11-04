@@ -25,7 +25,7 @@ import {
 
 type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification" | "same_as_source";
 type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred"; images?: string[]; quiz_type?: "multiple_choice" | "checkbox" | "identification" | "matching"; matching_prompts?: string[]; matching_options?: string[]; matching_pairs?: { prompt: string; answer: string }[] };
-type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; source_url?: string; created_at: string; material_fingerprint?: string; page_ranges?: Record<string, string>; focus_topic?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; usage?: { remaining: number | null; limit: number | null; resets_at: string | null; unlimited?: boolean } };
+type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; source_url?: string; created_at: string; material_fingerprint?: string; page_ranges?: Record<string, string>; focus_topic?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; notices?: string[]; usage?: { remaining: number | null; limit: number | null; resets_at: string | null; unlimited?: boolean } };
 type ActiveShare = { set_id: string; title: string; token: string; created_at: string };
 type ReviewItem = { study_set_id: string; study_set_title: string; type: Kind; card: Card; retried?: boolean; intervals: { again: string; hard: string; good: string; easy: string } };
 type Progress = { total_reviews: number; reviewed_today: number; accuracy: number; current_streak: number; best_streak: number; due_count: number; total_cards: number; week: { date: string; reviews: number }[] };
@@ -748,6 +748,7 @@ export default function Home() {
       : `Your study set is ready with ${studySet.items.length} questions.`];
     if (data.auto_model) notices.push("Auto chose " + modelName(data.auto_model) + ".");
     if (data.fallback) notices.push(modelName(data.fallback.to) + " helped complete the generation.");
+    if (data.notices?.length) notices.push(...data.notices);
     setNotice(notices.join(" "));
     void loadProgress(token);
     return synced;

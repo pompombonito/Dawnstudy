@@ -732,23 +732,25 @@ def get_study_progress(user: dict[str, str] = Depends(authenticated_user)):
     return {"total_reviews": len(reviews), "reviewed_today": days.get(today.isoformat(), 0), "accuracy": round(correct / len(reviews) * 100) if reviews else 0, "current_streak": current_streak, "best_streak": best_streak, "due_count": due_count, "total_cards": total_cards, "week": week}
 
 
-def extract_material(filename: str, raw: bytes, pages: str = "", questionnaire: bool = False) -> tuple[str, list[str]]:
+def extract_material(filename: str, raw: bytes, pages: str = "", questionnaire: bool = False, include_skipped=False):
     suffix = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     try:
         if suffix == "pdf":
             reader = PdfReader(BytesIO(raw))
             if questionnaire:
-                return extract_pdf_questionnaire(raw, reader, selected_pages(pages, len(reader.pages)))
+                return extract_pdf_questionnaire(raw, reader, selected_pages(pages, len(reader.pages)), include_skipped=include_skipped)
             segments = [(f"PDF page {index + 1}", reader.pages[index].extract_text() or "") for index in selected_pages(pages, len(reader.pages))]
             sources = [(label, text) for label, text in segments if text.strip()]
-            return "\n\n".join(f"[SOURCE: {label}]\n{text}" for label, text in sources), [label for label, _ in sources]
+            result = ("\n\n".join(f"[SOURCE: {label}]\n{text}" for label, text in sources), [label for label, _ in sources])
+            return (*result, []) if include_skipped else result
         if suffix == "docx":
             doc = Document(BytesIO(raw))
             parts = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
             document_text = "\n".join(parts)
             if questionnaire:
                 document_text = docx_questionnaire_text(doc)
-            return f"[SOURCE: Document]\n{document_text}", ["Document"]
+            result = (f"[SOURCE: Document]\n{document_text}", ["Document"])
+            return (*result, []) if include_skipped else result
         if suffix == "pptx":
             presentation = Presentation(BytesIO(raw))
             slides = []
@@ -762,7 +764,8 @@ def extract_material(filename: str, raw: bytes, pages: str = "", questionnaire: 
                         lines.extend(cell.text.strip() for row in shape.table.rows for cell in row.cells if cell.text.strip())
                 if lines:
                     slides.append((f"PowerPoint slide {slide_number}", "\n".join(lines)))
-            return "\n\n".join(f"[SOURCE: {label}]\n{text}" for label, text in slides), [label for label, _ in slides]
+            result = ("\n\n".join(f"[SOURCE: {label}]\n{text}" for label, text in slides), [label for label, _ in slides])
+            return (*result, []) if include_skipped else result
         if suffix in {"png", "jpg", "jpeg", "webp"}:
             image = ImageOps.exif_transpose(Image.open(BytesIO(raw))).convert("RGB")
             image.thumbnail((2600, 2600))
@@ -775,9 +778,11 @@ def extract_material(filename: str, raw: bytes, pages: str = "", questionnaire: 
                     text = questionnaire_text_from_tsv(ocr.GetTSVText(0), highlight_mask)
                 else:
                     text = ocr.GetUTF8Text().strip()
-            return f"[SOURCE: Uploaded image]\n{text}", ["Uploaded image"]
+            result = (f"[SOURCE: Uploaded image]\n{text}", ["Uploaded image"])
+            return (*result, []) if include_skipped else result
         if suffix in {"txt", "md"}:
-            return f"[SOURCE: Document]\n{raw.decode('utf-8-sig')}", ["Document"]
+            result = (f"[SOURCE: Document]\n{raw.decode('utf-8-sig')}", ["Document"])
+            return (*result, []) if include_skipped else result
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -2102,7 +2107,7 @@ def generate(
             raise ValueError()
     except (ValueError, TypeError):
         raise HTTPException(status_code=422, detail="Page selections must map each file number to a page range.")
-    page_title, final_source_url, all_text, source_labels, hashes, total_bytes = "", "", [], [], [], 0
+    page_title, final_source_url, all_text, source_labels, skipped_pages, hashes, total_bytes = "", "", [], [], [], [], 0
     if uploads:
         for index, upload in enumerate(uploads):
             raw = upload.file.read(MAX_BYTES + 1)
@@ -2112,7 +2117,8 @@ def generate(
             filename = upload.filename or f"Material {index + 1}.txt"
             generation_progress("reading", f"Reading {filename}…")
             if input_mode == "questionnaire":
-                excerpt, labels = extract_material(filename, raw, ranges.get(str(index), ""), questionnaire=True)
+                excerpt, labels, skipped = extract_material(filename, raw, ranges.get(str(index), ""), questionnaire=True, include_skipped=True)
+                skipped_pages.extend(f"{filename} · {page}" for page in skipped)
             else:
                 excerpt, labels = extract_material(filename, raw, ranges.get(str(index), ""))
             for label in labels:
@@ -2130,7 +2136,12 @@ def generate(
     text = "\n\n".join(all_text).strip()
     if input_mode == "questionnaire":
         material_fingerprint = hashlib.sha256((user["user_id"] + "\0" + "|".join(sorted(hashes))).encode()).hexdigest()
-        items, used_models = import_questionnaire(all_text, format, model)
+        try:
+            items, used_models = import_questionnaire(all_text, format, model)
+        except HTTPException as exc:
+            if skipped_pages:
+                raise HTTPException(exc.status_code, f"{exc.detail} Skipped unreadable pages: {', '.join(skipped_pages)}.") from exc
+            raise
         result = {
             "title": filename.rsplit(".", 1)[0][:100], "type": format, "items": items,
             "sources": [], "model": used_models[-1] if used_models else "Questionnaire import",
@@ -2139,6 +2150,8 @@ def generate(
             "focus_topic": "", "source_url": "", "previous_question_count": 0,
             "usage": {"remaining": None, "limit": None, "resets_at": None, "unlimited": True},
         }
+        if skipped_pages:
+            result["notices"] = ["Skipped unreadable pages: " + ", ".join(skipped_pages) + ". Other readable pages were imported."]
         return persist_generation_result(result, user)
     if len(re.sub(r"\s+", "", re.sub(r"\[SOURCE: [^\]]+\]", "", text))) < 80:
         raise HTTPException(status_code=422, detail="Not enough readable text. Scanned PDFs need text recognition before upload; photographs can be uploaded directly for OCR.")
