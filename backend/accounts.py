@@ -36,6 +36,7 @@ SET_COLUMNS = ["set_id", "user_id", "title", "type", "items_json", "sources_json
 # longer 200-question sets fit without changing or deleting legacy JSON rows.
 SET_ITEM_COLUMNS = ["items_json", *[f"items_json_{index}" for index in range(2, 11)]]
 SET_COLUMNS += SET_ITEM_COLUMNS[1:]
+SET_COLUMNS += ["include_images"]
 SET_CELL_UNITS = 40_000
 USAGE_COLUMNS = ["scope_key", "usage_date", "generation_count"]
 PROGRESS_COLUMNS = ["user_id", "set_id", "card_id", "due_at", "interval_days", "ease_factor", "repetitions", "lapses", "last_reviewed_at", "last_rating"]
@@ -305,6 +306,22 @@ def _cell_chunks(value: str) -> list[str]:
 
 def _study_set_payload(study_set: dict[str, Any]) -> tuple[list[str], str, str]:
     items_json = json.dumps(study_set["items"], ensure_ascii=False, separators=(",", ":"))
+    # The same PDF figure can support many notes questions. Store its bytes
+    # once, then expand before returning cards, so repeats do not consume the
+    # entire Sheets cell budget or alter the public API's card format.
+    counts = {}
+    for item in study_set["items"]:
+        for image in item.get("images") or []:
+            if isinstance(image, str):
+                counts[image] = counts.get(image, 0) + 1
+    duplicates = {image for image, count in counts.items() if count > 1}
+    if duplicates:
+        assets = {"image:" + hashlib.sha256(image.encode("utf-8")).hexdigest(): image for image in duplicates}
+        references = {value: key for key, value in assets.items()}
+        packed_items = [{**item, **({"images": [references.get(image, image) for image in item["images"]]} if item.get("images") else {})} for item in study_set["items"]]
+        packed_json = json.dumps({"storage_version": 1, "items": packed_items, "image_assets": assets}, ensure_ascii=False, separators=(",", ":"))
+        if len(packed_json) < len(items_json):
+            items_json = packed_json
     sources_json = json.dumps(study_set.get("sources", []), ensure_ascii=False, separators=(",", ":"))
     page_ranges_json = json.dumps(study_set.get("page_ranges", {}), ensure_ascii=False, separators=(",", ":"))
     chunks = _cell_chunks(items_json)
@@ -333,6 +350,7 @@ def save_study_set(study_set: dict[str, Any]) -> None:
                 page_ranges_json,
                 str(study_set.get("focus_topic", ""))[:300],
                 *chunks[1:],
+                str(bool(study_set.get("include_images", False))).lower(),
             ],
         )
 
@@ -357,6 +375,7 @@ def update_study_set(user_id: str, set_id: str, study_set: dict[str, Any]) -> bo
             str(study_set.get("requested_count", len(study_set["items"]))),
             str(study_set.get("source_url", existing.get("source_url", "")))[:2048], page_ranges_json,
             str(study_set.get("focus_topic", existing.get("focus_topic", "")))[:300], *chunks[1:],
+            str(bool(study_set.get("include_images", existing.get("include_images", "").casefold() == "true"))).lower(),
         ]
         _api("PUT", f"/values/{range_name}", params={"valueInputOption": "RAW"}, body={"values": [written]})
         _cache_written_row(SETS_TAB, SET_COLUMNS, row_number, written)
@@ -535,6 +554,20 @@ def list_study_sets(user_id: str) -> list[dict[str, Any]]:
             sources = json.loads(row["sources_json"] or "[]")
         except ValueError:
             continue
+        if isinstance(items, dict) and items.get("storage_version") == 1:
+            assets = items.get("image_assets")
+            stored_items = items.get("items")
+            if not isinstance(assets, dict) or not isinstance(stored_items, list):
+                continue
+            if (any(not isinstance(key, str) or not isinstance(value, str) for key, value in assets.items())
+                    or any(not isinstance(item, dict) or (item.get("images") is not None and
+                           (not isinstance(item["images"], list) or any(not isinstance(image, str) for image in item["images"])))
+                           for item in stored_items)):
+                continue
+            items = [{**item, **({"images": [assets.get(image, image) for image in item["images"]]} if isinstance(item.get("images"), list) else {})}
+                     for item in stored_items if isinstance(item, dict)]
+        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+            continue
         try:
             page_ranges = json.loads(row.get("page_ranges_json") or "{}")
             if not isinstance(page_ranges, dict):
@@ -546,11 +579,6 @@ def list_study_sets(user_id: str) -> list[dict[str, Any]]:
             {**item, "card_id": item.get("card_id") or hashlib.sha256(f"{set_id}:{index}:{item.get('question', '')}".encode()).hexdigest()[:24]}
             for index, item in enumerate(items)
         ]
-        study_type = row["type"]
-        if study_type == "flashcards" and items and all(item.get("options") for item in items):
-            # Repair older/cross-device rows whose cards retained MC choices
-            # while the set-level type was saved as flashcards.
-            study_type = "multiple_choice"
         try:
             requested_count = int(row.get("requested_count") or len(items))
         except ValueError:
@@ -558,7 +586,7 @@ def list_study_sets(user_id: str) -> list[dict[str, Any]]:
         result.append({
             "id": set_id,
             "title": row["title"],
-            "type": study_type,
+            "type": row["type"],
             "items": items,
             "sources": sources,
             "created_at": row["created_at"],
@@ -568,6 +596,7 @@ def list_study_sets(user_id: str) -> list[dict[str, Any]]:
             "focus_topic": row.get("focus_topic", ""),
             "incomplete": row.get("incomplete", "").casefold() == "true",
             "requested_count": max(len(items), requested_count),
+            "include_images": row.get("include_images", "").casefold() == "true",
         })
     return sorted(result, key=lambda item: item["created_at"], reverse=True)[:100]
 

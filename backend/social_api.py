@@ -100,7 +100,7 @@ class GameInput(BaseModel):
 
 class GameAction(BaseModel):
     action: Literal["join", "start", "answer", "invite", "leave"]
-    answer: str | list[str] = ""
+    answer: str | list[str] | dict[str, str] = ""
     user_id: str = ""
     question_index: int = -1
 
@@ -380,10 +380,13 @@ def create_router(authenticated_user, reply):
                 room["invited"].add(body.user_id)
             elif body.action == "leave":
                 room["players"].pop(uid, None)
+                room["answers"].pop(uid, None)
                 if not room["players"]:
                     del games.ROOMS[room["code"]]
                 elif uid == room["host"]:
                     room["host"] = next(iter(room["players"]))
+                if room["players"] and room["phase"] == "question" and len(room["answers"]) == len(room["players"]):
+                    room["phase"], room["deadline"] = "reveal", time.time() + 5
                 return {"left": True}
             return room_snapshot(room, uid)
 

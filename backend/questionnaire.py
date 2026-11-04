@@ -15,6 +15,7 @@ KEY_HEADING = re.compile(r"^(?:answer\s*key|answers|key\s+to\s+answers)\s*:?(.*)
 SOURCE = re.compile(r"^\[SOURCE: (.+)\]$")
 PDF_IMAGE = re.compile(r"^\[PDF_IMAGE:\s*(data:image/(?:jpeg|webp);base64,[A-Za-z0-9+/=_-]+)\]$", re.I)
 SECTION = re.compile(r"^(?:(?:section|part|quiz|test|chapter|unit|set)\s+(?:\d+|[ivxlcdm]+|[a-z])(?:\b|[:.)])|(?-i:[IVXLCDM]+[.)]\s+(?:[A-Z][a-z]+|[A-Z0-9\s,:;—-]{3,}))|#{1,6}\s+\S)", re.I)
+MULTIPLE_ANSWER_STEM = re.compile(r"\b(?:select|choose|check|mark)\s+(?:all|every|(?:the\s+)?(?:two|three|four|[2-8]))\b|\b(?:select|choose)\b.{0,50}\bthat apply\b", re.I)
 
 
 def docx_questionnaire_text(document):
@@ -63,23 +64,81 @@ def _normalized(text):
     return re.sub(r"\s+", " ", text).strip().casefold()
 
 
-def resolve_answer(raw, options, labels):
-    """Resolve an answer key without editing the actual option text."""
+def resolve_answer_values(raw, options, labels):
+    """Resolve original option values, retaining answer boundaries explicitly."""
     if not options:
-        return raw
+        return [raw]
+    # In the uploaded answer key, a bare letter denotes its printed label.
+    # Persisted cards keep the resolved text and structured answer values, so
+    # later grading never interprets that text as another option's label.
     letter = re.fullmatch(r"\(?([A-Ha-h])\)?[.)]?", raw.strip())
     if letter and letter[1].upper() in labels:
-        return options[labels.index(letter[1].upper())]
+        return [options[labels.index(letter[1].upper())]]
     for option in options:
         if _normalized(raw) == _normalized(option):
-            return option
+            return [option]
     # Accept 'B. mitochondrion' only if the label AND its text agree.
     labeled = OPTION.match(raw)
     if labeled:
         label = (labeled[1] or labeled[2]).upper()
         if label in labels and _normalized(labeled[3]) == _normalized(options[labels.index(label)]):
-            return options[labels.index(label)]
+            return [options[labels.index(label)]]
+    # Explicit multi-answer keys are common in select-all-that-apply source
+    # questionnaires. Resolve every label without changing printed options.
+    parts = re.split(r"\s*(?:\||,|;|&|\band\b)\s*", raw.strip(), flags=re.I)
+    if len(parts) > 1:
+        letters = [re.fullmatch(r"\(?([A-Ha-h])\)?[.)]?", part) for part in parts]
+        if all(letters):
+            values = [letter[1].upper() for letter in letters]
+            if len(set(values)) == len(values) and all(value in labels for value in values):
+                return [option for label, option in zip(labels, options) if label in values]
+        # AI-completed checkbox answers use exact option text separated by pipes.
+        # Resolve the whole value above first, preserving pipes within an option.
+        if "|" in raw:
+            exact_parts = raw.split("|")
+            values = [next((option for option in options if _normalized(option) == _normalized(part)), None) for part in exact_parts]
+            if all(value is not None for value in values) and len(set(values)) == len(values):
+                return [option for option in options if option in values]
     raise QuestionnaireError(f"Answer key {raw!r} does not identify exactly one choice. Correct the key before importing.")
+
+
+def resolve_answer(raw, options, labels):
+    """Resolve an answer key without editing the actual option text."""
+    return " | ".join(resolve_answer_values(raw, options, labels))
+
+
+def resolve_matching_answers(raw, prompts, options, labels):
+    """Resolve supplied matching keys by prompt/index, without asking a model."""
+    raw = raw.strip()
+    names = "|".join(re.escape(prompt) for prompt in sorted(prompts, key=len, reverse=True))
+    entry = re.compile(r"(?:^|[;,\n]\s*)(" + names + r"|\d+)\s*(?:->|→|:|=|—|-)\s*", re.I)
+    entries = list(entry.finditer(raw.strip()))
+    mapping = {}
+    if entries:
+        if raw[:entries[0].start()].strip():
+            raise QuestionnaireError("A matching answer key contains unreadable entries.")
+        for index, match in enumerate(entries):
+            key = match[1]
+            prompt = next((prompt for prompt in prompts if _normalized(prompt) == _normalized(key)), None)
+            if prompt is None and key.isdigit() and 1 <= int(key) <= len(prompts):
+                prompt = prompts[int(key) - 1]
+            if prompt is None or prompt in mapping:
+                raise QuestionnaireError("A matching answer key has an unknown or repeated prompt.")
+            end = entries[index + 1].start() if index + 1 < len(entries) else len(raw)
+            answer = resolve_answer(raw[match.end():end].strip(), options, labels)
+            if answer not in options:
+                raise QuestionnaireError("Each matching answer must identify exactly one original option.")
+            mapping[prompt] = answer
+    else:
+        # A plain list such as A, C, B is positional only when every prompt has
+        # one explicit label. Never interpret free-form prose as a key.
+        parts = re.split(r"\s*(?:\||,|;)\s*", raw.strip())
+        if len(parts) != len(prompts) or not all(re.fullmatch(r"\(?[A-Ha-h]\)?[.)]?", part) for part in parts):
+            raise QuestionnaireError("Use a matching key such as 1-A; 2-B, or one option label for every prompt.")
+        mapping = {prompt: resolve_answer(value, options, labels) for prompt, value in zip(prompts, parts)}
+    if set(mapping) != set(prompts) or len({_normalized(value) for value in mapping.values()}) != len(prompts):
+        raise QuestionnaireError("Supply one distinct matching answer for every prompt.")
+    return [{"prompt": prompt, "answer": mapping[prompt]} for prompt in prompts]
 
 
 def _apply_answer_keys(records, scopes, blocks):
@@ -310,9 +369,21 @@ def parse_questionnaire(documents, limit=200):
         explicit = item["answer"] if not re.fullmatch(r"[_\s.\-]+", item["answer"]) else ""
         raw_key = item.pop("key_answer", "")
         key = raw_key if not re.fullmatch(r"[_\s.\-]+", raw_key) else ""
-        if explicit and key and _normalized(resolve_answer(explicit, options, labels)) != _normalized(resolve_answer(key, options, labels)):
+        if item.get("matching_prompts"):
+            provided = resolve_matching_answers(explicit, item["matching_prompts"], options, labels) if explicit else []
+            from_key = resolve_matching_answers(key, item["matching_prompts"], options, labels) if key else []
+            if provided and from_key and provided != from_key:
+                raise QuestionnaireError(f"Conflicting matching answers for question {item['number']}.")
+            item["matching_pairs"] = provided or from_key
+            item["answer"] = "\n".join(f"{pair['prompt']} — {pair['answer']}" for pair in item["matching_pairs"])
+            continue
+        if explicit and key and [_normalized(value) for value in resolve_answer_values(explicit, options, labels)] != [_normalized(value) for value in resolve_answer_values(key, options, labels)]:
             raise QuestionnaireError(f"Conflicting answers for question {item['number']}.")
         item["answer"] = resolve_answer(explicit or key, options, labels) if explicit or key else ""
+        if options and (explicit or key):
+            item["correct_answers"] = resolve_answer_values(explicit or key, options, labels)
+        if options and (MULTIPLE_ANSWER_STEM.search(item["question"]) or len(item.get("correct_answers", [])) > 1):
+            item["quiz_type"] = "checkbox"
     # AI completion IDs are unique across files/sections, independently of the
     # printed numbering retained for source attribution.
     for index, item in enumerate(records, 1):
@@ -337,6 +408,8 @@ def validate_completion(records, payload, choice_mode):
         if entry.get("question") != record["question"] or not isinstance(answer, str) or not answer.strip() or entry.get("uncertain") is not False:
             raise QuestionnaireError(f"An answer for question {record['number']} could not be established. Supply an answer key and retry.")
         if record.get("matching_prompts"):
+            if record.get("matching_pairs"):
+                raise QuestionnaireError("A supplied matching key must be used directly without model completion.")
             raw_pairs = entry.get("matching_pairs")
             if not isinstance(raw_pairs, list) or len(raw_pairs) != len(record["matching_prompts"]):
                 raise QuestionnaireError(f"The model did not complete every match in question {record['number']}.")
@@ -363,15 +436,25 @@ def validate_completion(records, payload, choice_mode):
             raise QuestionnaireError(f"An answer for question {record['number']} could not be established. Supply an answer key and retry.")
         if record["answer"] and answer != record["answer"]:
             raise QuestionnaireError("The model changed a supplied answer.")
-        if record["options"] and answer not in record["options"]:
-            raise QuestionnaireError("The inferred answer is not one of the original options.")
+        correct_answers = None
+        if record["options"]:
+            multi_allowed = choice_mode == "checkbox" or (choice_mode == "same_as_source" and record.get("quiz_type") == "checkbox")
+            if answer in record["options"]:
+                correct_answers = [answer]
+            elif multi_allowed:
+                correct_answers = resolve_answer_values(answer, record["options"], record["labels"])
+                answer = " | ".join(correct_answers)
+            else:
+                raise QuestionnaireError("The inferred answer is not one of the original options.")
         distractors = entry.get("distractors", [])
-        if choice_mode and not record["options"]:
+        if (choice_mode is True or choice_mode in {"multiple_choice", "checkbox"}) and not record["options"]:
             if not isinstance(distractors, list) or len(distractors) != 3 or any(not isinstance(value, str) or not value.strip() for value in distractors):
                 raise QuestionnaireError("The model did not supply three usable distractors.")
             if len({_normalized(value) for value in [answer, *distractors]}) != 4:
                 raise QuestionnaireError("Generated choices contain duplicate answers.")
         completed[record["number"]] = {"answer": answer, "distractors": distractors}
+        if correct_answers:
+            completed[record["number"]]["correct_answers"] = correct_answers
     return completed
 
 
@@ -483,21 +566,28 @@ def convert_questionnaire(records, study_format, completions, existing_items=Non
         item = {"question": record["question"], "answer": answer, "source_refs": record["source_refs"], "source_number": record.get("source_number", record["number"]), "questionnaire_index": questionnaire_index, "imported": True, "answer_origin": "inferred" if inferred else "provided"}
         if record.get("images"):
             item["images"] = record["images"]
+        correct_answers = record.get("correct_answers") or completion.get("correct_answers")
+        if study_format == "multiple_choice" and correct_answers and len(correct_answers) > 1:
+            raise QuestionnaireError(f"Question {record.get('source_number', record['number'])} has multiple correct answers. Choose Select all that apply or Same type as the questionnaire to preserve its answer key.")
+        if correct_answers and study_format in {"multiple_choice", "checkbox", "same_as_source"}:
+            item["correct_answers"] = correct_answers
         notices = []
         if inferred:
             notices.append("AI-inferred answer: no answer key was supplied. Review it for accuracy.")
         if study_format == "same_as_source":
             if record.get("matching_prompts"):
-                if completion.get("matching_pairs"):
-                    item["answer"] = "\n".join(f"{pair['prompt']} — {pair['answer']}" for pair in completion["matching_pairs"])
+                matching_pairs = record.get("matching_pairs") or completion.get("matching_pairs", [])
+                if matching_pairs:
+                    item["answer"] = "\n".join(f"{pair['prompt']} — {pair['answer']}" for pair in matching_pairs)
                 item.update(
                     quiz_type="matching",
                     matching_prompts=record["matching_prompts"],
                     matching_options=record["options"],
-                    matching_pairs=completion.get("matching_pairs", []),
+                    matching_pairs=matching_pairs,
                 )
             elif record["options"]:
-                item.update(quiz_type="multiple_choice", options=record["options"], correct_answer=answer)
+                quiz_type = "checkbox" if record.get("quiz_type") == "checkbox" or len(correct_answers or [answer]) > 1 else "multiple_choice"
+                item.update(quiz_type=quiz_type, options=record["options"], correct_answer=answer)
             else:
                 item["quiz_type"] = "identification"
         elif study_format in {"multiple_choice", "checkbox"}:

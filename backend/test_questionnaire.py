@@ -29,6 +29,19 @@ IDENTIFICATION = "1. Identify the organelle that releases usable energy.\nAnswer
 
 
 class ParserTests(unittest.TestCase):
+    def test_explicit_multiple_answer_keys_keep_all_correct_options_and_source_type(self):
+        for key in ("A | C", "A, C", "A and C", "(A); (C)"):
+            with self.subTest(key=key):
+                record = parse_questionnaire([f"1. Select the primary colors.\nA. Red\nB. Green\nC. Blue\nD. Purple\nAnswer: {key}"])[0]
+                self.assertEqual(record["answer"], "Red | Blue")
+                item = convert_questionnaire([record], "same_as_source", {})[0]
+                self.assertEqual(item["quiz_type"], "checkbox")
+                self.assertEqual(item["correct_answer"], "Red | Blue")
+                self.assertEqual(item["options"], ["Red", "Green", "Blue", "Purple"])
+        for key in ("A | A", "A | Z", "A |", "A | C | Z"):
+            with self.subTest(key=key), self.assertRaises(QuestionnaireError):
+                parse_questionnaire([f"1. Select colors.\nA. Red\nB. Green\nC. Blue\nAnswer: {key}"])
+
     def test_docx_tables_and_list_numbering_are_not_lost(self):
         document = Document()
         document.add_paragraph("Name the unit.", style="List Number")

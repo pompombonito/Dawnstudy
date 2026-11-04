@@ -44,12 +44,39 @@ class LargeStudySetStorageTests(unittest.TestCase):
             result = accounts.list_study_sets("student")[0]
         self.assertEqual(result["items"][0]["answer"], "Old answer")
 
-    def test_legacy_flashcard_type_is_recovered_when_saved_cards_have_choices(self):
+    def test_explicit_flashcard_type_is_preserved_when_saved_cards_have_choices(self):
         items = [{"question": f"Question {index}?", "answer": "Alpha", "options": ["Alpha", "Bravo"]} for index in range(2)]
         row = dict(zip(accounts.SET_COLUMNS, ["legacy-choice-set", "student", "Old quiz", "flashcards", json.dumps(items), "[]", self.study_set["created_at"], "", "false", "2", "", "{}", "", *("" for _ in accounts.SET_ITEM_COLUMNS[1:])]))
         with patch.object(accounts, "_rows", return_value=[(2, row)]):
             restored = accounts.list_study_sets("student")[0]
-        self.assertEqual(restored["type"], "multiple_choice")
+        self.assertEqual(restored["type"], "flashcards")
+        self.assertEqual(restored["items"][0]["options"], ["Alpha", "Bravo"])
+
+    def test_image_inclusion_preference_round_trips_without_shifting_legacy_item_chunks(self):
+        self.study_set["include_images"] = True
+        row = dict(zip(accounts.SET_COLUMNS, self.packed_row()))
+        self.assertEqual(row["include_images"], "true")
+        with patch.object(accounts, "_rows", return_value=[(2, row)]):
+            restored = accounts.list_study_sets("student")[0]
+        self.assertTrue(restored["include_images"])
+        self.assertEqual(restored["items"], self.study_set["items"])
+        row.pop("include_images")
+        with patch.object(accounts, "_rows", return_value=[(2, row)]):
+            self.assertFalse(accounts.list_study_sets("student")[0]["include_images"])
+
+    def test_repeated_figures_are_stored_once_and_restore_on_every_original_card(self):
+        image = "data:image/webp;base64," + "A" * 35000
+        self.study_set["items"] = [
+            {"card_id": f"card-{index}", "question": f"Question {index}?", "answer": "Alpha", "images": [image]}
+            for index in range(50)
+        ]
+        row = dict(zip(accounts.SET_COLUMNS, self.packed_row()))
+        serialized = "".join(row[column] for column in accounts.SET_ITEM_COLUMNS)
+        self.assertEqual(serialized.count(image), 1)
+        self.assertLess(len(serialized), 50000)
+        with patch.object(accounts, "_rows", return_value=[(2, row)]):
+            restored = accounts.list_study_sets("student")[0]
+        self.assertEqual(restored["items"], self.study_set["items"])
 
     def test_schema_upgrade_appends_headers_without_rewriting_existing_data(self):
         headers = {accounts.USERS_TAB: accounts.USER_COLUMNS, accounts.SETS_TAB: accounts.SET_COLUMNS[:13], accounts.USAGE_TAB: accounts.USAGE_COLUMNS,

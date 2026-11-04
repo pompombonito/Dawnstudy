@@ -1,7 +1,8 @@
 "use client";
 
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { importedAnswerMatches } from "./imported-answers";
+import { importedAnswerMatches, importedOptionIsCorrect } from "./imported-answers";
+import { normalizedAnswer, resolveChoiceAnswers as choiceAnswerOptions, quizKind, quizAnswerIsCorrect } from "./quiz-answers";
 import Avatar from "./components/Avatar";
 import ThemePicker from "./components/ThemePicker";
 import { applyTheme, DEFAULT_THEME, GUEST_THEME_STORAGE_KEY, getTheme, normalizeTheme, readInitialTheme, THEME_STORAGE_KEY } from "./community/themes";
@@ -18,14 +19,14 @@ import { DawnArtwork, DawnMark } from "./components/DawnArtwork";
 import { cancelGenerationJob, findGenerationJob, GenerationCancelledError, GenerationJobError, pollGenerationJob, startGenerationJob, type GenerationJob, type GenerationStatus } from "./generation-jobs";
 import {
   AlarmClock, ArrowLeftRight, BookOpen, Check, CheckSquare, ChevronLeft, ChevronRight, CircleHelp, Clock3,
-  CloudUpload, Copy, Cpu, ExternalLink, FileText, Flag, Globe2, GraduationCap, Layers3, LogOut, Menu, Mic,
+  CloudUpload, Copy, Cpu, ExternalLink, FileImage, FileText, Flag, Globe2, GraduationCap, Layers3, LogOut, Menu, Mic,
   MicOff, Maximize2, Minimize2, Plus, Send, Share2, Sparkles, Trash2, UserRound,
   Search, Volume2, X, ArrowUpRight, ArrowRight, FolderOpen, ChevronDown, Leaf, Users, Gamepad2, ShieldCheck, Youtube,
 } from "lucide-react";
 
 type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification" | "same_as_source";
-type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred"; images?: string[]; questionnaire_index?: number; quiz_type?: "multiple_choice" | "checkbox" | "identification" | "matching"; matching_prompts?: string[]; matching_options?: string[]; matching_pairs?: { prompt: string; answer: string }[] };
-type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; source_url?: string; created_at: string; material_fingerprint?: string; page_ranges?: Record<string, string>; focus_topic?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; notices?: string[]; usage?: { remaining: number | null; limit: number | null; resets_at: string | null; unlimited?: boolean } };
+type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; correct_answers?: string[]; explanation?: string; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred"; images?: string[]; image_captions?: string[]; questionnaire_index?: number; quiz_type?: "multiple_choice" | "checkbox" | "identification" | "matching"; matching_prompts?: string[]; matching_options?: string[]; matching_pairs?: { prompt: string; answer: string }[] };
+type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; source_url?: string; include_images?: boolean; created_at: string; material_fingerprint?: string; page_ranges?: Record<string, string>; focus_topic?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; notices?: string[]; usage?: { remaining: number | null; limit: number | null; resets_at: string | null; unlimited?: boolean } };
 type ActiveShare = { set_id: string; title: string; token: string; created_at: string };
 type ReviewItem = { study_set_id: string; study_set_title: string; type: Kind; card: Card; retried?: boolean; intervals: { again: string; hard: string; good: string; easy: string } };
 type Progress = { total_reviews: number; reviewed_today: number; accuracy: number; current_streak: number; best_streak: number; due_count: number; total_cards: number; week: { date: string; reviews: number }[] };
@@ -116,33 +117,6 @@ async function responseError(response: Response) {
   } catch { return `Request failed (${response.status}).`; }
 }
 
-function normalizedAnswer(value: unknown) {
-  return String(value ?? "").toLocaleLowerCase().trim().replace(/\s+/g, " ");
-}
-
-function choiceAnswerOptions(answer: unknown, options: string[]) {
-  const raw = String(answer ?? "").trim();
-  const exactOption = (value: string) => {
-    const matches = options.filter((option) => normalizedAnswer(option) === normalizedAnswer(value));
-    return matches.length === 1 ? matches[0] : undefined;
-  };
-  // Check the full answer first so a literal option containing a pipe is not
-  // mistaken for several checkbox answers.
-  const wholeMatch = exactOption(raw);
-  const parts = wholeMatch ? [raw] : raw.split("|").map((value) => value.trim()).filter(Boolean);
-  const resolved: string[] = [];
-  for (const part of parts) {
-    let match = exactOption(part);
-    if (!match) {
-      const letter = part.match(/^(?:option\s*)?([A-D])(?:[.):\-])?$/i);
-      if (letter) match = options[letter[1].toUpperCase().charCodeAt(0) - 65];
-    }
-    if (!match) return [];
-    if (!resolved.some((option) => normalizedAnswer(option) === normalizedAnswer(match))) resolved.push(match);
-  }
-  return resolved;
-}
-
 function displayCorrectAnswer(card: Card) {
   if (card.quiz_type === "matching" && card.matching_pairs?.length) {
     return card.matching_pairs.map((pair) => `${pair.prompt} — ${pair.answer}`).join(" · ");
@@ -154,24 +128,7 @@ function displayCorrectAnswer(card: Card) {
 }
 
 function isPracticeAnswerCorrect(card: Card, type: Kind, response: PracticeAnswer | undefined) {
-  if (response === null || response === undefined) return false;
-  if ((card.quiz_type || type) === "matching") {
-    if (!response || typeof response !== "object" || Array.isArray(response)) return false;
-    const matches = card.matching_pairs || [];
-    return matches.length === (card.matching_prompts || []).length
-      && matches.length > 0
-      && matches.every((pair) => normalizedAnswer((response as Record<string, string>)[pair.prompt]) === normalizedAnswer(pair.answer));
-  }
-  if (card.imported) return importedAnswerMatches(card, response);
-  const rawExpected = card.correct_answer || card.answer || "";
-  const resolved = choiceAnswerOptions(rawExpected, card.options || []);
-  const expected = (resolved.length ? resolved : String(rawExpected).split("|")).map(normalizedAnswer).filter(Boolean).sort();
-  if (type === "checkbox") {
-    const actual = (Array.isArray(response) ? response : [response]).map(normalizedAnswer).filter(Boolean).sort();
-    return actual.length === expected.length && actual.every((answer, index) => answer === expected[index]);
-  }
-  const actual = Array.isArray(response) ? response[0] || "" : response;
-  return expected.includes(normalizedAnswer(actual));
+  return quizAnswerIsCorrect(card, type, response);
 }
 
 function displayPracticeAnswer(response: PracticeAnswer | undefined) {
@@ -205,15 +162,6 @@ function shuffleSavedItems(items: Card[], kind: Kind) {
   });
 }
 
-function effectiveStudyType(type: Kind, items: Card[]): Kind {
-  // Old or cross-device saves can have MC choices on the cards but retain a
-  // stale "flashcards" set type. The card data is sufficient to recover MC.
-  if (type === "flashcards" && items.length > 0 && items.every((card) => Boolean(card.options?.length))) {
-    return "multiple_choice";
-  }
-  return type;
-}
-
 export default function Home() {
   const [selected, setSelected] = useState<Kind>("flashcards");
   const [inputMode, setInputMode] = useState<"notes" | "questionnaire">("notes");
@@ -233,6 +181,7 @@ export default function Home() {
   const [finderSearched, setFinderSearched] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [web, setWeb] = useState(false);
+  const [includeImages, setIncludeImages] = useState(false);
   const [modelChoice, setModelChoice] = useState("auto");
   const [questionCount, setQuestionCount] = useState(10);
   const [difficulty, setDifficulty] = useState<"easy" | "medium" | "hard">("medium");
@@ -327,9 +276,7 @@ export default function Home() {
     try {
       const response = await fetch(`${API_BASE}/api/study-sets`, { headers: { Authorization: `Bearer ${token}` } });
       if (response.ok) {
-        const saved: StudySet[] = (await response.json()).map((studySet: StudySet) => ({
-          ...studySet, type: effectiveStudyType(studySet.type, studySet.items || []),
-        }));
+        const saved: StudySet[] = await response.json();
         setSets(saved);
       }
     } catch { /* Auth can still be used if study-set sync is briefly unavailable. */ }
@@ -703,8 +650,9 @@ export default function Home() {
   }
 
   async function applyGenerationResult(data: GenerationResult, token: string, signal: AbortSignal, base?: StudySet) {
-    let studySet: GenerationResult = { ...data, type: effectiveStudyType(data.type, data.items), id: data.id || crypto.randomUUID(), created_at: data.created_at || new Date().toISOString() };
+    let studySet: GenerationResult = { ...data, id: data.id || crypto.randomUUID(), created_at: data.created_at || new Date().toISOString() };
     setInputMode(data.items.some((card) => card.imported) ? "questionnaire" : "notes");
+    setIncludeImages(Boolean(data.include_images));
     const legacyContinuation = base && data.continued_set_id !== base.id;
     if (legacyContinuation) {
       const target = base.requested_count || base.items.length;
@@ -731,7 +679,7 @@ export default function Home() {
         const body = JSON.stringify({ title: studySet.title, type: studySet.type, items: studySet.items,
           sources: studySet.sources || [], source_url: studySet.source_url || "", material_fingerprint: studySet.material_fingerprint,
           incomplete: studySet.incomplete || false, requested_count: studySet.requested_count || studySet.items.length,
-          page_ranges: studySet.page_ranges || {}, focus_topic: studySet.focus_topic || "" });
+          page_ranges: studySet.page_ranges || {}, focus_topic: studySet.focus_topic || "", include_images: Boolean(studySet.include_images) });
         const headers = { "Content-Type": "application/json", Authorization: "Bearer " + token };
         const updateExisting = Boolean(data.id || legacyContinuation);
         let saved = await fetch(API_BASE + "/api/study-sets" + (updateExisting ? "/" + encodeURIComponent(studySet.id) : ""), {
@@ -873,7 +821,7 @@ export default function Home() {
     if (busy || continueBusy || generationNeedsReconnect || generationController.current) return;
     if (!authToken || !account) {
       setAuthOpen(true);
-      setError("Sign in with a verified Gmail or CEU Google account to make a study set.");
+      setError("Sign in with any verified Gmail account or an eligible CEU Google account to make a study set.");
       return;
     }
     if (sourceMode === "file" && !files.length) { setComposerStep(0); setError("Choose at least one study material first."); return; }
@@ -885,6 +833,7 @@ export default function Home() {
     else form.append("source_url", websiteUrl.trim());
     form.append("input_mode", inputMode);
     form.append("format", selected); form.append("use_web", String(inputMode === "notes" && web));
+    form.append("include_images", String(inputMode === "notes" && includeImages));
     form.append("model", modelChoice);
     form.append("question_count", String(questionCount));
     form.append("difficulty", difficulty);
@@ -969,6 +918,7 @@ export default function Home() {
     form.append("input_mode", questionnaireImport ? "questionnaire" : "notes");
     form.append("format", result.type);
     form.append("use_web", String(!questionnaireImport && web));
+    form.append("include_images", String(!questionnaireImport && Boolean(result.include_images)));
     form.append("model", modelChoice);
     form.append("question_count", String(remainingCount));
     form.append("difficulty", difficulty);
@@ -1008,8 +958,9 @@ export default function Home() {
   }
 
   function openSavedSet(studySet: StudySet) {
-    const normalizedSet = { ...studySet, type: effectiveStudyType(studySet.type, studySet.items) };
+    const normalizedSet = studySet;
     setInputMode(normalizedSet.items.some((card) => card.imported) ? "questionnaire" : "notes");
+    setIncludeImages(Boolean(normalizedSet.include_images));
     setActiveView("study");
     if (normalizedSet.incomplete && !normalizedSet.source_url) setFiles([]);
     setSourceMode(normalizedSet.source_url ? /(?:youtube\.com|youtu\.be)/i.test(normalizedSet.source_url) ? "youtube" : "website" : "file");
@@ -1280,7 +1231,7 @@ export default function Home() {
     ["bad_source", "Source reference is wrong"], ["other", "Other issue"],
   ];
   function renderQuestionImages(card: Card) {
-    return card.images?.length ? <div className="study-figure-list">{card.images.map((image, index) => <img key={`${card.card_id || card.question}-figure-${index}`} src={image} alt={`Figure ${index + 1} from the uploaded questionnaire`} loading="lazy"/>)}</div> : null;
+    return card.images?.length ? <div className="study-figure-list">{card.images.map((image, index) => <img key={`${card.card_id || card.question}-figure-${index}`} src={image} alt={card.image_captions?.[index] || `Figure ${index + 1} from your study material`} loading="lazy"/>)}</div> : null;
   }
 
   function renderMatchingQuiz(card: Card, isReview = false, practiceAt?: number) {
@@ -1310,7 +1261,7 @@ export default function Home() {
   function renderMultipleChoice(card: Card) {
     const correctOptions = choiceAnswerOptions(card.correct_answer || card.answer, card.options || []);
     const correctAnswers = correctOptions.length ? correctOptions.map(normalizedAnswer) : [normalizedAnswer(card.correct_answer || card.answer)];
-    const isCorrect = (option: string) => card.imported ? importedAnswerMatches(card, option) : correctAnswers.includes(normalizedAnswer(option));
+    const isCorrect = (option: string) => card.imported ? importedOptionIsCorrect(card, option) : correctAnswers.includes(normalizedAnswer(option));
     const selectedAnswer = selectedOption === null ? undefined : card.options?.[selectedOption];
     const selectedIsCorrect = Boolean(selectedAnswer && isCorrect(selectedAnswer));
     return <div className={`study-face choice-study-face ${revealed ? "is-revealed" : ""}`}>
@@ -1333,7 +1284,7 @@ export default function Home() {
     const setSelectedAnswers = isReview ? setReviewSelectedOptions : setStudySelectedOptions;
     const correctOptions = choiceAnswerOptions(card.correct_answer || card.answer, card.options || []);
     const correctKeys = correctOptions.map(normalizedAnswer);
-    const isCorrect = (option: string) => card.imported ? importedAnswerMatches(card, option) : correctKeys.includes(normalizedAnswer(option));
+    const isCorrect = (option: string) => card.imported ? importedOptionIsCorrect(card, option) : correctKeys.includes(normalizedAnswer(option));
     const typedAnswer = isReview ? reviewIdentificationAnswer : studyIdentificationAnswer;
     const setTypedAnswer = isReview ? setReviewIdentificationAnswer : setStudyIdentificationAnswer;
     const exact = card.imported ? importedAnswerMatches(card, card.options?.length ? selectedAnswers : typedAnswer) : card.options?.length
@@ -1367,13 +1318,8 @@ export default function Home() {
   }
 
   function renderCardInteraction(card: Card, kind: Kind, isReview = false) {
-    const effectiveKind = kind === "flashcards" && card.options?.length ? "multiple_choice" : kind;
-    if (effectiveKind === "same_as_source") {
-      if (card.quiz_type === "matching") return renderMatchingQuiz(card, isReview);
-      if (card.quiz_type === "multiple_choice") return renderMultipleChoice(card);
-      if (card.quiz_type === "checkbox") return renderCheckboxQuiz(card, isReview);
-      if (card.quiz_type === "identification") return renderIdentificationQuiz(card, isReview);
-    }
+    const effectiveKind = quizKind(card, kind);
+    if (effectiveKind === "matching") return renderMatchingQuiz(card, isReview);
     if (effectiveKind === "multiple_choice") return card.options?.length ? renderMultipleChoice(card) : renderIdentificationQuiz(card, isReview);
     if (effectiveKind === "checkbox") return renderCheckboxQuiz(card, isReview);
     if (effectiveKind === "identification") return renderIdentificationQuiz(card, isReview);
@@ -1392,7 +1338,7 @@ export default function Home() {
 
   return (
     <main className="shell studio-shell">
-      <input ref={input} type="file" multiple accept=".pdf,.pptx,.docx,.txt,.md,.png,.jpg,.jpeg,.webp" hidden onChange={(event) => { selectFiles(event.target.files || undefined); event.target.value = ""; }}/>
+      <input ref={input} type="file" multiple accept=".pdf,.pptx,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff" hidden onChange={(event) => { selectFiles(event.target.files || undefined); event.target.value = ""; }}/>
       <aside className="sidebar" aria-label="Workspace navigation">
         <button className="brand" type="button" onClick={() => navigateTo("study")} aria-label="Dawnstudy home"><DawnMark className="brand-icon"/><span className="brand-copy"><span>dawn<span className="brand-light">study</span></span><small>A LITTLE BRIGHTER, EVERY DAY</small></span></button>
         <button type="button" className="new-session-button" onClick={beginStudySet} disabled={busy || continueBusy || generationNeedsReconnect} title="New study set"><Plus size={19}/><span>New study set</span></button>
@@ -1469,7 +1415,7 @@ export default function Home() {
               <span className="upload-copy"><strong>{files.length ? "Add another material" : "Drop your study materials here"}</strong><small>{files.length ? files.length + " of 5 files selected" : "Upload more than one file, or choose them from your device."}</small></span>
               <button type="button" className="upload-browse-button" onClick={pickStudyFiles}><Plus size={15}/>{files.length ? "Add files" : "Browse files"}</button>
             </div>
-            <div className="upload-limits">PDF, PPTX, DOCX, TXT, MD, PNG, JPG, WEBP · 15 MB each · 30 MB total</div>
+            <div className="upload-limits">PDF, PPTX, DOCX, TXT, MD, PNG, JPG, WEBP, BMP, GIF, TIFF · 15 MB each · 30 MB total</div>
             {files.length > 0 && <div className="selected-files">{files.map((selectedFile, index) => {
               const extension = selectedFile.name.split(".").pop()?.toLowerCase() || "";
               const pageSelectable = extension === "pdf" || extension === "pptx";
@@ -1486,7 +1432,7 @@ export default function Home() {
           <div className="type-grid">{types.filter(({ id }) => inputMode === "questionnaire" || id !== "same_as_source").map(({ id, title, detail, icon: Icon }) => <button key={id} className={`type-card ${selected === id ? "chosen" : ""}`} onClick={() => { setSelected(id); setResult(null); setCurrent(0); resetStudyAnswer(); resetReviewAnswer(); setError(""); }}><span className="type-icon"><Icon size={19}/></span><span className="type-text"><strong>{title}</strong><small>{detail}</small></span>{selected === id && <span className="check-icon"><Check size={13} strokeWidth={3}/></span>}</button>)}</div>
                     {inputMode === "questionnaire" ? <p className="questionnaire-help">{selected === "same_as_source" ? "Keep multiple-choice and matching questions in their original formats. Extracted PDF figures stay with their questions." : "All imported questions · original wording and difficulty. Missing answers will be inferred and marked for review."}</p> : <div className="session-options"><label htmlFor="question-count">Questions<select id="question-count" value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{Array.from({ length: 20 }, (_, index) => (index + 1) * 10).map((count) => <option key={count} value={count}>{count} questions</option>)}</select></label><fieldset className="difficulty-choice"><legend>Difficulty</legend><div>{["easy", "medium", "hard"].map((level) => <button type="button" key={level} aria-pressed={difficulty === level} className={difficulty === level ? "selected" : ""} onClick={() => setDifficulty(level as "easy" | "medium" | "hard")}>{level}</button>)}</div></fieldset></div>}
                   </div>}
-                  {composerStep === 2 && <div className="creator-ready"><div className="creator-prompt"><h3>Your next session, ready to go.</h3><p>A quick look before we bring your material to life.</p></div><div className="session-summary"><span className="summary-icon"><BookOpen size={25}/></span><div><strong>{types.find((type) => type.id === selected)?.title}</strong><span>{inputMode === "questionnaire" ? "All imported questions · original wording" : <>{questionCount} questions <i/> {difficulty} difficulty</>}</span><small>{sourceMode === "file" ? files.length ? `${files.length} material${files.length === 1 ? "" : "s"} selected` : "Add your material in step 1" : websiteUrl.trim() ? sourceMode === "youtube" ? "YouTube video selected" : "Public website selected" : "Add a link in step 1"}{inputMode === "notes" && focusTopic ? ` · ${focusTopic}` : ""}</small></div><button type="button" className="plain-icon" aria-label="Edit practice choices" onClick={() => setComposerStep(1)}><ArrowUpRight size={18}/></button></div><label className="model-choice-field" htmlFor="model-choice"><span><Cpu size={18}/> AI model</span><select id="model-choice" value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}><option value="auto">Auto choose the best available model</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select></label>{inputMode === "notes" && <div className="options-row"><button type="button" className={`web-toggle ${web ? "on" : ""}`} aria-pressed={web} onClick={() => setWeb(!web)}><span className="toggle-track"><span/></span><span><b>Enrich with the web</b><small>Add relevant context and source links.</small></span><Globe2 size={19}/></button></div>}<details className="model-help-details"><summary>About generation <ChevronDown size={14}/></summary><p className="model-help">{inputMode === "questionnaire" ? "Imports preserve all recognized items, up to 200. AI is only used for missing answers or new choices. Supply an answer key for questions that need context. Ambiguous layouts or conflicting keys must be corrected before import." : <>Create up to 200 questions per set, with no daily generation limit. AI providers may still have their own usage limits. If a model is busy, another available model can help. Completed questions are saved, and partial sets can be continued.</>}</p></details></div>}
+                  {composerStep === 2 && <div className="creator-ready"><div className="creator-prompt"><h3>Your next session, ready to go.</h3><p>A quick look before we bring your material to life.</p></div><div className="session-summary"><span className="summary-icon"><BookOpen size={25}/></span><div><strong>{types.find((type) => type.id === selected)?.title}</strong><span>{inputMode === "questionnaire" ? "All imported questions · original wording" : <>{questionCount} questions <i/> {difficulty} difficulty</>}</span><small>{sourceMode === "file" ? files.length ? `${files.length} material${files.length === 1 ? "" : "s"} selected` : "Add your material in step 1" : websiteUrl.trim() ? sourceMode === "youtube" ? "YouTube video selected" : "Public website selected" : "Add a link in step 1"}{inputMode === "notes" && focusTopic ? ` · ${focusTopic}` : ""}</small></div><button type="button" className="plain-icon" aria-label="Edit practice choices" onClick={() => setComposerStep(1)}><ArrowUpRight size={18}/></button></div><label className="model-choice-field" htmlFor="model-choice"><span><Cpu size={18}/> AI model</span><select id="model-choice" value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}><option value="auto">Auto choose the best available model</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select></label>{inputMode === "notes" && <div className="options-row generation-material-options"><button type="button" className={`web-toggle ${includeImages ? "on" : ""}`} aria-pressed={includeImages} onClick={() => setIncludeImages(!includeImages)}><span className="toggle-track"><span/></span><span><b>Include questions about images and diagrams</b><small>Use relevant figures from your material when available and keep them with their questions.</small></span><FileImage size={19}/></button><button type="button" className={`web-toggle ${web ? "on" : ""}`} aria-pressed={web} onClick={() => setWeb(!web)}><span className="toggle-track"><span/></span><span><b>Enrich with the web</b><small>Add relevant context and source links.</small></span><Globe2 size={19}/></button></div>}<details className="model-help-details"><summary>About generation <ChevronDown size={14}/></summary><p className="model-help">{inputMode === "questionnaire" ? "Imports preserve all recognized items, up to 200. AI is only used for missing answers or new choices. Supply an answer key for questions that need context. Ambiguous layouts or conflicting keys must be corrected before import." : <>Create up to 200 questions per set, with no daily generation limit. AI providers may still have their own usage limits. If a model is busy, another available model can help. Completed questions are saved, and partial sets can be continued.</>}</p></details></div>}
                 </div>
                 <div className="creator-footer"><span className="creator-footer-note">{composerStep === 0 ? <><Leaf size={15}/> One small step starts it.</> : <button type="button" className="creator-back" onClick={() => setComposerStep((step) => Math.max(0, step - 1))}><ChevronLeft size={16}/> Back</button>}</span>{composerStep < 2 ? <button className="creator-next" type="button" onClick={() => setComposerStep((step) => step + 1)}>{composerStep === 0 ? "Choose practice" : "Review & create"}<ArrowRight size={18}/></button> : <button className="generate-button" onClick={generate} disabled={busy || continueBusy || generationNeedsReconnect}>{busy ? <><span className="spinner"/> Generating...</> : <>Create study set <ArrowRight size={18}/></>}</button>}</div>
               </section>
@@ -1504,8 +1450,8 @@ export default function Home() {
               <div className="practice-timer"><AlarmClock size={18}/><span>{practiceSecondsPerQuestion === 0 ? "No time limit" : `${Math.floor(practiceTimeLeft / 60)}:${String(practiceTimeLeft % 60).padStart(2, "0")} remaining`}</span><span className="practice-progress">Question {practiceIndex + 1} of {result.items.length}</span></div>
               <div className="practice-question"><span className="face-label">QUESTION {practiceIndex + 1}</span><h3>{practiceCard.question}</h3>
                 {renderQuestionImages(practiceCard)}
-                {(practiceCard.quiz_type || result.type) === "matching" ? renderMatchingQuiz(practiceCard, false, practiceIndex) : practiceCard.options?.length ? <div className="practice-choices">{practiceCard.options.map((option, index) => {
-                  const checkboxMode = result.type === "checkbox";
+                {quizKind(practiceCard, result.type) === "matching" ? renderMatchingQuiz(practiceCard, false, practiceIndex) : ["multiple_choice", "checkbox"].includes(quizKind(practiceCard, result.type)) && practiceCard.options?.length ? <div className="practice-choices">{practiceCard.options.map((option, index) => {
+                  const checkboxMode = quizKind(practiceCard, result.type) === "checkbox";
                   const answer = practiceAnswers[practiceIndex];
                   const selected = checkboxMode ? Array.isArray(answer) && answer.includes(option) : answer === option;
                   return <button type="button" key={`${index}-${option}`} className={`practice-choice ${selected ? "selected" : ""}`} onClick={() => checkboxMode ? togglePracticeChoice(practiceIndex, option) : updatePracticeAnswer(practiceIndex, option)}><i>{checkboxMode ? (selected ? "✓" : "") : String.fromCharCode(65 + index)}</i><span>{option}</span></button>;
@@ -1515,7 +1461,7 @@ export default function Home() {
             </> : practiceComplete ? <>
               <div className="practice-score"><strong>{practiceScore}<span>/{result.items.length}</span></strong><div><b>{practicePercent}%</b><small>{practicePercent >= 80 ? "Great work — keep it up." : "Review the missed answers below."}</small></div></div>
               <h3 className="missed-heading">Review missed answers</h3>
-              {practiceScore === result.items.length ? <p className="all-correct">You answered every question correctly.</p> : <div className="missed-list">{result.items.map((card, index) => isPracticeAnswerCorrect(card, result.type, practiceAnswers[index]) ? null : <article className="missed-card" key={`${card.card_id || card.question}-${index}`}><strong>{index + 1}. {card.question}</strong><p><b>Your answer:</b> {displayPracticeAnswer(practiceAnswers[index])}</p><p><b>Correct answer:</b> {displayCorrectAnswer(card)}</p>{card.explanation && <small>{card.explanation}</small>}{card.source_refs?.length ? <small className="missed-source">Source: {card.source_refs.join(", ")}</small> : null}</article>)}</div>}
+              {practiceScore === result.items.length ? <p className="all-correct">You answered every question correctly.</p> : <div className="missed-list">{result.items.map((card, index) => isPracticeAnswerCorrect(card, result.type, practiceAnswers[index]) ? null : <article className="missed-card" key={`${card.card_id || card.question}-${index}`}><strong>{index + 1}. {card.question}</strong>{renderQuestionImages(card)}<p><b>Your answer:</b> {displayPracticeAnswer(practiceAnswers[index])}</p><p><b>Correct answer:</b> {displayCorrectAnswer(card)}</p>{card.explanation && <small>{card.explanation}</small>}{card.source_refs?.length ? <small className="missed-source">Source: {card.source_refs.join(", ")}</small> : null}</article>)}</div>}
               <button className="finish-test" onClick={() => { setPracticeActive(false); setPracticeComplete(false); }}>Back to study cards</button>
             </> : null}
           </section>}

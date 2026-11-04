@@ -154,11 +154,47 @@ def merge_continued_generation(base, generated):
     """Retain old cards and IDs while appending unique new questions."""
     target = base.get("requested_count") or len(base["items"])
     items, seen = [], set()
-    for item in [*base["items"], *generated["items"]]:
-        key = re.sub(r"[\W_]+", " ", str(item.get("question") or "").casefold()).strip()
-        if key and key not in seen and len(items) < target:
-            seen.add(key)
-            items.append(item)
+    questionnaire = bool(base["items"]) and all(item.get("imported") for item in [*base["items"], *generated["items"]])
+    if questionnaire:
+        # A questionnaire may legitimately repeat the same stem with different
+        # figures/choices. Its parsed position is identity, not its wording.
+        def identity(item):
+            if item.get("questionnaire_index") is not None:
+                return ("position", str(item["questionnaire_index"]))
+            if item.get("card_id"):
+                return ("card", item["card_id"])
+            return ("source", str(item.get("source_number", "")),
+                    tuple(item.get("source_refs", [])), str(item.get("question", "")))
+
+        by_position = {identity(item): item for item in base["items"]}
+        by_card = {item["card_id"]: item for item in base["items"] if item.get("card_id")}
+        retained_cards = set()
+        for item in generated["items"]:
+            old = by_position.get(identity(item)) or by_card.get(item.get("card_id"))
+            # The converter carries source text/figure repairs. Preserve the
+            # previous answer and review identity while accepting those repairs.
+            if old:
+                protected = {key: old[key] for key in ("card_id", "answer", "correct_answer", "answer_origin", "matching_pairs") if key in old}
+                item = {**old, **item, **protected}
+                if old.get("card_id"):
+                    retained_cards.add(old["card_id"])
+            key = identity(item)
+            if key not in seen and len(items) < target:
+                seen.add(key)
+                items.append(item)
+        for item in base["items"]:
+            key = identity(item)
+            if key not in seen and item.get("card_id") not in retained_cards and len(items) < target:
+                seen.add(key)
+                items.append(item)
+        if all(item.get("questionnaire_index") is not None for item in items):
+            items.sort(key=lambda item: int(item["questionnaire_index"]))
+    else:
+        for item in [*base["items"], *generated["items"]]:
+            key = re.sub(r"[\W_]+", " ", str(item.get("question") or "").casefold()).strip()
+            if key and key not in seen and len(items) < target:
+                seen.add(key)
+                items.append(item)
     sources = {source["url"]: source for source in [*base.get("sources", []), *generated.get("sources", [])]}
     return {
         **base, **generated, "id": base["id"], "created_at": base["created_at"],

@@ -87,7 +87,7 @@ class QuestionnaireResilienceTests(unittest.TestCase):
         }
         with patch.dict(main.os.environ, environment, clear=False):
             models = main.configured_ai_models()
-        self.assertEqual([choice[0] for choice in models], ["zai:glm-4.7-flash", "zai:glm-4.5-flash"])
+        self.assertEqual([choice[0] for choice in models], ["zai:glm-4.7-flash", "zai:glm-4.5-flash", "zai:glm-4.6v-flash"])
         self.assertTrue(all(choice[3] == "zai-test-key" for choice in models))
 
     def test_zai_uses_its_openai_compatible_endpoint_and_keeps_json_parsing(self):

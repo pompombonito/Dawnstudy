@@ -1,12 +1,11 @@
 """Extract questionnaire text, highlighted keys, and question figures from PDFs."""
-import base64
 import re
 import threading
-from io import BytesIO
 
 from PIL import Image
 
-from questionnaire import OPTION, QuestionnaireError
+from questionnaire import OPTION, QuestionnaireError, parse_questionnaire
+from questionnaire_ocr import image_data_url, ocr_questionnaire_image, ocr_learning_image
 
 # PDFium is not thread-safe. Generation workers may import PDFs concurrently.
 _pdfium_lock = threading.RLock()
@@ -151,23 +150,118 @@ def _image_data_url(image_object, bounds, page_area):
     if width < 38 or height < 38 or width * height > page_area * 0.4:
         return None
     bitmap = image_object.get_bitmap()
+    # get_bitmap exposes a PDFium-owned buffer. Conversion copies its pixels;
+    # let its buffer finalizer release the foreign bitmap instead of explicitly
+    # closing a handle that PIL may still reference.
     image = bitmap.to_pil().convert("RGB")
-
-    for dimensions, quality in (((420, 420), 68), ((360, 360), 58), ((280, 280), 50)):
-        candidate = image.copy()
-        candidate.thumbnail(dimensions, Image.Resampling.LANCZOS)
-        output = BytesIO()
-        try:
-            candidate.save(output, format="WEBP", quality=quality, method=5)
-            mime = "image/webp"
-        except (OSError, ValueError):
-            output = BytesIO()
-            candidate.save(output, format="JPEG", quality=quality, optimize=True)
-            mime = "image/jpeg"
-        payload = output.getvalue()
-        if len(payload) <= 30_000:
-            return f"data:{mime};base64,{base64.b64encode(payload).decode('ascii')}"
+    try:
+        result = image_data_url(image)
+    finally:
+        image.close()
+    if result:
+        return result
     raise QuestionnaireError("A PDF figure is too large to attach. Select fewer pages or upload a smaller copy.")
+
+
+def extract_pdf_figures(raw, page_indices, limit=24):
+    """Return bounded native figures with stable IDs and nearby source context.
+
+    Caller supplies IDs/context to the model and attaches data_url only when the
+    generated question explicitly selects that figure ID. This prevents every
+    figure on a source page from being attached to every question on that page.
+    """
+    import pypdfium2 as pdfium
+
+    figures = []
+    with _pdfium_lock:
+        document = pdfium.PdfDocument(raw)
+        try:
+            for index in page_indices:
+                page = document[index]
+                textpage = page.get_textpage()
+                try:
+                    text = textpage.get_text_bounded()
+                    lines = [(match[0].strip(), _line_bounds(textpage, match[0], match.start()))
+                             for match in re.finditer(r"[^\n]+", text) if match[0].strip()]
+                    page_width, page_height = page.get_size()
+                    number = 0
+                    has_scan = False
+                    for obj in page.get_objects(filter=[pdfium.raw.FPDF_PAGEOBJ_IMAGE]):
+                        bounds = obj.get_bounds()
+                        has_scan = has_scan or ((bounds[2]-bounds[0])*(bounds[3]-bounds[1]) > page_width*page_height*.4)
+                        data = _image_data_url(obj, bounds, page_width * page_height)
+                        if not data:
+                            continue
+                        number += 1
+                        nearby = sorted(((value, box) for value, box in lines if box), key=lambda item: _rect_distance(item[1], bounds))[:10]
+                        figures.append({"id": f"pdf-p{index + 1}-figure-{number}", "page": index + 1,
+                                        "source_ref": f"PDF page {index + 1}",
+                                        "context": _clean_pdf_text("\n".join(value for value, _box in nearby))[:1800],
+                                        "data_url": data})
+                        if len(figures) >= limit:
+                            return figures
+                    if has_scan and len(text.strip()) < 150:
+                        bitmap = page.render(scale=min(2.5, 2600/max(page_width, page_height)))
+                        image = bitmap.to_pil().convert("RGB")
+                        bitmap.close()
+                        try:
+                            _text, scanned = ocr_learning_image(image, include_images=True)
+                            for ordinal, figure in enumerate(scanned, 1):
+                                figures.append({**figure, "id": f"pdf-p{index+1}-scan-figure-{ordinal}",
+                                                "page": index+1, "source_ref": f"PDF page {index+1}"})
+                                if len(figures) >= limit:
+                                    return figures
+                        except (ImportError, RuntimeError):
+                            pass
+                        finally:
+                            image.close()
+                finally:
+                    textpage.close()
+                    page.close()
+        finally:
+            document.close()
+    return figures
+
+
+def extract_pdf_learning_material(raw, reader, page_indices, include_skipped=False):
+    """Read native PDF study text first and OCR image-only pages when needed."""
+    import pypdfium2 as pdfium
+
+    segments, skipped = [], []
+    with _pdfium_lock:
+        document = None
+        try:
+            for index in page_indices:
+                text = _clean_pdf_text(reader.pages[index].extract_text() or "")
+                if len(re.sub(r"\s+", "", text)) >= 40:
+                    segments.append((f"PDF page {index+1}", text))
+                    continue
+                if document is None:
+                    document = pdfium.PdfDocument(raw)
+                page = document[index]
+                try:
+                    width, height = page.get_size()
+                    bitmap = page.render(scale=min(2.5, 2600/max(width, height)))
+                    image = bitmap.to_pil().convert("RGB")
+                    bitmap.close()
+                    try:
+                        recognized, _figures = ocr_learning_image(image)
+                        text = _clean_pdf_text(recognized)
+                    except (ImportError, RuntimeError):
+                        text = ""
+                    finally:
+                        image.close()
+                    if len(re.sub(r"\s+", "", text)) < 20:
+                        skipped.append(f"PDF page {index+1}")
+                    else:
+                        segments.append((f"PDF page {index+1}", text))
+                finally:
+                    page.close()
+        finally:
+            if document is not None:
+                document.close()
+    result = ("\n\n".join(f"[SOURCE: {label}]\n{text}" for label, text in segments), [label for label, _ in segments])
+    return (*result, skipped) if include_skipped else result
 
 
 def _read_page_images(page, textpage, text, has_previous_question=False):
@@ -244,11 +338,13 @@ def _read_page_images(page, textpage, text, has_previous_question=False):
     output, skipping_caption = [], False
     for line in lines:
         value = line["text"]
-        figure = _FIGURE.search(value)
+        # Figure references are part of question wording. Only a standalone
+        # caption beginning with "Figure N" should be removed.
+        figure = _FIGURE.match(value.lstrip())
         if figure:
             # Keep a choice that PDF text extraction placed after its figure
             # caption on the same line, while removing the caption itself.
-            trailing = value[figure.end():]
+            trailing = value.lstrip()[figure.end():]
             option = re.search(r"(?i)(?<![A-Za-z])(?:\([A-H]\)|[A-H][.)])\s+\S", trailing)
             if option:
                 output.append(trailing[option.start():].strip())
@@ -305,8 +401,27 @@ def extract_pdf_questionnaire(raw, reader, page_indices, include_skipped=False):
                         (bounds := image.get_bounds()) and (bounds[2] - bounds[0]) * (bounds[3] - bounds[1]) > page_width * page_height * .4
                         for image in page.get_objects(filter=[pdfium.raw.FPDF_PAGEOBJ_IMAGE])
                     )
-                    if has_page_scan and not _QUESTION_START.search(original):
-                        skipped_pages.append(f"PDF page {index + 1}")
+                    if not _QUESTION_START.search(original) and (has_page_scan or len(original.strip()) < 50):
+                        # Native extraction cannot read image-only pages. OCR
+                        # locally, keeping the source page and visible keys.
+                        scale = min(2.5, 2600 / max(page_width, page_height))
+                        bitmap = page.render(scale=scale)
+                        image = bitmap.to_pil().convert("RGB")
+                        bitmap.close()
+                        try:
+                            text = _clean_pdf_text(ocr_questionnaire_image(image))
+                            if _QUESTION_START.search(text):
+                                # Reject structurally damaged OCR instead of
+                                # guessing missing choices into a quiz.
+                                parse_questionnaire([text])
+                            elif not (has_previous_question and _OPTION_START.search(text)):
+                                raise QuestionnaireError("No readable questionnaire items on this scanned page.")
+                            segments.append((f"PDF page {index + 1}", text))
+                            has_previous_question = has_previous_question or bool(_QUESTION_START.search(text))
+                        except (ImportError, RuntimeError, QuestionnaireError):
+                            skipped_pages.append(f"PDF page {index + 1}")
+                        finally:
+                            image.close()
                         continue
                     text, leading_markers = _read_page_images(page, textpage, original, has_previous_question)
                     if leading_markers:

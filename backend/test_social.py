@@ -123,6 +123,20 @@ class SocialTests(unittest.TestCase):
         self.assertEqual(finished["players"][0]["id"], "alice")
         self.assertTrue(games.ROOMS[code]["saved"])
 
+    def test_player_leaving_does_not_count_their_answer_toward_remaining_players(self):
+        self.friend()
+        room = self.post("/games", {"set_id": "quiz"}).json()
+        code = room["code"]
+        self.post(f"/games/{code}", {"action": "join"}, "bob")
+        self.post(f"/games/{code}", {"action": "start"})
+        games.advance(games.ROOMS[code], games.ROOMS[code]["deadline"] + .1)
+        self.post(f"/games/{code}", {"action": "answer", "answer": "Leaf", "question_index": 0})
+        self.post(f"/games/{code}", {"action": "leave"})
+        self.assertNotIn("alice", games.ROOMS[code]["answers"])
+        result = self.post(f"/games/{code}", {"action": "answer", "answer": "Leaf", "question_index": 0}, "bob")
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json()["phase"], "reveal")
+
     def test_companion_suggests_friends_without_storing_the_conversation(self):
         result = self.post("/companion", {"message": "I'm feeling lonely"})
         self.assertTrue(result.json()["suggest_friends"])
@@ -167,6 +181,33 @@ class SocialTests(unittest.TestCase):
 
 
 class GameScoringTests(unittest.TestCase):
+    def test_choice_scoring_preserves_significant_punctuation_and_literal_letter_options(self):
+        card = {"answer": "C#", "options": ["C++", "C#", "Java"]}
+        self.assertTrue(games.correct_answer(card, "multiple_choice", "C#"))
+        self.assertFalse(games.correct_answer(card, "multiple_choice", "C++"))
+        card = {"answer": "A", "options": ["B", "A", "C"]}
+        self.assertTrue(games.correct_answer(card, "multiple_choice", "A"))
+        self.assertFalse(games.correct_answer(card, "multiple_choice", "B"))
+
+    def test_same_as_source_uses_each_card_type_and_matching_stays_server_authoritative(self):
+        checkbox = {"quiz_type": "checkbox", "answer": "Red | Blue", "options": ["Red", "Blue", "Green"]}
+        self.assertTrue(games.correct_answer(checkbox, "same_as_source", ["Blue", "Red"]))
+        self.assertFalse(games.correct_answer(checkbox, "same_as_source", "Red"))
+        matching = {"question": "Match", "quiz_type": "matching", "matching_prompts": ["One", "Two"],
+                    "matching_options": ["First", "Second"], "images": ["data:image/webp;base64,AA=="],
+                    "answer": "One — First\nTwo — Second", "matching_pairs": [{"prompt": "One", "answer": "First"}, {"prompt": "Two", "answer": "Second"}]}
+        self.assertTrue(games.correct_answer(matching, "same_as_source", {"One": "First", "Two": "Second"}))
+        self.assertFalse(games.correct_answer(matching, "same_as_source", {"One": "First"}))
+        self.assertFalse(games.correct_answer(matching, "same_as_source", {"One": "Second", "Two": "First"}))
+        room = games.create("alice", {"title": "Mixed quiz", "type": "same_as_source", "items": [matching]})
+        room.update(phase="question", index=0, deadline=9999999999)
+        question = games.snapshot(room, "alice", {})["question"]
+        self.assertEqual(question["quiz_type"], "matching")
+        self.assertEqual(question["matching_prompts"], ["One", "Two"])
+        self.assertEqual(question["images"], matching["images"])
+        self.assertNotIn("matching_pairs", question)
+        self.assertNotIn("answer", question)
+
     def test_checkbox_preserves_commas_in_options_and_requires_exact_set(self):
         card = {"answer": "Red, green | Blue", "options": ["Red, green", "Blue", "Yellow"]}
         self.assertTrue(games.correct_answer(card, "checkbox", ["Blue", "Red, green"]))

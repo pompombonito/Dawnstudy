@@ -3,7 +3,7 @@ export default function Agreement({ compact = false }: { compact?: boolean }) {
   return (
     <article className={`agreement-copy ${compact ? "compact" : ""}`}>
       <p className="eyebrow">
-        USER AGREEMENT &amp; PRIVACY NOTICE · 30 OCTOBER 2026
+        USER AGREEMENT &amp; PRIVACY NOTICE
       </p>
       <h1>A thoughtful space to study together.</h1>
       <p>
@@ -15,10 +15,11 @@ export default function Agreement({ compact = false }: { compact?: boolean }) {
       </p>
       <h2>1. Your account and choices</h2>
       <p>
-        Use your own eligible CEU account, keep your sign-in secure and choose a
-        nickname that you are comfortable making public. Do not impersonate
-        another person. If you are under 18, review these terms with a parent or
-        guardian before using the social and AI features. Profile discovery is
+        Use any verified Gmail account or an eligible CEU Google account, keep
+        your sign-in secure and choose a nickname that you are comfortable
+        making public. Do not impersonate another person. If you are under 18,
+        review these terms with a parent or guardian before using the social and
+        AI features. Profile discovery is
         optional and off by default. Gender is private, optional through “Prefer
         not to say,” and does not limit which icons you can use.
       </p>

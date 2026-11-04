@@ -2,56 +2,28 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { importedAnswerMatches } from "../../imported-answers";
+import { importedOptionIsCorrect } from "../../imported-answers";
+import { normalizedAnswer, resolveChoiceAnswers, quizKind, quizAnswerIsCorrect } from "../../quiz-answers";
 import ThemePicker from "../../components/ThemePicker";
 import { applyTheme, DEFAULT_THEME, GUEST_THEME_STORAGE_KEY, normalizeTheme, readInitialTheme, THEME_STORAGE_KEY, SESSION_STORAGE_KEY, type Theme } from "../../community/themes";
 import { communityApi } from "../../community/api";
 import type { Bootstrap, Profile } from "../../community/types";
 import { ArrowUpRight, BookOpen, Check, ChevronLeft, ChevronRight, CircleHelp, ExternalLink, Maximize2, Minimize2, RotateCcw, Share2 } from "lucide-react";
 
-type SharedCard = { question: string; answer: string; options?: string[]; correct_answer?: string; explanation?: string; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred"; images?: string[]; quiz_type?: "multiple_choice" | "checkbox" | "identification" | "matching"; matching_prompts?: string[]; matching_options?: string[]; matching_pairs?: { prompt: string; answer: string }[] };
+type SharedCard = { question: string; answer: string; options?: string[]; correct_answer?: string; correct_answers?: string[]; explanation?: string; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred"; images?: string[]; image_captions?: string[]; quiz_type?: "multiple_choice" | "checkbox" | "identification" | "matching"; matching_prompts?: string[]; matching_options?: string[]; matching_pairs?: { prompt: string; answer: string }[] };
 type SharedSet = { title: string; type: string; items: SharedCard[]; sources?: { title: string; url: string }[] };
 type AnswerState = { selected: string | null; selectedMany: string[]; matches: Record<string, string>; revealed: boolean };
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
 const emptyAnswer = (): AnswerState => ({ selected: null, selectedMany: [], matches: {}, revealed: false });
 const typeNames: Record<string, string> = { flashcards: "Flashcards", multiple_choice: "Multiple choice", checkbox: "Select all that apply", identification: "Identification", same_as_source: "Same type as the questionnaire" };
 
-function normalizedAnswer(value: unknown) {
-  return String(value ?? "").toLocaleLowerCase().trim().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-}
-
-function resolveChoiceAnswers(answer: unknown, options: string[]) {
-  const resolved: string[] = [];
-  for (const part of String(answer ?? "").split("|").map((value) => value.trim()).filter(Boolean)) {
-    const letter = part.match(/^(?:option\s*)?([A-D])(?:[.):\-])?$/i);
-    let match = letter ? options[letter[1].toUpperCase().charCodeAt(0) - 65] : options.find((option) => normalizedAnswer(option) === normalizedAnswer(part));
-    if (!match && part) {
-      const left = Array.from(normalizedAnswer(part));
-      const ranked = options.map((option) => {
-        const right = Array.from(normalizedAnswer(option));
-        let previous = new Uint16Array(right.length + 1);
-        for (const leftChar of left) {
-          const current = new Uint16Array(right.length + 1);
-          for (let index = 1; index <= right.length; index += 1) {
-            current[index] = leftChar === right[index - 1] ? previous[index - 1] + 1 : Math.max(previous[index], current[index - 1]);
-          }
-          previous = current;
-        }
-        return { option, similarity: left.length + right.length ? 2 * previous[right.length] / (left.length + right.length) : 0 };
-      }).sort((a, b) => b.similarity - a.similarity);
-      if (ranked[0]?.similarity >= 0.9 && (!ranked[1] || ranked[0].similarity - ranked[1].similarity >= 0.08)) match = ranked[0].option;
-    }
-    if (!match) return [];
-    if (!resolved.some((option) => normalizedAnswer(option) === normalizedAnswer(match))) resolved.push(match);
-  }
-  return resolved;
-}
-
 export default function SharedStudySetPage() {
   const params = useParams<{ token: string }>();
   const token = params.token;
   const [studySet, setStudySet] = useState<SharedSet | null>(null);
   const [error, setError] = useState("");
+  const [canRetryLoad, setCanRetryLoad] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [index, setIndex] = useState(0);
   const [responses, setResponses] = useState<AnswerState[]>([]);
   const [theme, setTheme] = useState<Theme>(DEFAULT_THEME);
@@ -94,7 +66,7 @@ export default function SharedStudySetPage() {
     const close = (event: KeyboardEvent) => {
       if (event.key === "Escape") setFocusMode(false);
       if (event.key === "Tab") {
-        const controls = Array.from(quizPanel.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), a[href], [tabindex="0"]') || []);
+        const controls = Array.from(quizPanel.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex="0"]') || []);
         const first = controls[0], last = controls[controls.length - 1];
         if (!first) return;
         if (event.shiftKey && (document.activeElement === first || document.activeElement === quizPanel.current)) { event.preventDefault(); last.focus(); }
@@ -106,12 +78,15 @@ export default function SharedStudySetPage() {
   }, [focusMode]);
 
   useEffect(() => {
-    setStudySet(null); setError(""); setIndex(0); setResponses([]);
+    setStudySet(null); setError(""); setCanRetryLoad(false); setIndex(0); setResponses([]);
     if (!token || !API_BASE) { setError("This share link is unavailable."); return; }
-    fetch(`${API_BASE}/api/shared/${encodeURIComponent(token)}`)
+    const controller = new AbortController();
+    fetch(`${API_BASE}/api/shared/${encodeURIComponent(token)}`, { signal: controller.signal, cache: "no-store" })
       .then(async (response) => {
+        if (!response.ok && response.status !== 404) setCanRetryLoad(true);
         if (!response.ok) throw new Error(response.status === 404 ? "This link is invalid or the owner turned it off." : "The shared set could not be loaded. Please try again.");
         const data: SharedSet = await response.json();
+        if (!Array.isArray(data.items) || !data.items.length) throw new Error("This shared set has no available questions. Ask its owner to share it again.");
         const defaults = Array.from({ length: data.items.length }, emptyAnswer);
         try {
           const saved = JSON.parse(sessionStorage.getItem(`dawnstudy_shared_progress_v1:${token}`) || "null");
@@ -123,7 +98,7 @@ export default function SharedStudySetPage() {
                   selected: typeof responseState.selected === "string" ? responseState.selected : null,
                   selectedMany: Array.isArray(responseState.selectedMany) ? responseState.selectedMany.filter((answer: unknown) => typeof answer === "string") : [],
                   matches: responseState.matches && typeof responseState.matches === "object" && !Array.isArray(responseState.matches) ? responseState.matches : {},
-                  revealed: Boolean(responseState.revealed) && ((data.items[item]?.quiz_type || data.type) !== "identification" || (typeof responseState.selected === "string" && Boolean(responseState.selected.trim()))),
+                  revealed: Boolean(responseState.revealed) && (quizKind(data.items[item], data.type) !== "identification" || (typeof responseState.selected === "string" && Boolean(responseState.selected.trim()))),
                 };
               }
             }
@@ -132,8 +107,15 @@ export default function SharedStudySetPage() {
         setResponses(defaults);
         setStudySet(data);
       })
-      .catch((caught) => setError(caught instanceof Error ? caught.message : "The shared set could not be loaded."));
-  }, [token]);
+      .catch((caught) => {
+        if (controller.signal.aborted) return;
+        if (caught instanceof TypeError || caught instanceof SyntaxError) {
+          setCanRetryLoad(true);
+          setError("The study service is temporarily unavailable. It may be waking up. Try again shortly.");
+        } else setError(caught instanceof Error ? caught.message : "The shared set could not be loaded.");
+      });
+    return () => controller.abort();
+  }, [token, loadAttempt]);
 
   function updateCurrentResponse(next: AnswerState) {
     const updated = responses.map((response, responseIndex) => responseIndex === index ? next : response);
@@ -181,31 +163,28 @@ export default function SharedStudySetPage() {
 
   function responseIsCorrect(item: SharedCard, saved: AnswerState | undefined) {
     if (!saved?.revealed || !studySet) return false;
-    if (item.quiz_type === "matching") return Boolean(item.matching_pairs?.length) && item.matching_pairs!.length === (item.matching_prompts || []).length && item.matching_pairs!.every((pair) => normalizedAnswer(saved.matches[pair.prompt]) === normalizedAnswer(pair.answer));
-    if (item.imported) return importedAnswerMatches(item, (item.quiz_type || studySet.type) === "checkbox" ? saved.selectedMany : saved.selected);
-    const raw = String(item.correct_answer || item.answer || "");
-    const resolved = resolveChoiceAnswers(raw, item.options || []);
-    const answers = (resolved.length ? resolved : raw.split("|")).map(normalizedAnswer).filter(Boolean);
-    if (!item.options?.length) return studySet.type === "identification" && answers.includes(normalizedAnswer(saved.selected));
-    const correct = item.options.filter((option) => answers.includes(normalizedAnswer(option)));
-    const checkbox = (item.quiz_type || studySet.type) === "checkbox";
-    const picked = checkbox ? saved.selectedMany : saved.selected ? [saved.selected] : [];
-    const right = picked.filter((option) => answers.includes(normalizedAnswer(option)));
-    return checkbox ? right.length === correct.length && picked.length === correct.length : picked.length === 1 && right.length === 1;
+    const kind = quizKind(item, studySet.type);
+    return quizAnswerIsCorrect(item, studySet.type, kind === "matching" ? saved.matches : kind === "checkbox" ? saved.selectedMany : saved.selected);
+  }
+
+  function scoreable(item: SharedCard) {
+    if (!studySet) return false;
+    return ["multiple_choice", "checkbox", "identification", "matching"].includes(quizKind(item, studySet.type));
   }
 
   const card = studySet?.items[index];
   const response = responses[index] || emptyAnswer();
-  const cardType = card?.quiz_type || studySet?.type;
+  const cardType = card && studySet ? quizKind(card, studySet.type) : undefined;
+  const choiceMode = cardType === "multiple_choice" || cardType === "checkbox";
   const rawExpectedAnswer = String(card?.correct_answer || card?.answer || "");
   const resolvedExpectedAnswers = resolveChoiceAnswers(rawExpectedAnswer, card?.options || []);
   const expectedAnswer = card?.imported ? rawExpectedAnswer : resolvedExpectedAnswers.length ? resolvedExpectedAnswers.join(" | ") : rawExpectedAnswer;
   const expectedAnswers = (resolvedExpectedAnswers.length ? resolvedExpectedAnswers : rawExpectedAnswer.split("|")).map(normalizedAnswer).filter(Boolean);
-  const isCorrect = (option: string) => card?.imported ? importedAnswerMatches(card, option) : expectedAnswers.includes(normalizedAnswer(option));
+  const isCorrect = (option: string) => card?.imported ? importedOptionIsCorrect(card, option) : expectedAnswers.includes(normalizedAnswer(option));
   const checkboxMode = cardType === "checkbox";
   const identificationMode = cardType === "identification";
-  const scoreableCount = studySet ? studySet.items.filter((item) => Boolean(item.options?.length) || item.quiz_type === "identification" || item.quiz_type === "matching" || studySet.type === "identification").length : 0;
-  const answeredCount = studySet ? studySet.items.reduce((count, item, itemIndex) => count + ((item.options?.length || item.quiz_type === "identification" || item.quiz_type === "matching" || studySet.type === "identification") && responses[itemIndex]?.revealed ? 1 : 0), 0) : 0;
+  const scoreableCount = studySet ? studySet.items.filter(scoreable).length : 0;
+  const answeredCount = studySet ? studySet.items.reduce((count, item, itemIndex) => count + (scoreable(item) && responses[itemIndex]?.revealed ? 1 : 0), 0) : 0;
   const reviewedCount = responses.filter((item) => item.revealed).length;
   const correctCount = studySet ? studySet.items.reduce((count, item, itemIndex) => count + (responseIsCorrect(item, responses[itemIndex]) ? 1 : 0), 0) : 0;
   const completedCount = scoreableCount ? answeredCount : reviewedCount;
@@ -223,7 +202,7 @@ export default function SharedStudySetPage() {
       <div className="shared-header-actions"><span className="shared-room-label"><Share2 size={15}/> A shared study room</span><ThemePicker value={theme} onChange={changeTheme}/><a className="shared-desk-link" href="/">My study desk <ArrowUpRight size={17}/></a></div>
     </header>
     {themeError && <p className="shared-theme-notice" role="status">{themeError}</p>}
-    {error ? <section className="shared-empty"><span className="shared-empty-icon"><CircleHelp size={29}/></span><p className="shared-eyebrow">LINK UNAVAILABLE</p><h1>This study room is closed.</h1><p>{error}</p><a className="shared-primary-button" href="/">Go to Dawnstudy <ArrowUpRight size={17}/></a></section> : !studySet || !card ? <section className="shared-empty"><span className="shared-loading-sun"/><p className="shared-eyebrow">GETTING THINGS READY</p><h1>A little focus is on its way.</h1><p>Opening your classmate’s study set…</p></section> : <div className="shared-workspace">
+    {error ? <section className="shared-empty"><span className="shared-empty-icon"><CircleHelp size={29}/></span><p className="shared-eyebrow">LINK UNAVAILABLE</p><h1>{canRetryLoad ? "This study room is taking a moment." : "This study room is closed."}</h1><p>{error}</p>{canRetryLoad && <button type="button" className="shared-primary-button" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>Try again <RotateCcw size={17}/></button>}<a className="shared-primary-button" href="/">Go to Dawnstudy <ArrowUpRight size={17}/></a></section> : !studySet || !card ? <section className="shared-empty"><span className="shared-loading-sun"/><p className="shared-eyebrow">GETTING THINGS READY</p><h1>A little focus is on its way.</h1><p>Opening your classmate’s study set…</p></section> : <div className="shared-workspace">
       <aside className="shared-progress-rail">
         <p className="shared-eyebrow">SHARED BY A CLASSMATE</p>
         <h1>{studySet.title}</h1>
@@ -236,8 +215,8 @@ export default function SharedStudySetPage() {
         <div className="shared-question-map"><div className="shared-map-heading"><h2>Find a question</h2><span>{index + 1} / {studySet.items.length}</span></div><div className="shared-question-grid">{studySet.items.map((item, itemIndex) => {
           const saved = responses[itemIndex];
           const marked = saved?.revealed;
-          const scoreable = Boolean(item.options?.length) || identificationMode;
-          return <button type="button" key={itemIndex} className={[itemIndex === index ? "is-current" : "", marked ? "is-complete" : "", marked && scoreable ? responseIsCorrect(item, saved) ? "is-correct" : "is-wrong" : ""].filter(Boolean).join(" ")} aria-label={`Go to question ${itemIndex + 1}${marked ? ", answered" : ""}`} aria-current={itemIndex === index ? "step" : undefined} onClick={() => move(itemIndex)}>{String(itemIndex + 1).padStart(2, "0")}</button>;
+          const canScore = scoreable(item);
+          return <button type="button" key={itemIndex} className={[itemIndex === index ? "is-current" : "", marked ? "is-complete" : "", marked && canScore ? responseIsCorrect(item, saved) ? "is-correct" : "is-wrong" : ""].filter(Boolean).join(" ")} aria-label={`Go to question ${itemIndex + 1}${marked ? ", answered" : ""}`} aria-current={itemIndex === index ? "step" : undefined} onClick={() => move(itemIndex)}>{String(itemIndex + 1).padStart(2, "0")}</button>;
         })}</div></div>
         <button className="shared-restart" type="button" onClick={restartQuiz}><RotateCcw size={17}/> Restart this quiz</button>
         <p className="shared-save-note"><BookOpen size={17}/><span>Your answers stay here when you go back to a previous question.</span></p>
@@ -248,12 +227,12 @@ export default function SharedStudySetPage() {
           <article className="shared-question-card">
             <div className="shared-question-top"><span>QUESTION {String(index + 1).padStart(2, "0")}</span><span>{String(index + 1).padStart(2, "0")}<i>/</i>{String(studySet.items.length).padStart(2, "0")}</span></div>
             <h2>{card.question}</h2>
-            <p className="shared-answer-hint">{cardType === "matching" ? "Match each item with its description." : card.options?.length ? checkboxMode ? "Select every answer that applies, then check your choices." : "Choose the best answer below." : identificationMode ? "Recall the term or concept and type your answer." : "Think it through, then reveal the answer when you’re ready."}</p>
-            {card.images?.length ? <div className="study-figure-list">{card.images.map((image, imageIndex) => <img key={`${index}-figure-${imageIndex}`} src={image} alt={`Figure ${imageIndex + 1} from the uploaded questionnaire`} loading="lazy"/>)}</div> : null}
+            <p className="shared-answer-hint">{cardType === "matching" ? "Match each item with its description." : choiceMode && card.options?.length ? checkboxMode ? "Select every answer that applies, then check your choices." : "Choose the best answer below." : identificationMode ? "Recall the term or concept and type your answer." : "Think it through, then reveal the answer when you’re ready."}</p>
+            {card.images?.length ? <div className="study-figure-list">{card.images.map((image, imageIndex) => <img key={`${index}-figure-${imageIndex}`} src={image} alt={card.image_captions?.[imageIndex] || `Figure ${imageIndex + 1} from your study material`} loading="lazy"/>)}</div> : null}
             {cardType === "matching" ? <>
               <div className="matching-rows shared-matching-rows">{(card.matching_prompts || []).map((prompt, promptIndex) => <label className="matching-row" key={`${promptIndex}-${prompt}`}><span>{prompt}</span><select value={response.matches[prompt] || ""} disabled={response.revealed} onChange={(event) => updateCurrentResponse({ ...response, matches: { ...response.matches, [prompt]: event.target.value } })}><option value="">Choose a match</option>{(card.matching_options || []).map((option, optionIndex) => <option key={`${optionIndex}-${option}`} value={option} disabled={Object.entries(response.matches).some(([otherPrompt, selected]) => otherPrompt !== prompt && selected === option)}>{String.fromCharCode(65 + optionIndex)}. {option}</option>)}</select></label>)}</div>
               {!response.revealed && <button className="shared-primary-button shared-check-button" type="button" disabled={!(card.matching_prompts || []).length || !(card.matching_prompts || []).every((prompt) => Boolean(response.matches[prompt]))} onClick={() => updateCurrentResponse({ ...response, revealed: true })}>Check matches <Check size={17}/></button>}
-            </> : card.options?.length ? <>
+            </> : choiceMode && card.options?.length ? <>
               <div className="shared-options" role="group" aria-label={checkboxMode ? "Select all correct answers" : "Choose an answer"}>{card.options.map((option, optionIndex) => {
                 const correct = isCorrect(option);
                 const picked = checkboxMode ? response.selectedMany.includes(option) : response.selected === option;
@@ -262,7 +241,7 @@ export default function SharedStudySetPage() {
               })}</div>
               {checkboxMode && !response.revealed && <button className="shared-primary-button shared-check-button" type="button" disabled={!response.selectedMany.length} onClick={() => updateCurrentResponse({ ...response, revealed: true })}>Check my answers <Check size={17}/></button>}
             </> : identificationMode ? <form className="shared-written-answer" onSubmit={(event) => { event.preventDefault(); if (response.selected?.trim() && !response.revealed) updateCurrentResponse({ ...response, revealed: true }); }}><label htmlFor="shared-identification">Your answer</label><input id="shared-identification" value={response.selected || ""} disabled={response.revealed} placeholder="Type the term or concept…" autoComplete="off" onChange={(event) => updateCurrentResponse({ ...response, selected: event.target.value })}/>{!response.revealed && <button className="shared-primary-button" type="submit" disabled={!response.selected?.trim()}>Check my answer <Check size={17}/></button>}</form> : <button className={`shared-reveal ${response.revealed ? "is-revealed" : ""}`} onClick={() => updateCurrentResponse({ ...response, revealed: !response.revealed })}><span>{response.revealed ? "THE ANSWER" : "READY WHEN YOU ARE"}</span><strong>{response.revealed ? card.answer : "Reveal the answer"}</strong>{!response.revealed && <ArrowUpRight size={22}/>}</button>}
-            {response.revealed && (card.options?.length || identificationMode || cardType === "matching") && <div className={`shared-answer-feedback ${currentIsCorrect ? "is-correct" : "is-wrong"}`} role="status"><span>{currentIsCorrect ? <Check size={19}/> : <CircleHelp size={19}/>}</span><div><strong>{currentIsCorrect ? "You’ve got it." : "Keep this one in mind."}</strong>{!currentIsCorrect && <p>{cardType === "matching" ? "Correct matches: " : checkboxMode ? "Correct answers: " : "Correct answer: "}{cardType === "matching" ? (card.matching_pairs || []).map((pair) => `${pair.prompt} — ${pair.answer}`).join(" · ") : expectedAnswer}</p>}</div></div>}
+            {response.revealed && (choiceMode || identificationMode || cardType === "matching") && <div className={`shared-answer-feedback ${currentIsCorrect ? "is-correct" : "is-wrong"}`} role="status"><span>{currentIsCorrect ? <Check size={19}/> : <CircleHelp size={19}/>}</span><div><strong>{currentIsCorrect ? "You’ve got it." : "Keep this one in mind."}</strong>{!currentIsCorrect && <p>{cardType === "matching" ? "Correct matches: " : checkboxMode ? "Correct answers: " : "Correct answer: "}{cardType === "matching" ? (card.matching_pairs || []).map((pair) => `${pair.prompt} — ${pair.answer}`).join(" · ") : expectedAnswer}</p>}</div></div>}
             {response.revealed && card.explanation && <div className="shared-explanation"><span>WHY THIS ANSWER</span><p>{card.explanation}</p></div>}
             {card.source_refs?.length ? <div className="shared-citations"><span>FROM THE MATERIAL</span><div>{card.source_refs.map((source) => <small key={source}>{source}</small>)}</div></div> : null}
             <div className="shared-navigation"><button className="shared-nav-button" disabled={index === 0} onClick={() => move(index - 1)}><ChevronLeft size={18}/> Previous</button><span>{response.revealed ? <><Check size={14}/> Answer saved</> : "One question at a time."}</span><button className="shared-nav-button is-next" disabled={index >= studySet.items.length - 1} onClick={() => move(index + 1)}>Next question <ChevronRight size={18}/></button></div>

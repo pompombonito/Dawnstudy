@@ -245,6 +245,35 @@ class ContinuedGenerationTests(unittest.TestCase):
         self.assertEqual(len(merged["items"]), 2)
         self.assertTrue(merged["incomplete"])
 
+    def test_questionnaire_continuation_keeps_repeated_stems_and_source_order(self):
+        original = {"card_id": "saved", "question": "Identify the organism shown.", "answer": "Alpha", "imported": True, "questionnaire_index": 2}
+        base = {**self.base, "items": [original], "requested_count": 2}
+        generated = {"items": [
+            {"question": "Identify the organism shown.", "answer": "Beta", "imported": True, "questionnaire_index": 1, "images": ["first-image"]},
+            {**original, "images": ["second-image"]},
+        ]}
+        merged = merge_continued_generation(base, generated)
+        self.assertEqual([item["questionnaire_index"] for item in merged["items"]], [1, 2])
+        self.assertEqual([item["answer"] for item in merged["items"]], ["Beta", "Alpha"])
+        self.assertEqual(merged["items"][1]["card_id"], "saved")
+        self.assertEqual(merged["items"][1]["images"], ["second-image"])
+        self.assertFalse(merged["incomplete"])
+
+    def test_questionnaire_continuation_applies_repairs_without_changing_saved_answers(self):
+        original = {"card_id": "saved", "question": "Which labora\x02tory?", "answer": "Alpha", "correct_answer": "Alpha", "imported": True, "source_number": "1"}
+        base = {**self.base, "items": [original], "requested_count": 2}
+        generated = {"items": [
+            {**original, "questionnaire_index": 1, "question": "Which laboratory?", "answer": "Changed", "correct_answer": "Changed", "images": ["repaired-image"]},
+            {"question": "Next?", "answer": "Beta", "imported": True, "questionnaire_index": 2},
+        ]}
+        merged = merge_continued_generation(base, generated)
+        self.assertEqual(len(merged["items"]), 2)
+        self.assertEqual(merged["items"][0]["question"], "Which laboratory?")
+        self.assertEqual(merged["items"][0]["answer"], "Alpha")
+        self.assertEqual(merged["items"][0]["correct_answer"], "Alpha")
+        self.assertEqual(merged["items"][0]["card_id"], "saved")
+        self.assertFalse(merged["incomplete"])
+
 
 if __name__ == "__main__":
     unittest.main()

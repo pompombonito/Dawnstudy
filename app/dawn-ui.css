@@ -98,6 +98,8 @@
 
 .companion-panel{max-height:calc(100svh - 170px);overflow-y:auto}
 
+.generation-material-options{display:grid;gap:12px}.generation-material-options .web-toggle{width:100%;align-items:flex-start;text-align:left}.generation-material-options .toggle-track{flex:0 0 auto;margin-top:3px}.generation-material-options .web-toggle>span:nth-child(2){flex:1;min-width:0}.generation-material-options .web-toggle small{display:block;line-height:1.6;white-space:normal}.generation-material-options .web-toggle>svg{flex:0 0 auto;margin-top:3px}
+
 .study-figure-list{display:flex;flex-wrap:wrap;align-items:flex-start;gap:12px;margin:18px 0;max-width:100%}.study-figure-list img{display:block;max-width:min(100%,420px);max-height:420px;object-fit:contain;border:1px solid var(--line);border-radius:12px;background:var(--card)}.matching-rows{display:grid;gap:10px;width:100%;margin:16px 0}.matching-row{display:grid;grid-template-columns:minmax(100px,.8fr) minmax(160px,1.2fr);align-items:center;gap:12px;padding:12px;border:1px solid var(--line);border-radius:11px;background:var(--field);color:var(--ink);font-size:13px}.matching-row>span{overflow-wrap:anywhere}.matching-row select{width:100%;min-width:0;min-height:42px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font:inherit}.matching-row select:focus-visible{outline:2px solid var(--teal);outline-offset:2px}.matching-quiz{width:100%}.matching-quiz.practice-matching{margin-top:14px}.matching-quiz .face-question{display:block}.shared-matching-rows{margin-top:20px}
 @media(max-width:560px){.matching-row{grid-template-columns:1fr;gap:8px;padding:10px}.study-figure-list img{max-width:100%;max-height:300px}}
 

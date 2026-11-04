@@ -75,6 +75,10 @@ export type Game = {
   question?: {
     question: string;
     options: string[];
+    quiz_type?: "multiple_choice" | "checkbox" | "identification" | "matching";
+    images?: string[];
+    matching_prompts?: string[];
+    matching_options?: string[];
     answer?: string | string[];
     explanation?: string;
   };

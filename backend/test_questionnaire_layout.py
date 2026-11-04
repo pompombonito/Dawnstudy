@@ -56,6 +56,26 @@ def flattened_highlighted_pdf():
 
 
 class QuestionnaireLayoutTests(unittest.TestCase):
+    def test_pdf_figure_references_remain_in_numbered_and_wrapped_question_stems(self):
+        writer = PdfWriter()
+        page = writer.add_blank_page(width=600, height=800)
+        font = writer._add_object(DictionaryObject({NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"), NameObject("/BaseFont"): NameObject("/Helvetica")}))
+        page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})})
+        stream = DecodedStreamObject()
+        lines = ["1. Refer to Figure 1. Which structure is shown?", "A. First", "B. Second", "Answer: A",
+                 "2. Which structure is shown", "in Figure 2 below?", "A. Alpha", "B. Beta", "Answer: B"]
+        stream.set_data(b"\n".join(f"BT /F1 12 Tf 50 {750-index*22} Td ({line}) Tj ET".encode() for index, line in enumerate(lines)))
+        page[NameObject("/Contents")] = writer._add_object(stream)
+        output = BytesIO()
+        writer.write(output)
+        raw = output.getvalue()
+        text, _ = extract_pdf_questionnaire(raw, PdfReader(BytesIO(raw)), [0])
+        records = parse_questionnaire([text])
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0]["question"], "Refer to Figure 1. Which structure is shown?")
+        self.assertEqual(records[1]["question"], "Which structure is shown\nin Figure 2 below?")
+        self.assertEqual([record["answer"] for record in records], ["First", "Beta"])
+
     def test_pdf_soft_wrap_glyphs_do_not_break_words(self):
         source = "laborat\x02ory and identi\ufffdfied with a soft hyphen\u00ad"
         self.assertEqual(_clean_pdf_text(source), "laboratory and identified with a soft hyphen")

@@ -21,7 +21,7 @@ export default function GameRoom({
   const [game, setGame] = useState<Game | null>(null),
     [selected, setSelected] = useState(initialSet),
     [code, setCode] = useState(""),
-    [answer, setAnswer] = useState<string | string[]>(""),
+    [answer, setAnswer] = useState<string | string[] | Record<string, string>>(""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
@@ -122,7 +122,8 @@ export default function GameRoom({
     const phase = `${game.code}:${game.index}:${game.phase}`;
     if (phase !== previous.current) {
       if (game.phase === "question") {
-        setAnswer(game.kind === "checkbox" ? [] : "");
+        const kind = game.question?.quiz_type || game.kind;
+        setAnswer(kind === "matching" ? {} : kind === "checkbox" ? [] : "");
         tone();
       }
       if (game.phase === "reveal") tone(game.feedback?.correct);
@@ -182,6 +183,12 @@ export default function GameRoom({
   const available = sets.filter(
     (s) => s.type !== "flashcards" && s.items.length,
   );
+  const questionKind = game?.question?.quiz_type || game?.kind;
+  const matchingAnswers = answer && typeof answer === "object" && !Array.isArray(answer) ? answer : {};
+  const canSubmit = questionKind === "matching"
+    ? Boolean(game?.question?.matching_prompts?.length) && game!.question!.matching_prompts!.every((prompt) => Boolean(matchingAnswers[prompt]))
+      && new Set(Object.values(matchingAnswers)).size === game!.question!.matching_prompts!.length
+    : typeof answer === "string" ? Boolean(answer.trim()) : Array.isArray(answer) && answer.length > 0;
   return (
     <div className="workspace-view community-page games-page">
       <div className="workspace-page-heading">
@@ -512,9 +519,11 @@ export default function GameRoom({
             <div className="game-round" key={game.index}>
               <div className="round-meta">
                 <span>
-                  {game.kind === "checkbox"
+                  {questionKind === "matching"
+                    ? "Match each item"
+                    : questionKind === "checkbox"
                     ? "Select all that apply"
-                    : game.kind === "identification"
+                    : questionKind === "identification"
                       ? "Name the concept"
                       : "Pick your answer"}
                 </span>
@@ -530,7 +539,8 @@ export default function GameRoom({
                 />
               </div>
               <h3>{game.question?.question}</h3>
-              {game.question?.options?.length ? (
+              {game.question?.images?.length ? <div className="study-figure-list">{game.question.images.map((image, index) => <img key={index} src={image} alt={`Question figure ${index + 1}`}/>)}</div> : null}
+              {questionKind === "matching" ? <div className="matching-rows">{(game.question?.matching_prompts || []).map((prompt, index) => <label className="matching-row" key={`${index}-${prompt}`}><span>{prompt}</span><select value={matchingAnswers[prompt] || ""} disabled={game.answered || game.phase !== "question" || busy} onChange={(event) => setAnswer({ ...matchingAnswers, [prompt]: event.target.value })}><option value="">Choose a match</option>{(game.question?.matching_options || []).map((option, optionIndex) => <option key={`${optionIndex}-${option}`} value={option} disabled={Object.entries(matchingAnswers).some(([other, value]) => other !== prompt && value === option)}>{String.fromCharCode(65 + optionIndex)}. {option}</option>)}</select></label>)}</div> : game.question?.options?.length ? (
                 <div className="game-options">
                   {game.question.options.map((option, i) => (
                     <button
@@ -548,7 +558,7 @@ export default function GameRoom({
                         game.answered || game.phase !== "question" || busy
                       }
                       onClick={() => {
-                        if (game.kind === "checkbox")
+                        if (questionKind === "checkbox")
                           setAnswer((old) =>
                             Array.isArray(old)
                               ? old.includes(option)
@@ -585,7 +595,7 @@ export default function GameRoom({
                   </span>
                   <button
                     className="social-button primary"
-                    disabled={game.answered || busy || !answer.length}
+                    disabled={game.answered || busy || !canSubmit}
                     onClick={() =>
                       void operation(() =>
                         act("answer", { answer, question_index: game.index }),
