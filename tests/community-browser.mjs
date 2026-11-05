@@ -36,6 +36,10 @@ const baseProfile = (uid) => ({
 const profiles = { alice: null, bob: baseProfile("bob") };
 const messages = [];
 const errors = [];
+async function openCompanionChat(page) {
+  await page.locator(".buddy-menu-toggle").click();
+  await page.getByRole("button", { name: "Open companion chat", exact: true }).click();
+}
 let room = null;
 const answers = new Set();
 const roomView = (user) => ({
@@ -275,7 +279,7 @@ try {
     animations: "disabled",
   });
 
-  await p.getByRole("button", { name: "Miso, open companion chat" }).click();
+  await openCompanionChat(p);
   await p.getByRole("button", { name: "Customize companion" }).click();
   await p.getByLabel("Companion name").fill("Biscuit");
   await p.getByRole("button", { name: "Save companion" }).click();
@@ -286,10 +290,9 @@ try {
   await p.getByRole("button", { name: "Meet a study friend ↗" }).waitFor();
   await p.getByRole("button", { name: "Close companion", exact: true }).click();
   await p.reload();
-  await p
-    .getByRole("button", { name: "Biscuit, open companion chat" })
-    .waitFor();
-  await p.getByRole("button", { name: "Biscuit, open companion chat" }).click();
+  await p.waitForLoadState("networkidle");
+  await p.locator(".buddy-launcher").waitFor();
+  await openCompanionChat(p);
   await p
     .getByText(
       "Want some company? Let's find a study friend you can chat or study with.",
@@ -454,7 +457,7 @@ try {
       () => document.documentElement.scrollWidth > innerWidth + 1,
     )),
   );
-  await p.getByRole("button", { name: "Biscuit, open companion chat" }).click();
+  await openCompanionChat(p);
   await p.screenshot({
     path: join(artifacts, "mobile-companion.png"),
     fullPage: true,

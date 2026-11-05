@@ -4,7 +4,7 @@ import { readFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 const catalog = JSON.parse(await readFile(new URL("../backend/anime-characters.json", import.meta.url), "utf8"));
-const animeCatalog = catalog.filter(character => !character.id.startsWith("kpop-"));
+const animeCatalog = catalog.filter(character => character.id.startsWith("anime-"));
 const kpopCatalog = catalog.filter(character => character.id.startsWith("kpop-"));
 const animeSeries = [...new Set(animeCatalog.map(character => character.series))];
 const { chromium } = await import(process.env.DAWNSTUDY_PLAYWRIGHT_PATH ? pathToFileURL(process.env.DAWNSTUDY_PLAYWRIGHT_PATH).href : "playwright-core");
@@ -104,6 +104,9 @@ try {
     await picker.getByRole("button", { name: "K-pop", exact: true }).click();
     assert.equal(await picker.getByLabel("K-pop group", { exact: true }).inputValue(), "all");
     assert.equal(await picker.getByLabel("Search artists", { exact: true }).inputValue(), "");
+    while (await picker.locator(".avatar-grid button").count() < kpopCatalog.length) {
+      await picker.getByRole("button", { name: "Show more icons", exact: true }).click();
+    }
     assert.equal(await picker.locator(".avatar-grid button").count(), kpopCatalog.length);
     await picker.getByRole("button", { name: "JISOO · BLACKPINK", exact: true }).click();
     await page.getByRole("button", { name: "Save profile", exact: true }).click();
@@ -123,7 +126,8 @@ try {
     await page.reload(); await page.waitForLoadState("networkidle");
     await openProfile();
     assert.equal(await page.locator('.profile-avatar-button svg[data-character="kpop-rm"]').count(), 1);
-    await page.getByRole("button", { name: "Miso, open companion chat", exact: true }).click();
+    await page.locator(".buddy-menu-toggle").click();
+    await page.getByRole("button", { name: "Open companion chat", exact: true }).click();
     await page.getByRole("button", { name: "Customize companion", exact: true }).click();
     const buddy = page.locator(".buddy-settings");
     await buddy.getByRole("button", { name: "K-pop", exact: true }).click();
@@ -270,12 +274,14 @@ try {
 
   // K-pop contains actual artists in its own category, without assuming sourced dialogue.
   await picker.getByRole("button", { name: "K-pop", exact: true }).click();
-  assert.deepEqual(await picker.getByLabel("K-pop group", { exact: true }).locator("option").evaluateAll(options => options.map(option => option.value)), ["all", "BLACKPINK", "BTS"]);
-  for (const [group, count] of [["BLACKPINK", 4], ["BTS", 7]]) {
+  const kpopGroupNames = [...new Set(kpopCatalog.map(character => character.series))].sort((left, right) => left.localeCompare(right));
+  assert.deepEqual(await picker.getByLabel("K-pop group", { exact: true }).locator("option").evaluateAll(options => options.map(option => option.value)), ["all", ...kpopGroupNames]);
+  for (const group of kpopGroupNames) {
     await picker.getByLabel("K-pop group", { exact: true }).selectOption(group);
-    assert.equal(await picker.locator(".avatar-grid button").count(), count, group);
+    const groupArtists = kpopCatalog.filter(character => character.series === group);
+    assert.equal(await picker.locator(".avatar-grid button").count(), groupArtists.length, group);
     assert.equal(await picker.locator('svg[data-character^="anime-"]').count(), 0);
-    for (const artist of kpopCatalog.filter(character => character.series === group)) {
+    for (const artist of groupArtists) {
       const option = picker.getByRole("button", { name: `${artist.name} · ${group}`, exact: true });
       assert.equal(await option.locator(`svg[data-character="${artist.id}"]`).count(), 1, artist.name);
       assert.equal(await option.locator("svg").getAttribute("data-transparent"), "true");
@@ -364,7 +370,8 @@ try {
   await noOverflow();
   }
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole("button", { name: "Miso, open companion chat", exact: true }).click();
+  await page.locator(".buddy-menu-toggle").click();
+  await page.getByRole("button", { name: "Open companion chat", exact: true }).click();
   await page.getByRole("button", { name: "Customize companion", exact: true }).click();
   const buddy = page.locator(".buddy-settings");
   await buddy.getByRole("button", { name: "K-pop", exact: true }).click();
@@ -406,7 +413,7 @@ try {
   assert.equal(await launcher.locator("svg > title").count(), 0, "Custom bubble replaces the native tooltip on the floating companion");
   await launcher.hover();
   assert.ok((await page.locator(".buddy-bubble").innerText()).includes("Believe it!"));
-  assert.equal(await launcher.getAttribute("aria-expanded"), "false", "Hover never opens chat");
+  assert.equal(await launcher.getAttribute("aria-expanded"), "true", "Hover reveals a line without opening chat");
   await page.keyboard.press("Escape");
   assert.equal(await page.locator(".buddy-bubble").count(), 0);
   await page.mouse.move(0, 0); await launcher.hover();
@@ -416,10 +423,14 @@ try {
   assert.ok((await page.locator(".buddy-bubble").innerText()).includes("Believe it!"), "Keyboard focus has the same line as hover");
   await page.keyboard.press("Escape");
   await launcher.click();
+  assert.ok((await page.locator(".buddy-bubble").innerText()).includes("Believe it!"), "Tapping the character shows its signature line");
+  await page.locator(".buddy-menu-toggle").click();
+  await page.getByRole("button", { name: "Open companion chat", exact: true }).click();
   await page.getByRole("button", { name: "Close companion", exact: true }).click();
   await page.mouse.move(0, 0); await launcher.hover();
   assert.ok((await page.locator(".buddy-bubble").innerText()).includes("Believe it!"), "Closing chat restores manual hover immediately");
-  await launcher.click();
+  await page.locator(".buddy-menu-toggle").click();
+  await page.getByRole("button", { name: "Customize companion", exact: true }).click();
   await buddy.getByLabel(/Quiet mode/).check();
   await buddy.getByLabel("Companion name", { exact: true }).fill("My custom buddy");
   await buddy.getByLabel("Anime series", { exact: true }).selectOption("Naruto");
@@ -449,9 +460,12 @@ try {
   await launcher.dispatchEvent("pointerenter", { pointerType: "touch" });
   assert.equal(await page.locator(".buddy-bubble").count(), 0, "Touch does not trigger hover dialogue");
   await launcher.click();
-  assert.equal(await launcher.getAttribute("aria-expanded"), "true", "Tap/click still opens chat");
+  assert.equal(await launcher.getAttribute("aria-expanded"), "true", "Tapping the character shows a line");
+  await page.locator(".buddy-menu-toggle").click();
+  assert.ok(await page.getByRole("navigation", { name: "Companion shortcuts" }).isVisible(), "Shortcut icons slide up above the character");
+  await page.getByRole("button", { name: "Open companion chat", exact: true }).click();
   await page.getByRole("button", { name: "Close companion", exact: true }).click();
-  console.log("PASS first quote at30s, two-minute encouragement, hover, keyboard focus, dismissal, cooldown, quiet-mode manual lines, hidden-tab cleanup and touch/click behavior.");
+  console.log("PASS first quote at30s, two-minute encouragement, hover, keyboard focus, dismissal, cooldown, quick actions, quiet-mode manual lines, hidden-tab cleanup and touch/click behavior.");
   }
   assert.deepEqual(errors, []);
   console.log(`Screenshots: ${artifacts}`);
