@@ -140,7 +140,7 @@ function pause(milliseconds: number, signal: AbortSignal) {
 export async function pollGenerationJob<Result>(
   jobId: string, options: PollOptions, onStatus: (job: GenerationStatus) => void, initial?: GenerationJob<Result>,
 ): Promise<Result> {
-  const deadline = Date.now() + (options.timeoutMs ?? 12 * 60 * 1000);
+  const deadline = Date.now() + (options.timeoutMs ?? 40 * 60 * 1000);
   let current = initial;
   let failures = 0;
   let cancellationPending = false;

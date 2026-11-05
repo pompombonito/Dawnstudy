@@ -1,11 +1,13 @@
 """Extract questionnaire text, highlighted keys, and question figures from PDFs."""
 import re
 import threading
+import hashlib
+import random
 
 from PIL import Image
 
 from questionnaire import OPTION, QuestionnaireError, parse_questionnaire
-from questionnaire_ocr import image_data_url, ocr_questionnaire_image, ocr_learning_image
+from questionnaire_ocr import image_data_url, ocr_questionnaire_image, ocr_learning_image, ocr_cancellation
 
 # PDFium is not thread-safe. Generation workers may import PDFs concurrently.
 _pdfium_lock = threading.RLock()
@@ -144,10 +146,10 @@ def _rect_distance(first, second):
     return (dx * dx + dy * dy) ** 0.5
 
 
-def _image_data_url(image_object, bounds, page_area):
+def _image_data_url(image_object, bounds, page_area, maximum_area=.4):
     width, height = bounds[2] - bounds[0], bounds[3] - bounds[1]
     # Ignore tiny decorative images and full-page scans; those are not figures.
-    if width < 38 or height < 38 or width * height > page_area * 0.4:
+    if width < 38 or height < 38 or width * height > page_area * maximum_area:
         return None
     bitmap = image_object.get_bitmap()
     # get_bitmap exposes a PDFium-owned buffer. Conversion copies its pixels;
@@ -163,7 +165,7 @@ def _image_data_url(image_object, bounds, page_area):
     raise QuestionnaireError("A PDF figure is too large to attach. Select fewer pages or upload a smaller copy.")
 
 
-def extract_pdf_figures(raw, page_indices, limit=24):
+def extract_pdf_figures(raw, page_indices, limit=96):
     """Return bounded native figures with stable IDs and nearby source context.
 
     Caller supplies IDs/context to the model and attaches data_url only when the
@@ -174,13 +176,28 @@ def extract_pdf_figures(raw, page_indices, limit=24):
 
     figures = []
     seen_images = set()
-    # Spread the bounded inspection budget across long slide decks.
-    if len(page_indices) > 96:
-        page_indices = [page_indices[round(i * (len(page_indices) - 1) / 95)] for i in range(96)]
+    seen_count = 0
+    sampling = random.Random(0)
+
+    def keep(figure):
+        nonlocal seen_count
+        digest = hashlib.sha256(figure["data_url"].encode()).digest()
+        if digest in seen_images:
+            return
+        seen_images.add(digest)
+        seen_count += 1
+        if len(figures) < limit:
+            figures.append(figure)
+        else:
+            position = sampling.randrange(seen_count)
+            if position < limit:
+                figures[position] = figure
     with _pdfium_lock:
         document = pdfium.PdfDocument(raw)
         try:
             for index in page_indices:
+                if ocr_cancellation.get():
+                    ocr_cancellation.get()()
                 page = document[index]
                 textpage = page.get_textpage()
                 try:
@@ -193,39 +210,42 @@ def extract_pdf_figures(raw, page_indices, limit=24):
                     for obj in page.get_objects(filter=[pdfium.raw.FPDF_PAGEOBJ_IMAGE]):
                         bounds = obj.get_bounds()
                         has_scan = has_scan or ((bounds[2]-bounds[0])*(bounds[3]-bounds[1]) > page_width*page_height*.4)
-                        data = _image_data_url(obj, bounds, page_width * page_height)
-                        if not data or data in seen_images:
+                        data = _image_data_url(obj, bounds, page_width * page_height, maximum_area=.98)
+                        if not data:
                             continue
-                        seen_images.add(data)
                         number += 1
                         nearby = sorted(((value, box) for value, box in lines if box), key=lambda item: _rect_distance(item[1], bounds))[:10]
-                        figures.append({"id": f"pdf-p{index + 1}-figure-{number}", "page": index + 1,
+                        keep({"id": f"pdf-p{index + 1}-figure-{number}", "page": index + 1,
                                         "source_ref": f"PDF page {index + 1}",
                                         "context": _clean_pdf_text("\n".join(value for value, _box in nearby))[:1800],
                                         "data_url": data})
                         if number >= 3:
                             break
-                    if has_scan and len(text.strip()) < 150:
+                    if (has_scan or number == 0) and len(text.strip()) < 150:
                         bitmap = page.render(scale=min(2.5, 2600/max(page_width, page_height)))
                         image = bitmap.to_pil().convert("RGB")
                         bitmap.close()
+                        scanned = []
                         try:
                             _text, scanned = ocr_learning_image(image, include_images=True)
                             for ordinal, figure in enumerate(scanned, 1):
-                                figures.append({**figure, "id": f"pdf-p{index+1}-scan-figure-{ordinal}",
+                                keep({**figure, "id": f"pdf-p{index+1}-scan-figure-{ordinal}",
                                                 "page": index+1, "source_ref": f"PDF page {index+1}"})
                         except (ImportError, RuntimeError):
                             pass
                         finally:
+                            if number == 0 and not scanned:
+                                data = image_data_url(image)
+                                if data:
+                                    keep({"id": f"pdf-p{index+1}-visual-page", "page": index+1,
+                                          "source_ref": f"PDF page {index+1}", "context": _clean_pdf_text(text)[:1800], "data_url": data})
                             image.close()
                 finally:
                     textpage.close()
                     page.close()
         finally:
             document.close()
-    if len(figures) > limit:
-        return [figures[round(i * (len(figures) - 1) / (limit - 1))] for i in range(limit)] if limit > 1 else figures[:limit]
-    return figures
+    return sorted(figures, key=lambda figure: (figure.get("page", 0), figure["id"]))
 
 
 def extract_pdf_learning_material(raw, reader, page_indices, include_skipped=False):

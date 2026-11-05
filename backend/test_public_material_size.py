@@ -40,7 +40,7 @@ class PublicMaterialSizeTests(unittest.TestCase):
         page_limit = eval(compile(ast.Expression(limit_node.value), "main.py", "eval"), {})
         namespace = {
             "MAX_WEBPAGE_BYTES": page_limit,
-            "MAX_BYTES": 15 * 1024 * 1024,
+            "MAX_BYTES": 64 * 1024 * 1024,
             "HTTPException": ReaderError,
             "_validate_public_material_url": lambda value: value,
             "pinned_public_connection": lambda _url: Connection(),
@@ -70,6 +70,13 @@ class PublicMaterialSizeTests(unittest.TestCase):
             fetch("https://example.org/notes")
         self.assertEqual(error.exception.status_code, 413)
         self.assertIn("15 MB reading limit", error.exception.detail)
+
+    def test_forty_megabyte_pdf_link_is_accepted(self):
+        body = b"x" * (41 * 1024 * 1024)
+        fetch, _error = self.fetcher(body, content_type="application/pdf")
+        raw, _url, mime = fetch("https://example.org/textbook.pdf")
+        self.assertEqual(len(raw), len(body))
+        self.assertEqual(mime, "application/pdf")
 
 
 if __name__ == "__main__":

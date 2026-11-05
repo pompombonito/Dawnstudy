@@ -76,8 +76,8 @@ function rememberGeneration(userId: string, pending: PendingGeneration | null) {
   } catch { /* Account job discovery also works when device storage is unavailable. */ }
 }
 const supportedFiles = new Set(["pdf", "pptx", "docx", "txt", "md", "png", "jpg", "jpeg", "webp"]);
-const maxFileBytes = 15 * 1024 * 1024;
-const maxCombinedFileBytes = 30 * 1024 * 1024;
+const maxFileBytes = 64 * 1024 * 1024;
+const maxCombinedFileBytes = 80 * 1024 * 1024;
 const voicePersonas: { id: VoicePersona; name: string; rate: number; pitch: number }[] = [
   { id: "warm_tutor", name: "Warm tutor", rate: 0.96, pitch: 1.04 },
   { id: "calm_mentor", name: "Calm mentor", rate: 0.88, pitch: 0.92 },
@@ -511,17 +511,17 @@ export default function Home() {
     }
     if (next.length > 5) { setError("Choose up to five files per study set."); return; }
     if (next.reduce((total, candidate) => total + candidate.size, 0) > maxCombinedFileBytes) {
-      setError("Keep the combined file size under 30 MB. Each file can be up to 15 MB.");
+      setError("Keep the combined file size under 80 MB. Each file can be up to 64 MB.");
       return;
     }
     if (!next.length) {
-      setError(invalidCount ? "Choose supported, nonempty files up to 15 MB each (30 MB total)." : "Choose at least one study material.");
+      setError(invalidCount ? "Choose supported, nonempty files up to 64 MB each (80 MB total)." : "Choose at least one study material.");
       return;
     }
     setSourceMode("file");
     setActiveView("study");
     setComposerStep(0);
-    setFiles(next); setError(invalidCount ? "Some files were skipped. Use PDF, PPTX, DOCX, TXT, MD, or an image up to 15 MB." : ""); setNotice("");
+    setFiles(next); setError(invalidCount ? "Some files were skipped. Use PDF, PPTX, DOCX, TXT, MD, or an image up to 64 MB." : ""); setNotice("");
     if (!result?.incomplete) setResult(null);
     setSelectedOption(null); setStudySelectedOptions([]); setStudyIdentificationAnswer("");
   }
@@ -1547,7 +1547,7 @@ export default function Home() {
               <span className="upload-copy"><strong>{files.length ? "Add another material" : "Drop your study materials here"}</strong><small>{files.length ? files.length + " of 5 files selected" : "Upload more than one file, or choose them from your device."}</small></span>
               <button type="button" className="upload-browse-button" onClick={pickStudyFiles}><Plus size={15}/>{files.length ? "Add files" : "Browse files"}</button>
             </div>
-            <div className="upload-limits">PDF, PPTX, DOCX, TXT, MD, PNG, JPG, WEBP, BMP, GIF, TIFF · 15 MB each · 30 MB total</div>
+            <div className="upload-limits">PDF, PPTX, DOCX, TXT, MD, PNG, JPG, WEBP, BMP, GIF, TIFF · 64 MB each · 80 MB total</div>
             {files.length > 0 && <div className="selected-files">{files.map((selectedFile, index) => {
               const extension = selectedFile.name.split(".").pop()?.toLowerCase() || "";
               const pageSelectable = extension === "pdf" || extension === "pptx";

@@ -95,13 +95,13 @@ def questionnaire_text_from_tsv(tsv, highlight_mask, reading_order="rows"):
 
 def image_data_url(image):
     """Bound stored figure size independently of a scanned page's resolution."""
-    for dimensions, quality in (((420, 420), 68), ((360, 360), 58), ((280, 280), 50)):
+    for dimensions, quality in (((840, 840), 76), ((640, 640), 68), ((420, 420), 58), ((280, 280), 50)):
         with image.copy() as candidate:
             candidate.thumbnail(dimensions, Image.Resampling.LANCZOS)
             output = BytesIO()
             candidate.convert("RGB").save(output, format="WEBP", quality=quality, method=5)
             payload = output.getvalue()
-        if len(payload) <= 30_000:
+        if len(payload) <= 60_000:
             return "data:image/webp;base64," + base64.b64encode(payload).decode("ascii")
     return None
 

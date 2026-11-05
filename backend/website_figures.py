@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
 from io import BytesIO
 import re
+from collections import deque
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from PIL import Image, ImageOps
@@ -37,6 +38,9 @@ class _ImageReferenceParser(HTMLParser):
         self.references = []
         self.metadata_references = []
         self.figure_stack = []
+        self.recent_text = deque(maxlen=8)
+        self.following = []
+        self.ignored = None
 
     @staticmethod
     def _reference(attrs, source):
@@ -59,15 +63,23 @@ class _ImageReferenceParser(HTMLParser):
             "class": value("class").casefold(),
             "source": source,
             "caption": "",
+            "nearby": "",
         }
 
     def handle_starttag(self, tag, attrs):
+        if self.ignored:
+            return
+        if tag in {"script", "style", "noscript", "svg"}:
+            self.ignored = tag
+            return
         values = dict(attrs)
         if tag == "figure":
             self.figure_stack.append({"images": [], "text": []})
         elif tag == "img":
             reference = self._reference(attrs, "img")
             if reference:
+                reference["nearby"] = " ".join(self.recent_text)[-600:]
+                self.following.append(reference)
                 (self.figure_stack[-1]["images"] if self.figure_stack else self.references).append(reference)
         elif tag == "source" and self.figure_stack:
             reference = self._reference(attrs, "source")
@@ -81,10 +93,22 @@ class _ImageReferenceParser(HTMLParser):
                     self.metadata_references.append(reference)
 
     def handle_data(self, data):
+        if self.ignored:
+            return
+        clean = re.sub(r"\s+", " ", data).strip()
+        if clean:
+            self.recent_text.append(clean[:400])
+            for reference in self.following:
+                reference["nearby"] = (reference["nearby"] + " " + clean)[:1000]
+            self.following = [reference for reference in self.following if len(reference["nearby"]) < 1000]
         for figure in self.figure_stack:
             figure["text"].append(data)
 
     def handle_endtag(self, tag):
+        if self.ignored:
+            if tag == self.ignored:
+                self.ignored = None
+            return
         if tag == "figure" and self.figure_stack:
             figure = self.figure_stack.pop()
             caption = re.sub(r"\s+", " ", " ".join(figure["text"])).strip()[:500]
@@ -151,6 +175,8 @@ def _raster_figure(reference, base_url, page_context, fetch, encode_image):
         context.append("Image alt text: " + reference["alt"])
     if reference["title"]:
         context.append("Image title: " + reference["title"])
+    if reference.get("nearby"):
+        context.append("Text beside this image: " + reference["nearby"])
     if page_context:
         context.append("Nearby webpage text: " + re.sub(r"\s+", " ", page_context).strip()[:1400])
     if not context:
@@ -166,7 +192,7 @@ def extract_website_figures(page_source, page_url, page_context, fetch, encode_i
         parser.feed(page_source)
     except Exception:
         return []
-    references = parser.metadata_references + parser.references
+    references = parser.references + parser.metadata_references
     unique, seen = [], set()
     for reference in references:
         if not _usable_reference(reference):
