@@ -757,7 +757,7 @@ export default function Home() {
     if (signal.aborted) throw new DOMException("Generation monitoring stopped.", "AbortError");
     if (synced) setSets((old) => [studySet, ...old.filter((item) => item.id !== studySet.id && item.id !== base?.id)].slice(0, 100));
     const notices = [studySet.incomplete
-      ? `${studySet.items.length} of ${Math.max(studySet.items.length, studySet.requested_count || 0)} questions are ${synced ? "saved" : "ready"}. The remaining questions still need verified answers or choices.`
+      ? `${studySet.items.length} of ${Math.max(studySet.items.length, studySet.requested_count || 0)} questions are ${synced ? "saved" : "ready"}. The others could not be completed in this run; continue generating to retry with the available models.`
       : `Your study set is ready with ${studySet.items.length} questions.`];
     if (data.auto_model) notices.push("Auto chose " + modelName(data.auto_model) + ".");
     if (data.fallback) notices.push(modelName(data.fallback.to) + " helped complete the generation.");

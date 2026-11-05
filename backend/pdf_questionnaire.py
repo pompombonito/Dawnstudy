@@ -173,6 +173,10 @@ def extract_pdf_figures(raw, page_indices, limit=24):
     import pypdfium2 as pdfium
 
     figures = []
+    seen_images = set()
+    # Spread the bounded inspection budget across long slide decks.
+    if len(page_indices) > 96:
+        page_indices = [page_indices[round(i * (len(page_indices) - 1) / 95)] for i in range(96)]
     with _pdfium_lock:
         document = pdfium.PdfDocument(raw)
         try:
@@ -190,16 +194,17 @@ def extract_pdf_figures(raw, page_indices, limit=24):
                         bounds = obj.get_bounds()
                         has_scan = has_scan or ((bounds[2]-bounds[0])*(bounds[3]-bounds[1]) > page_width*page_height*.4)
                         data = _image_data_url(obj, bounds, page_width * page_height)
-                        if not data:
+                        if not data or data in seen_images:
                             continue
+                        seen_images.add(data)
                         number += 1
                         nearby = sorted(((value, box) for value, box in lines if box), key=lambda item: _rect_distance(item[1], bounds))[:10]
                         figures.append({"id": f"pdf-p{index + 1}-figure-{number}", "page": index + 1,
                                         "source_ref": f"PDF page {index + 1}",
                                         "context": _clean_pdf_text("\n".join(value for value, _box in nearby))[:1800],
                                         "data_url": data})
-                        if len(figures) >= limit:
-                            return figures
+                        if number >= 3:
+                            break
                     if has_scan and len(text.strip()) < 150:
                         bitmap = page.render(scale=min(2.5, 2600/max(page_width, page_height)))
                         image = bitmap.to_pil().convert("RGB")
@@ -209,8 +214,6 @@ def extract_pdf_figures(raw, page_indices, limit=24):
                             for ordinal, figure in enumerate(scanned, 1):
                                 figures.append({**figure, "id": f"pdf-p{index+1}-scan-figure-{ordinal}",
                                                 "page": index+1, "source_ref": f"PDF page {index+1}"})
-                                if len(figures) >= limit:
-                                    return figures
                         except (ImportError, RuntimeError):
                             pass
                         finally:
@@ -220,6 +223,8 @@ def extract_pdf_figures(raw, page_indices, limit=24):
                     page.close()
         finally:
             document.close()
+    if len(figures) > limit:
+        return [figures[round(i * (len(figures) - 1) / (limit - 1))] for i in range(limit)] if limit > 1 else figures[:limit]
     return figures
 
 

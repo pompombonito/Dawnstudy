@@ -82,6 +82,49 @@ class AdditionalProviderTests(unittest.TestCase):
         self.assertNotIn("secret-test-key", str(error.exception))
         self.assertNotIn("private prompt", str(error.exception))
 
+    def test_gpt_oss_uses_low_reasoning_and_validated_json_object_mode(self):
+        schema = {"type": "object", "properties": {"title": {"type": "string"}, "items": {"type": "array", "items": {
+            "type": "object", "properties": {"source_evidence": {"type": "string"}}
+        }}}}
+        with patch.object(main, "post_provider_json", return_value=self.response()) as post:
+            main.generate_with_provider("groq", "openai/gpt-oss-20b", "groq-test", "Read source.", schema, 3000)
+        payload = post.call_args.kwargs["payload"]
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
+        self.assertEqual(payload["reasoning_effort"], "low")
+        self.assertEqual(payload["max_completion_tokens"], 3000)
+        self.assertIn("answer and correct_answer must be the exact same option text", payload["messages"][0]["content"])
+
+    def test_gpt_oss_can_fill_a_thirty_question_set_in_small_batches(self):
+        model = ("groq:openai/gpt-oss-20b", "groq", "openai/gpt-oss-20b", "groq-test", "GPT-OSS 20B")
+        question_number = 0
+        batch_sizes = []
+
+        def generate(_provider, _model, _key, _prompt, request_schema, max_tokens):
+            nonlocal question_number
+            batch = request_schema["properties"]["items"]["maxItems"]
+            batch_sizes.append((batch, max_tokens))
+            items = []
+            for _ in range(batch):
+                question_number += 1
+                items.append({"question": f"Question {question_number}?", "answer": f"Answer {question_number}"})
+            return {"title": "Study set", "items": items}
+
+        schema = {"type": "object", "properties": {"title": {"type": "string"}, "items": {
+            "type": "array", "items": {"type": "object", "properties": {"question": {"type": "string"}, "answer": {"type": "string"}}}
+        }}}
+        with patch.object(main, "configured_ai_models", return_value=[model]), patch.object(main, "generate_with_provider", side_effect=generate):
+            payload, used, fallback, incomplete = main.generate_with_fallback(
+                lambda count, _completed: f"Create exactly {count} questions.", schema, model[0], 30,
+                study_format="flashcards",
+            )
+
+        self.assertEqual(len(payload["items"]), 30)
+        self.assertEqual(used, [model[0]])
+        self.assertIsNone(fallback)
+        self.assertFalse(incomplete)
+        self.assertEqual([batch for batch, _ in batch_sizes], [4, 4, 4, 4, 4, 4, 4, 2])
+        self.assertEqual([tokens for _, tokens in batch_sizes], [3000] * 8)
+
     def test_voice_tutor_can_use_every_new_provider(self):
         for provider, model in (("cloudflare", "@cf/nvidia/nemotron-3-120b-a12b"), ("vercel", "nvidia/nemotron-3.5-lightning-free"), ("typhoon", "typhoon-v2.5-30b-a3b-instruct")):
             response = Mock(ok=True)

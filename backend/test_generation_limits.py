@@ -73,7 +73,7 @@ class GenerationLimitTests(unittest.TestCase):
         data = generated.json()
         self.assertEqual(len(data["items"]), 200)
         self.assertFalse(data["incomplete"])
-        self.assertEqual(self.provider.call_count, 25)
+        self.assertEqual(self.provider.call_count, 50)
         self.assertEqual(data["usage"], {"remaining": None, "limit": None, "resets_at": None, "unlimited": True})
         saved = self.client.post("/api/study-sets", json=data)
         self.assertEqual(saved.status_code, 200, saved.text)

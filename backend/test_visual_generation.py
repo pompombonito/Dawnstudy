@@ -46,6 +46,37 @@ class VisualGenerationTests(unittest.TestCase):
                 self.assertEqual(next(iter(self.sets.values()))["items"][0]["images"], [self.image])
                 self.sets.clear()
 
+    def test_png_and_webp_upload_text_are_combined_in_one_generation(self):
+        excerpts = {
+            "states.png": "Solid particles are closely packed and vibrate in place. Liquids have a fixed volume and take the shape of their container.",
+            "intermolecular.webp": "A molecule is polar when its terminal atoms differ and its bonds do not cancel because of an asymmetric arrangement.",
+        }
+
+        def extract(filename, _raw, _pages="", **_kwargs):
+            return f"[SOURCE: Uploaded image]\n{excerpts[filename]}", ["Uploaded image"], []
+
+        with patch.object(main, "extract_material", side_effect=extract) as extraction:
+            response = self.client.post(
+                "/api/generation-jobs",
+                data={"format": "flashcards", "question_count": "2", "include_images": "false"},
+                files=[
+                    ("files", ("states.png", b"png-data", "image/png")),
+                    ("files", ("intermolecular.webp", b"webp-data", "image/webp")),
+                ],
+            )
+
+        self.assertEqual(response.status_code, 202, response.text)
+        job = self.client.get("/api/generation-jobs/" + response.json()["job_id"]).json()
+        self.assertEqual(job["status"], "complete", job)
+        self.assertEqual(len(job["result"]["items"]), 2)
+        prompt = self.provider.call_args.args[3]
+        self.assertIn("states.png", prompt)
+        self.assertIn("intermolecular.webp", prompt)
+        self.assertIn("Uploaded image", prompt)
+        self.assertIn("Solid particles are closely packed", prompt)
+        self.assertIn("A molecule is polar", prompt)
+        self.assertEqual(extraction.call_count, 2)
+
     def test_opt_out_never_extracts_or_sends_visuals(self):
         with patch.object(main, "extract_material", return_value=("[SOURCE: PDF page 1]\n" + self.material.decode(), ["PDF page 1"], [])), patch.object(main, "extract_pdf_figures") as extract:
             response = self.request("flashcards", False)

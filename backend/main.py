@@ -21,11 +21,12 @@ from uuid import uuid4
 from material_scope import selected_pages, focus_excerpt
 from study_quality import QUESTION_QUALITY_INSTRUCTIONS, is_source_lookup_question
 from questionnaire import QuestionnaireError, parse_questionnaire, validate_completion, validate_completion_partial, convert_questionnaire, docx_questionnaire_text, match_existing_questionnaire_items, questionnaire_record_type, questionnaire_type_mismatches
-from questionnaire_ocr import prepare_questionnaire_image, questionnaire_text_from_tsv, ocr_questionnaire_image, ocr_learning_image, ocr_cancellation
+from questionnaire_ocr import prepare_questionnaire_image, questionnaire_text_from_tsv, ocr_questionnaire_image, ocr_learning_image, ocr_cancellation, image_data_url
 from material_figures import extract_embedded_figures
 from pdf_questionnaire import extract_pdf_questionnaire, extract_pdf_figures, extract_pdf_learning_material
 from public_fetch import pinned_public_connection
 from smry_material import SmryUnavailable, extract_public_article as extract_smry_article
+from website_figures import extract_website_figures
 from provider_policy import ProviderAttemptPolicy, eligible_questionnaire_records, interleave_order
 from generation_jobs import GenerationAlreadyRunning, GenerationCancelled, GenerationJobs, GenerationQueueFull, merge_continued_generation
 
@@ -88,7 +89,7 @@ app.add_middleware(
 )
 
 MAX_BYTES = 15 * 1024 * 1024
-MAX_WEBPAGE_BYTES = 3 * 1024 * 1024
+MAX_WEBPAGE_BYTES = 15 * 1024 * 1024
 MAX_TEXT = 22_000
 MAX_QUESTIONS_PER_GENERATION = 200
 ALLOWED_EMAIL_DOMAINS = ("gmail.com", "ceu.edu.ph", "mnl.ceu.edu.ph", "mkt.ceu.edu.ph", "mls.ceu.edu.ph")
@@ -952,7 +953,7 @@ def _validate_public_material_url(value: str) -> str:
     return parsed.geturl()
 
 
-def _fetch_public_material_url(value: str) -> tuple[bytes, str, str]:
+def _fetch_public_material_url(value: str, max_response_bytes: int | None = None) -> tuple[bytes, str, str]:
     current_url = value.strip()
     for redirect_count in range(6):
         current_url = _validate_public_material_url(current_url)
@@ -981,21 +982,21 @@ def _fetch_public_material_url(value: str) -> tuple[bytes, str, str]:
                 raise HTTPException(status_code=502, detail="The website could not provide this page. Please try again or upload the material directly.")
 
             content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-            max_response_bytes = MAX_WEBPAGE_BYTES if content_type in {"text/html", "application/xhtml+xml"} else MAX_BYTES
+            response_limit = max_response_bytes or (MAX_WEBPAGE_BYTES if content_type in {"text/html", "application/xhtml+xml"} else MAX_BYTES)
             try:
                 content_length = int(response.headers.get("Content-Length", "0"))
             except ValueError:
                 content_length = 0
-            if content_length > max_response_bytes:
-                raise HTTPException(status_code=413, detail="That webpage or file is too large for Dawnstudy to read.")
+            if content_length > response_limit:
+                raise HTTPException(status_code=413, detail="That webpage or linked file exceeds Dawnstudy’s 15 MB reading limit. Select a smaller source or upload a reduced copy.")
             raw = bytearray()
             while True:
                 chunk = response.read(64 * 1024)
                 if not chunk:
                     break
                 raw.extend(chunk)
-                if len(raw) > max_response_bytes:
-                    raise HTTPException(status_code=413, detail="That webpage or file is too large for Dawnstudy to read.")
+                if len(raw) > response_limit:
+                    raise HTTPException(status_code=413, detail="That webpage or linked file exceeds Dawnstudy’s 15 MB reading limit. Select a smaller source or upload a reduced copy.")
             if not raw:
                 raise HTTPException(status_code=422, detail="That webpage or file is empty.")
             return bytes(raw), current_url, content_type
@@ -1067,7 +1068,14 @@ def extract_public_material_url(value: str, pages: str = "", include_images: boo
                 raise HTTPException(status_code=422, detail="That public webpage does not contain enough readable text. Try another page or upload a supported file.")
         filename = f"{page_title or parsed_url.hostname}.txt"
         text = f"[SOURCE: Website]\n{page_text}"
-        return text, ["Website"], page_title or parsed_url.hostname or "Webpage", final_url, filename, raw, []
+        material_figures = []
+        if include_images:
+            context = f"{page_title}\n{page_text}".strip()
+            material_figures = extract_website_figures(
+                page_source, final_url, context, _fetch_public_material_url, image_data_url,
+                check_cancel=check_generation_cancelled,
+            )
+        return text, ["Website"], page_title or parsed_url.hostname or "Webpage", final_url, filename, raw, material_figures
 
     mime_suffixes = {
         "application/pdf": ".pdf",
@@ -1302,6 +1310,7 @@ class ProviderError(RuntimeError):
         partial_items: list[dict[str, Any]] | None = None,
         error_code: str | None = None,
         error_field: str | None = None,
+        retry_after: float | None = None,
     ):
         super().__init__(message)
         self.provider = provider
@@ -1310,6 +1319,7 @@ class ProviderError(RuntimeError):
         self.partial_items = partial_items or []
         self.error_code = error_code
         self.error_field = error_field
+        self.retry_after = retry_after
 
 
 def provider_error_diagnostics(response: requests.Response) -> tuple[str | None, str | None]:
@@ -1494,7 +1504,9 @@ def describe_material_figures(figures):
     schema = {"type": "object", "properties": {"title": {"type": "string"}, "items": {"type": "array", "items": {
         "type": "object", "properties": {"question": {"type": "string"}, "answer": {"type": "string"}, "relevant": {"type": "boolean"}},
         "required": ["question", "answer", "relevant"]}}}, "required": ["title", "items"]}
-    for figure in figures[:12]:
+    selected = ([figures[round(i * (len(figures) - 1) / 11)] for i in range(12)]
+                if len(figures) > 12 else figures)
+    for figure in selected:
         check_generation_cancelled()
         if time.monotonic() >= deadline:
             break
@@ -1577,18 +1589,25 @@ def generate_with_provider(provider: str, model: str, api_key: str, prompt: str,
     """Call one provider and normalize its JSON response."""
     model_id = f"{provider}:{model}"
     strict_json_models = {
-        ("groq", "openai/gpt-oss-120b"),
-        ("groq", "openai/gpt-oss-20b"),
         ("groq", "qwen/qwen3.8-27b"),
         ("openrouter", "qwen/qwen3.8-27b:free"),
     }
     strict_json = (provider, model) in strict_json_models
+    groq_gpt_oss = provider == "groq" and model in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"}
+    item_properties = schema.get("properties", {}).get("items", {}).get("items", {}).get("properties", {})
+    is_study_generation = "source_evidence" in item_properties
     provider_prompt = prompt
     if strict_json:
         provider_prompt += (
             "\n\nJSON contract: include every field in the requested schema for every item. "
             "When a field is not used by this study format, return an empty string for text fields "
             "and an empty array for list fields. Return the title and items fields exactly as specified."
+        )
+    if groq_gpt_oss and is_study_generation:
+        provider_prompt += (
+            "\n\nJSON contract: return one JSON object with title and items. Each item must include question, answer, "
+            "and source_evidence. For multiple choice, answer and correct_answer must be the exact same option text; "
+            "include exactly four distinct options. Include other requested fields when useful. No markdown."
         )
     if provider in {"typhoon", "cloudflare", "vercel"}:
         # Give compatible providers the complete field contract even when using
@@ -1640,6 +1659,12 @@ def generate_with_provider(provider: str, model: str, api_key: str, prompt: str,
                 "temperature": 0.3,
                 ("max_completion_tokens" if provider == "groq" else "max_tokens"): max_tokens,
             }
+            if groq_gpt_oss:
+                # The larger study schema intermittently triggers Groq's
+                # json_validate_failed response on GPT-OSS. JSON-object mode
+                # still guarantees JSON syntax; the app validates every field,
+                # source quote, answer, and choice before saving a card.
+                request_payload["reasoning_effort"] = "low"
             if provider not in {"zai", "typhoon"}:
                 request_payload["response_format"] = response_format
             if provider == "cloudflare":
@@ -1669,6 +1694,10 @@ def generate_with_provider(provider: str, model: str, api_key: str, prompt: str,
 
     if not response.ok:
         error_code, error_field = provider_error_diagnostics(response)
+        try:
+            retry_after = float(response.headers.get("retry-after", "")) if response.status_code == 429 else None
+        except (ValueError, TypeError, AttributeError):
+            retry_after = None
         raise ProviderError(
             provider,
             model_id,
@@ -1676,6 +1705,7 @@ def generate_with_provider(provider: str, model: str, api_key: str, prompt: str,
             "provider returned an error",
             error_code=error_code,
             error_field=error_field,
+            retry_after=retry_after,
         )
     content = ""
     try:
@@ -1916,6 +1946,18 @@ def provider_failure_reason(error: ProviderError) -> str:
     return "unavailable"
 
 
+def generation_batch_size(provider: str, model: str, question_count: int = 1) -> int:
+    """Keep Groq GPT-OSS study responses small enough to finish cleanly."""
+    return 4 if provider == "groq" and model in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"} else 8
+
+
+def generation_max_tokens(provider: str, model: str, batch: int) -> int:
+    budget = max(3500, 1000 + batch * 550)
+    if provider == "groq" and model in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"}:
+        return min(budget, 3000)
+    return budget
+
+
 def fallback_order(primary, candidates):
     """Keep the chosen model first, then try independent providers before siblings."""
     return interleave_order(primary, candidates)
@@ -1931,16 +1973,19 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
     ordered = fallback_order(primary, [choice for choice in models if choice != primary])
     completed, used_models, failures = [], [], []
     title, fallback, pending = "", None, None
-    deadline, attempts = time.monotonic() + 300, 0
+    deadline, attempts = time.monotonic() + 600, 0
+    attempt_limit = max(32, (question_count + 3) // 4 + 16)
     attempt_policy = ProviderAttemptPolicy()
     for model_id, provider, model, api_key, label in ordered:
         check_generation_cancelled()
         if not attempt_policy.can_attempt(provider, model):
             continue
+        batch_size = generation_batch_size(provider, model, question_count)
         empty_attempts = 0
-        while len(completed) < question_count and attempts < 32 and time.monotonic() < deadline:
+        rate_retries = 0
+        while len(completed) < question_count and attempts < attempt_limit and time.monotonic() < deadline:
             attempts += 1
-            batch = min(8, question_count - len(completed))
+            batch = min(batch_size, question_count - len(completed))
             generation_progress("generating" if not completed else "finishing", f"{label} is {'generating' if not completed else 'finishing your questions'}…", len(completed), label)
             prompt = prompt_builder(batch, completed)
             prompt += "\n" + QUESTION_QUALITY_INSTRUCTIONS
@@ -1954,18 +1999,28 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
             failed = None
             try:
                 try:
-                    payload = generate_with_provider(provider, model, api_key, prompt, model_schema, max(3500, 1000 + batch * 550))
+                    max_tokens = generation_max_tokens(provider, model, batch)
+                    payload = generate_with_provider(provider, model, api_key, prompt, model_schema, max_tokens)
                 except ProviderError as exc:
                     check_generation_cancelled()
                     compacted = compact_provider_prompt(prompt) if exc.status == 413 else None
                     if not compacted:
                         raise
-                    payload = generate_with_provider(provider, model, api_key, compacted, model_schema, max(3500, 1000 + batch * 550))
+                    max_tokens = generation_max_tokens(provider, model, batch)
+                    payload = generate_with_provider(provider, model, api_key, compacted, model_schema, max_tokens)
                 check_generation_cancelled()
                 title = title or str(payload.get("title") or "").strip()
                 candidates = safe_model_items(payload.get("items"))
             except ProviderError as exc:
                 check_generation_cancelled()
+                if exc.status == 429 and exc.retry_after is not None and 0 <= exc.retry_after <= 30 and rate_retries < 2 and time.monotonic() + exc.retry_after < deadline:
+                    rate_retries += 1
+                    generation_progress("finishing", "Waiting for the AI provider's rate limit to reset…", len(completed), label)
+                    end_wait = time.monotonic() + exc.retry_after
+                    while time.monotonic() < end_wait:
+                        check_generation_cancelled()
+                        time.sleep(min(0.5, end_wait - time.monotonic()))
+                    continue
                 failures.append(exc)
                 attempt_policy.record_failure(provider, model, exc.status)
                 failed = exc
@@ -1975,7 +2030,10 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
             candidates = [item for item in candidates if not is_source_lookup_question(item["question"])]
             candidates = [grounded for item in candidates if (grounded := ground_visual_item(item)) is not None]
             if study_format in {"multiple_choice", "checkbox"}:
-                candidates = [clean for item in candidates if (clean := normalize_choice_item(item, study_format)) is not None and choice_options_have_similar_lengths(clean.get("options"))]
+                # Choice length is a writing guideline, not evidence that an
+                # answer is wrong. Enforce answer/option consistency without
+                # discarding otherwise usable questions over character counts.
+                candidates = [clean for item in candidates if (clean := normalize_choice_item(item, study_format)) is not None]
             added = add_unique_items(completed, candidates, question_count, excluded_questions)
             if added:
                 if model_id not in used_models:
@@ -2554,15 +2612,22 @@ def generate(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     # Do not ask the model to cite pages/slides that were removed by the input cap.
     source_labels = [label for label in source_labels if f"[SOURCE: {label}]" in text]
+    # Image-only pages can still contain useful diagrams even when OCR fails.
+    # Permit their figures to be inspected; only verified figures reach cards.
+    if include_images:
+        source_labels.extend(figure["source_ref"] for figure in figures
+                             if figure["source_ref"] in skipped_pages and figure["source_ref"] not in source_labels)
     figure_notices = []
     figures = [figure for figure in figures if figure["source_ref"] in source_labels and (not focus_topic.strip() or any(term.casefold() in figure.get("context", "").casefold() for term in focus_topic.split() if len(term) > 2))]
     if figures:
         generation_progress("reading", "Inspecting images and diagrams for useful study context…")
     described_figures = describe_material_figures(figures) if figures else {}
+    verified_visual_sources = {figure["source_ref"] for figure in described_figures.values()}
+    skipped_pages = [page for page in skipped_pages if page not in verified_visual_sources]
     if include_images and not described_figures:
         figure_notices.append("No readable, relevant study figure could be verified. These questions use the readable text from your material.")
     elif include_images and len(figures) > 12:
-        figure_notices.append("The first 12 relevant figures were inspected. Choose a smaller page range to focus on other figures.")
+        figure_notices.append("Up to 12 figures across the selected material were inspected. Choose a smaller page range to inspect other figures.")
 
     try:
         prior_sets = list_study_sets(user["user_id"])
@@ -2855,7 +2920,7 @@ async def start_generation_job(
             total = max(completed, result.get("requested_count") or completed)
             synced = bool(result.get("id")) and not result.get("persistence_error")
             if result.get("incomplete"):
-                outcome = f"{completed} of {total} questions are {'saved' if synced else 'ready'}. {total - completed} still need verified answers or choices."
+                outcome = f"{completed} of {total} questions are {'saved' if synced else 'ready'}. The other {total - completed} could not be completed in this run; continue generating to retry with the available models."
             else:
                 outcome = f"All {completed} questions are {'saved' if synced else 'ready'}."
             if not synced:
