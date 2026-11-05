@@ -154,7 +154,7 @@ class ImportRouteTests(unittest.TestCase):
         self.assertEqual(job["status"], "complete")
         self.assertEqual((job["completed"], job["requested"]), (134, 136))
         self.assertIn("134 of 136 questions are saved", job["message"])
-        self.assertIn("2 still need verified", job["message"])
+        self.assertIn("other 2 could not be completed in this run", job["message"])
         self.assertTrue(any(s["stage"] == "preparing" and s["requested"] == 136 for s in snapshots))
         self.assertTrue(all(s["requested"] == 0 or s["requested"] >= s["completed"] for s in snapshots))
 

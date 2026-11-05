@@ -4,10 +4,55 @@ import unittest
 from unittest.mock import Mock, patch
 
 from test_generation_limits import main
-from material_batches import source_windows
+from material_batches import source_windows, advance_source_window_index
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_provider_retries_keep_the_same_source_window_until_progress(self):
+        index, completed = 0, 0
+        self.assertEqual(advance_source_window_index(index, 0, completed, 4), 0)
+        self.assertEqual(advance_source_window_index(index, 0, completed, 4), 0)
+        index = advance_source_window_index(index, 3, completed, 4)
+        completed = 3
+        self.assertEqual(index, 1)
+        self.assertEqual(advance_source_window_index(index, 3, completed, 4), 1)
+        self.assertEqual(advance_source_window_index(index, 6, completed, 4), 2)
+
+    def test_unusable_provider_batch_retries_smaller_without_relaxing_answer_checks(self):
+        model = ("groq:openai/gpt-oss-120b", "groq", "openai/gpt-oss-120b", "test", "Test")
+        calls = []
+
+        def provider(_provider, _model, _key, _prompt, schema, _budget):
+            batch_size = schema["properties"]["items"]["maxItems"]
+            calls.append(batch_size)
+            if len(calls) == 1:
+                raise main.ProviderError("groq", model[0], 400, "invalid JSON", error_code="json_validate_failed")
+            items = []
+            for index in range(batch_size):
+                question_number = len([item for item in items]) + sum(calls[1:-1]) + 1
+                items.append({"question": f"Question {question_number}?", "answer": "Alpha", "correct_answer": "Alpha",
+                              "options": ["Alpha", "Beta", "Gamma", "Delta"]})
+            return {"title": "Set", "items": items}
+
+        schema = {"properties": {"items": {"type": "array", "items": {"properties": {}}}}}
+        with patch.object(main, "configured_ai_models", return_value=[model]), \
+             patch.object(main, "generate_with_provider", side_effect=provider):
+            result, _used, _fallback, incomplete = main.generate_with_fallback(
+                lambda count, _done: f"Create {count}", schema, model[0], 6, study_format="multiple_choice")
+        self.assertEqual(len(result["items"]), 6)
+        self.assertFalse(incomplete)
+        self.assertEqual(calls, [4, 2, 2, 2])
+        self.assertTrue(all(item["answer"] == item["correct_answer"] == "Alpha" for item in result["items"]))
+
+    def test_exact_source_evidence_accepts_pdf_line_wrap_hyphenation_only(self):
+        source = "The micro-\norganism produces a distinctive result in culture."
+        token = main._generation_grounding_text.set(source)
+        try:
+            self.assertTrue(main.has_source_evidence({"source_evidence": "The microorganism produces a distinctive result"}))
+            self.assertFalse(main.has_source_evidence({"source_evidence": "The microorganism produces a different result"}))
+        finally:
+            main._generation_grounding_text.reset(token)
+
     def test_large_set_survives_longer_temporary_quota_resets(self):
         model = ("groq:openai/gpt-oss-120b", "groq", "openai/gpt-oss-120b", "test", "Test")
         clock, count, calls = [0.0], [0], [0]

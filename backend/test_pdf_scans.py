@@ -7,7 +7,8 @@ from PIL import Image, ImageDraw
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import NameObject, DictionaryObject, NumberObject, DecodedStreamObject
 
-from pdf_questionnaire import extract_pdf_questionnaire, extract_pdf_learning_material, extract_pdf_figures
+from pdf_questionnaire import (extract_pdf_questionnaire, extract_pdf_learning_material, extract_pdf_figures,
+                               sample_figure_pages, MAX_PDF_FIGURE_SCAN_PAGES)
 from questionnaire import parse_questionnaire
 from questionnaire_ocr import scanned_figure_regions, ocr_questionnaire_image
 
@@ -38,6 +39,23 @@ def native_figure_pdf():
 
 
 class PdfScanTests(unittest.TestCase):
+    def test_long_pdf_figure_scan_is_broad_and_bounded(self):
+        selected = sample_figure_pages(range(127))
+        self.assertEqual(len(selected), MAX_PDF_FIGURE_SCAN_PAGES)
+        self.assertEqual(selected[0], 0)
+        self.assertEqual(selected[-1], 126)
+        self.assertLessEqual(max(right - left for left, right in zip(selected, selected[1:])), 3)
+        self.assertEqual(sample_figure_pages(range(10)), list(range(10)))
+
+    def test_native_pdf_text_extraction_reports_page_progress(self):
+        raw = native_figure_pdf()
+        progress = []
+        text, labels = extract_pdf_learning_material(
+            raw, PdfReader(BytesIO(raw)), [0], progress_callback=lambda *args: progress.append(args))
+        self.assertIn("blue region", text)
+        self.assertEqual(labels, ["PDF page 1"])
+        self.assertEqual(progress, [(1, 1, 1)])
+
     def test_uploaded_scan_attaches_detected_diagram_only_to_its_question(self):
         image = Image.new("RGB", (600, 800), "white")
         ImageDraw.Draw(image).ellipse((80, 130, 280, 330), fill="navy")

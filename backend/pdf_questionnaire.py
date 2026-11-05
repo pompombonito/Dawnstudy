@@ -15,6 +15,22 @@ _QUESTION_START = re.compile(r"(?m)^[ \t]*(?:Q(?:uestion)?\s*)?(\d+)[.)]\s*\S", 
 _OPTION_START = re.compile(r"(?m)^[ \t]*(?:\([A-Ha-h]\)|[A-Ha-h][.)])\s+\S")
 _OPTION_TOKEN = re.compile(r"(?i)(?<![A-Za-z])(?:\(([A-H])\)|([A-H])[.)])\s+\S")
 _FIGURE = re.compile(r"\bFIGURE\s+\d+(?:[-.]\d+)*\b", re.I)
+MAX_PDF_FIGURE_SCAN_PAGES = 48
+MAX_PDF_FIGURE_CANDIDATES = 24
+
+
+def sample_figure_pages(page_indices, maximum=MAX_PDF_FIGURE_SCAN_PAGES):
+    """Choose evenly spaced pages so long books get a quick, broad visual pass."""
+    pages = list(dict.fromkeys(page_indices))
+    if maximum < 1 or len(pages) <= maximum:
+        return pages
+    if maximum == 1:
+        return [pages[len(pages) // 2]]
+    selected = []
+    for offset in range(maximum):
+        index = round(offset * (len(pages) - 1) / (maximum - 1))
+        selected.append(pages[index])
+    return list(dict.fromkeys(selected))
 
 
 def _clean_pdf_text(text):
@@ -165,7 +181,7 @@ def _image_data_url(image_object, bounds, page_area, maximum_area=.4):
     raise QuestionnaireError("A PDF figure is too large to attach. Select fewer pages or upload a smaller copy.")
 
 
-def extract_pdf_figures(raw, page_indices, limit=96):
+def extract_pdf_figures(raw, page_indices, limit=MAX_PDF_FIGURE_CANDIDATES, progress_callback=None):
     """Return bounded native figures with stable IDs and nearby source context.
 
     Caller supplies IDs/context to the model and attaches data_url only when the
@@ -174,6 +190,7 @@ def extract_pdf_figures(raw, page_indices, limit=96):
     """
     import pypdfium2 as pdfium
 
+    page_indices = sample_figure_pages(page_indices)
     figures = []
     seen_images = set()
     seen_count = 0
@@ -195,9 +212,11 @@ def extract_pdf_figures(raw, page_indices, limit=96):
     with _pdfium_lock:
         document = pdfium.PdfDocument(raw)
         try:
-            for index in page_indices:
+            for position, index in enumerate(page_indices, 1):
                 if ocr_cancellation.get():
                     ocr_cancellation.get()()
+                if progress_callback and (position == 1 or position % 6 == 0 or position == len(page_indices)):
+                    progress_callback(position, len(page_indices), index + 1)
                 page = document[index]
                 textpage = page.get_textpage()
                 try:
@@ -248,7 +267,7 @@ def extract_pdf_figures(raw, page_indices, limit=96):
     return sorted(figures, key=lambda figure: (figure.get("page", 0), figure["id"]))
 
 
-def extract_pdf_learning_material(raw, reader, page_indices, include_skipped=False):
+def extract_pdf_learning_material(raw, reader, page_indices, include_skipped=False, progress_callback=None):
     """Read native PDF study text first and OCR image-only pages when needed."""
     import pypdfium2 as pdfium
 
@@ -256,8 +275,10 @@ def extract_pdf_learning_material(raw, reader, page_indices, include_skipped=Fal
     with _pdfium_lock:
         document = None
         try:
-            for index in page_indices:
+            for position, index in enumerate(page_indices, 1):
                 text = _clean_pdf_text(reader.pages[index].extract_text() or "")
+                if progress_callback and (position == 1 or position % 8 == 0 or position == len(page_indices)):
+                    progress_callback(position, len(page_indices), index + 1)
                 if len(re.sub(r"\s+", "", text)) >= 40:
                     segments.append((f"PDF page {index+1}", text))
                     continue

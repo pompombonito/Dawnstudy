@@ -2,6 +2,19 @@
 import re
 
 
+def advance_source_window_index(window_index, completed_count, previous_completed_count, window_count):
+    """Advance source context only after a batch yields new usable questions.
+
+    Provider retries therefore see the same evidence instead of silently
+    consuming a different page window on every failed call.
+    """
+    if window_count < 1:
+        return 0
+    if completed_count > previous_completed_count:
+        return (window_index + 1) % window_count
+    return window_index % window_count
+
+
 def source_windows(text, maximum=6000):
     chunks = []
     for block in re.split(r"(?=\[SOURCE: )", text):

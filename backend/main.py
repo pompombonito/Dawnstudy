@@ -20,12 +20,12 @@ from typing import Any, Literal
 from urllib.parse import unquote, urljoin, urlparse
 from uuid import uuid4
 from material_scope import selected_pages, focus_excerpt
-from material_batches import source_windows
+from material_batches import source_windows, advance_source_window_index
 from study_quality import QUESTION_QUALITY_INSTRUCTIONS, is_source_lookup_question
 from questionnaire import QuestionnaireError, parse_questionnaire, validate_completion, validate_completion_partial, convert_questionnaire, docx_questionnaire_text, match_existing_questionnaire_items, questionnaire_record_type, questionnaire_type_mismatches
 from questionnaire_ocr import prepare_questionnaire_image, questionnaire_text_from_tsv, ocr_questionnaire_image, ocr_learning_image, ocr_cancellation, image_data_url
 from material_figures import extract_embedded_figures
-from pdf_questionnaire import extract_pdf_questionnaire, extract_pdf_figures, extract_pdf_learning_material
+from pdf_questionnaire import extract_pdf_questionnaire, extract_pdf_figures, extract_pdf_learning_material, MAX_PDF_FIGURE_CANDIDATES
 from public_fetch import pinned_public_connection
 from smry_material import SmryUnavailable, extract_public_article as extract_smry_article
 from website_figures import extract_website_figures
@@ -105,8 +105,10 @@ _generation_cancel: ContextVar[Any] = ContextVar("generation_cancel", default=No
 _generation_commit: ContextVar[Any] = ContextVar("generation_commit", default=None)
 _questionnaire_existing_items: ContextVar[tuple[dict[str, Any], ...]] = ContextVar("questionnaire_existing_items", default=())
 _provider_images: ContextVar[tuple[tuple[str, str], ...]] = ContextVar("provider_images", default=())
+_provider_request_timeout: ContextVar[int] = ContextVar("provider_request_timeout", default=45)
 _material_figures: ContextVar[dict[str, dict]] = ContextVar("material_figures", default={})
 _generation_grounding_text: ContextVar[str] = ContextVar("generation_grounding_text", default="")
+_generation_grounding_normalized: ContextVar[str] = ContextVar("generation_grounding_normalized", default="")
 generation_jobs = GenerationJobs()
 _generation_workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="study-generation")
 _generation_inputs: dict[str, list] = {}
@@ -798,14 +800,14 @@ def get_study_progress(user: dict[str, str] = Depends(authenticated_user)):
     return {"total_reviews": len(reviews), "reviewed_today": days.get(today.isoformat(), 0), "accuracy": round(correct / len(reviews) * 100) if reviews else 0, "current_streak": current_streak, "best_streak": best_streak, "due_count": due_count, "total_cards": total_cards, "week": week}
 
 
-def extract_material(filename: str, raw: bytes, pages: str = "", questionnaire: bool = False, include_skipped=False, include_images=False, extracted_figures=None):
+def extract_material(filename: str, raw: bytes, pages: str = "", questionnaire: bool = False, include_skipped=False, include_images=False, extracted_figures=None, progress_callback=None):
     suffix = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     try:
         if suffix == "pdf":
             reader = PdfReader(BytesIO(raw))
             if questionnaire:
                 return extract_pdf_questionnaire(raw, reader, selected_pages(pages, len(reader.pages)), include_skipped=include_skipped)
-            return extract_pdf_learning_material(raw, reader, selected_pages(pages, len(reader.pages)), include_skipped=include_skipped)
+            return extract_pdf_learning_material(raw, reader, selected_pages(pages, len(reader.pages)), include_skipped=include_skipped, progress_callback=progress_callback)
         if suffix == "docx":
             doc = Document(BytesIO(raw))
             parts = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
@@ -1017,7 +1019,7 @@ def _fetch_public_material_url(value: str, max_response_bytes: int | None = None
     raise HTTPException(status_code=422, detail="This website redirected too many times. Try its public page URL instead.")
 
 
-def extract_public_material_url(value: str, pages: str = "", include_images: bool = False) -> tuple[str, list[str], str, str, str, bytes, list[dict[str, Any]]]:
+def extract_public_material_url(value: str, pages: str = "", include_images: bool = False, progress_callback=None) -> tuple[str, list[str], str, str, str, bytes, list[dict[str, Any]]]:
     from youtube_material import video_id, extract as extract_youtube
     if video_id(value):
         return (*extract_youtube(value, generation_progress), [])
@@ -1104,7 +1106,7 @@ def extract_public_material_url(value: str, pages: str = "", include_images: boo
         raise HTTPException(status_code=415, detail="Paste a public webpage or a direct link to a PDF, PPTX, DOCX, TXT, MD, PNG, JPG, WEBP, BMP, GIF, or TIFF file.")
     filename = path_name if os.path.splitext(path_name)[1].lower() in supported_suffixes else f"material{suffix}"
     material_figures = []
-    text, source_labels = extract_material(filename, raw, pages, include_images=include_images, extracted_figures=material_figures)
+    text, source_labels = extract_material(filename, raw, pages, include_images=include_images, extracted_figures=material_figures, progress_callback=progress_callback)
     title = os.path.splitext(path_name)[0] or os.path.basename(parsed_url.hostname or "Web material")
     return text, source_labels, title[:180], final_url, filename, raw, material_figures
 
@@ -1369,7 +1371,7 @@ def post_provider_json(url: str, headers: dict[str, str], payload: dict[str, Any
         url,
         headers=request_headers,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        timeout=60,
+        timeout=_provider_request_timeout.get(),
     )
     check_generation_cancelled()
     return response
@@ -1503,11 +1505,13 @@ def provider_supports_images(provider, model):
 
 def describe_material_figures(figures):
     """Keep only study diagrams a vision provider can describe from the pixels."""
+    figures = figures[:MAX_PDF_FIGURE_CANDIDATES]
     models = [model for model in configured_ai_models() if provider_supports_images(model[1], model[2])]
     models = list({model[1]: model for model in reversed(models)}.values())[::-1]
     described = {}
     unavailable = set()
-    deadline = time.monotonic() + 240
+    deadline = time.monotonic() + 60
+    attempt_policy = ProviderAttemptPolicy(max_failures_per_provider=1)
     schema = {"type": "object", "properties": {"title": {"type": "string"}, "items": {"type": "array", "items": {
         "type": "object", "properties": {"question": {"type": "string"}, "answer": {"type": "string"}, "relevant": {"type": "boolean"}},
         "required": ["question", "answer", "relevant"]}}}, "required": ["title", "items"]}
@@ -1528,8 +1532,9 @@ def describe_material_figures(figures):
         decided = set()
         try:
             for _model_id, provider, model, key, _label in models:
-                if provider in unavailable or time.monotonic() >= deadline:
+                if provider in unavailable or time.monotonic() >= deadline or not attempt_policy.can_attempt(provider, model):
                     continue
+                timeout_token = _provider_request_timeout.set(18)
                 try:
                     payload = generate_with_provider(provider, model, key, prompt, schema, 800 + len(batch) * 450)
                     for figure in batch:
@@ -1544,9 +1549,11 @@ def describe_material_figures(figures):
                     if len(decided) == len(batch):
                         break
                 except ProviderError as exc:
-                    if exc.status is None or exc.status in {401, 403, 429} or (exc.status and exc.status >= 500):
-                        unavailable.add(provider)
+                    attempt_policy.record_failure(provider, model, exc.status)
+                    unavailable.add(provider)
                     continue
+                finally:
+                    _provider_request_timeout.reset(timeout_token)
         finally:
             _provider_images.reset(token)
     return described
@@ -1573,8 +1580,16 @@ def has_source_evidence(item):
     evidence = item.get("source_evidence") if isinstance(item, dict) else None
     if not isinstance(evidence, str) or len(evidence.strip()) < 12:
         return False
-    normalize = lambda value: re.sub(r"\s+", " ", unicodedata.normalize("NFKC", value)).strip().casefold()
-    return normalize(evidence) in normalize(_generation_grounding_text.get())
+    def normalize(value):
+        value = unicodedata.normalize("NFKC", value).replace("\u00ad", "")
+        # PDF line wrapping often inserts a hyphen before a newline. Join that
+        # split word for comparison, while keeping ordinary in-line hyphens.
+        value = re.sub(r"(?<=\w)[\-\u2010\u2011\u2012\u2013\u2014][ \t]*\r?\n[ \t]*(?=\w)", "", value)
+        return re.sub(r"\s+", " ", value).strip().casefold()
+    source = _generation_grounding_normalized.get()
+    if not source:
+        source = normalize(_generation_grounding_text.get())
+    return normalize(evidence) in source
 
 
 def compatible_chat_endpoint(provider: str, model: str) -> str:
@@ -1970,7 +1985,7 @@ def provider_failure_reason(error: ProviderError) -> str:
 
 
 def generation_batch_size(provider: str, model: str, question_count: int = 1) -> int:
-    """Keep Groq GPT-OSS study responses small enough to finish cleanly."""
+    """Choose a conservative first batch; rejected output can be split smaller."""
     return 4 if provider == "groq" and model in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"} else 8
 
 
@@ -1996,14 +2011,14 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
     ordered = fallback_order(primary, [choice for choice in models if choice != primary])
     completed, used_models, failures = [], [], []
     title, fallback, pending = "", None, None
-    deadline, attempts = time.monotonic() + 1800, 0
+    deadline, attempts = time.monotonic() + 600, 0
     last_progress = time.monotonic()
     attempt_limit = max(48, question_count * 2 + len(ordered) * 3)
     queue = deque(ordered)
     cooldowns, rate_retries = {}, defaultdict(int)
     attempt_policy = ProviderAttemptPolicy()
     while queue and attempts < attempt_limit and time.monotonic() < deadline:
-        if time.monotonic() - last_progress > 300:
+        if time.monotonic() - last_progress > 180:
             break
         model_id, provider, model, api_key, label = queue.popleft()
         check_generation_cancelled()
@@ -2021,10 +2036,12 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
                     time.sleep(max(0, min(.5, wait_until - time.monotonic())))
             continue
         batch_size = generation_batch_size(provider, model, question_count)
+        adaptive_batch_size = batch_size
+        batch_reductions = 0
         empty_attempts = 0
         while len(completed) < question_count and attempts < attempt_limit and time.monotonic() < deadline:
             attempts += 1
-            batch = min(batch_size, question_count - len(completed))
+            batch = min(adaptive_batch_size, question_count - len(completed))
             generation_progress("generating" if not completed else "finishing", f"{label} is {'generating' if not completed else 'finishing your questions'}…", len(completed), label)
             prompt = prompt_builder(batch, completed)
             prompt += "\n" + QUESTION_QUALITY_INSTRUCTIONS
@@ -2036,6 +2053,7 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
             if provider != "gemini":
                 model_schema["properties"]["items"]["maxItems"] = batch
             failed = None
+            retry_smaller_batch = False
             try:
                 try:
                     max_tokens = generation_max_tokens(provider, model, batch)
@@ -2053,19 +2071,31 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
             except ProviderError as exc:
                 check_generation_cancelled()
                 reset_after = exc.retry_after if exc.retry_after is not None else 60
-                if exc.status == 429 and 0 <= reset_after <= 120 and rate_retries[provider] < max(8, question_count // 2):
+                if exc.status == 429 and 0 <= reset_after <= 60 and rate_retries[provider] < 2:
                     failures.append(exc)
                     rate_retries[provider] += 1
                     cooldowns[provider] = time.monotonic() + max(1, reset_after)
                     queue.append((model_id, provider, model, api_key, label))
                     pending = pending or (model_id, "limit")
                     break
-                failures.append(exc)
-                attempt_policy.record_failure(provider, model, exc.status)
-                failed = exc
                 candidates = safe_model_items(exc.partial_items)
                 pending = pending or (model_id, provider_failure_reason(exc))
-                print(f"AI provider {provider} ({model}) failed: {describe_provider_failure(exc)}")
+                output_validation_failure = (
+                    exc.status == 200
+                    or (exc.status in {400, 422} and exc.error_code == "json_validate_failed")
+                )
+                if output_validation_failure and adaptive_batch_size > 1 and batch_reductions < 3:
+                    adaptive_batch_size = max(1, adaptive_batch_size // 2)
+                    batch_reductions += 1
+                    empty_attempts = 0
+                    retry_smaller_batch = True
+                    generation_progress("validating", f"Reworking a smaller batch to keep answers verifiable · {len(completed)} of {question_count} ready", len(completed), label)
+                    print(f"AI provider {provider} ({model}) returned unusable output; retrying with a batch of {adaptive_batch_size}")
+                else:
+                    failures.append(exc)
+                    attempt_policy.record_failure(provider, model, exc.status)
+                    failed = exc
+                    print(f"AI provider {provider} ({model}) failed: {describe_provider_failure(exc)}")
             candidates = [item for item in candidates if not is_source_lookup_question(item["question"])]
             candidates = [grounded for item in candidates if (grounded := ground_visual_item(item)) is not None]
             if study_format in {"multiple_choice", "checkbox"}:
@@ -2084,6 +2114,13 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
                 generation_progress("validating", f"Checking answers · {len(completed)} of {question_count} ready", len(completed), label)
             else:
                 empty_attempts += 1
+                # Smaller responses fit provider limits more reliably and give
+                # the model fewer chances to drift from the supplied evidence.
+                if not failed and not retry_smaller_batch and adaptive_batch_size > 1 and batch_reductions < 3:
+                    adaptive_batch_size = max(1, adaptive_batch_size // 2)
+                    batch_reductions += 1
+                    empty_attempts = 0
+                    generation_progress("validating", f"Retrying a smaller batch to preserve answer checks · {len(completed)} of {question_count} ready", len(completed), label)
             if failed and not (200 <= (failed.status or 0) < 300 and added):
                 break
             if empty_attempts >= 2:
@@ -2574,6 +2611,8 @@ def generate(
             filename = upload.filename or f"Material {index + 1}.txt"
             generation_progress("reading", f"Reading {filename}…")
             material_figures = []
+            def report_pdf_read_progress(position, selected_count, page_number):
+                generation_progress("reading", f"Reading {filename} · PDF page {page_number} ({position} of {selected_count} selected)…")
             if input_mode == "questionnaire":
                 excerpt, labels, skipped = extract_material(filename, raw, ranges.get(str(index), ""), questionnaire=True, include_skipped=True)
                 skipped_pages.extend(f"{filename} · {page}" for page in skipped)
@@ -2581,6 +2620,7 @@ def generate(
                 excerpt, labels, skipped = extract_material(
                     filename, raw, ranges.get(str(index), ""), include_skipped=True,
                     include_images=include_images, extracted_figures=material_figures,
+                    progress_callback=report_pdf_read_progress,
                 )
                 skipped_pages.extend(f"{filename} · {page}" for page in skipped)
             excerpt, labels = qualify_source_labels(filename, excerpt, labels)
@@ -2588,7 +2628,9 @@ def generate(
             if input_mode == "notes" and include_images:
                 if filename.lower().endswith(".pdf"):
                     figure_pages = selected_pages(ranges.get(str(index), ""), len(PdfReader(BytesIO(raw)).pages))
-                    material_figures.extend(extract_pdf_figures(raw, figure_pages))
+                    def report_figure_progress(position, selected_count, page_number):
+                        generation_progress("reading", f"Checking figures · PDF page {page_number} ({position} of {selected_count} selected)…")
+                    material_figures.extend(extract_pdf_figures(raw, figure_pages, progress_callback=report_figure_progress))
                 for figure_number, figure in enumerate(material_figures, 1):
                     figures.append({
                         **figure,
@@ -2599,7 +2641,12 @@ def generate(
             hashes.append(hashlib.sha256(raw).hexdigest())
         filename = uploads[0].filename or "Study material"
     else:
-        excerpt, source_labels, page_title, final_source_url, filename, raw, material_figures = extract_public_material_url(source_url, ranges.get("0", ""), include_images=include_images)
+        def report_public_pdf_read_progress(position, selected_count, page_number):
+            generation_progress("reading", f"Reading public material · PDF page {page_number} ({position} of {selected_count} selected)…")
+        excerpt, source_labels, page_title, final_source_url, filename, raw, material_figures = extract_public_material_url(
+            source_url, ranges.get("0", ""), include_images=include_images,
+            progress_callback=report_public_pdf_read_progress,
+        )
         excerpt, source_labels = qualify_source_labels(filename, excerpt, source_labels)
         all_text.append(excerpt)
         total_bytes = len(raw)
@@ -2607,7 +2654,9 @@ def generate(
         if include_images:
             if filename.lower().endswith(".pdf"):
                 figure_pages = selected_pages(ranges.get("0", ""), len(PdfReader(BytesIO(raw)).pages))
-                figures = extract_pdf_figures(raw, figure_pages)
+                def report_public_figure_progress(position, selected_count, page_number):
+                    generation_progress("reading", f"Checking figures · PDF page {page_number} ({position} of {selected_count} selected)…")
+                figures = extract_pdf_figures(raw, figure_pages, progress_callback=report_public_figure_progress)
             else:
                 figures = material_figures
             figures = [{**figure, "id": f"public-{figure.get('id', number)}", "source_ref": f"{filename} · {figure.get('source_ref', 'Uploaded image')}"} for number, figure in enumerate(figures, 1)]
@@ -2745,11 +2794,13 @@ def generate(
                   if expected_batches > 1 else [len(windows) // 2])
         windows = [windows[index] for index in chosen] + [window for index, window in enumerate(windows) if index not in chosen]
     window_index = 0
+    window_completed_count = 0
 
     def prompt_for_remaining(remaining: int, completed: list[dict[str, Any]]) -> str:
-        nonlocal window_index
+        nonlocal window_index, window_completed_count
+        window_index = advance_source_window_index(window_index, len(completed), window_completed_count, len(windows))
+        window_completed_count = len(completed)
         batch_text, batch_labels = windows[window_index % len(windows)]
-        window_index += 1
         batch_prompt = prompt_template.replace(text, batch_text, 1).replace(allowed_sources, ", ".join(batch_labels), 1)
         batch_visuals = [{"id": figure_id, "source_ref": figure["source_ref"], "description": figure["description"]}
                         for figure_id, figure in described_figures.items() if figure["source_ref"] in batch_labels]
@@ -2793,12 +2844,20 @@ def generate(
         auto_model, auto_reason = choose_auto_model(configured_ai_models(), total_bytes, len(text), question_count)
         selected_model = auto_model
     figure_token = _material_figures.set(described_figures)
-    grounding_token = _generation_grounding_text.set(text + "\n" + web_context + "\n" + "\n".join(figure["description"] for figure in described_figures.values()))
+    grounding_text = text + "\n" + web_context + "\n" + "\n".join(figure["description"] for figure in described_figures.values())
+    # Normalize the (possibly large) source once per job instead of rescanning it
+    # for every returned card. has_source_evidence normalizes each short quote.
+    grounding_normalized = unicodedata.normalize("NFKC", grounding_text).replace("\u00ad", "")
+    grounding_normalized = re.sub(r"(?<=\w)[\-\u2010\u2011\u2012\u2013\u2014][ \t]*\r?\n[ \t]*(?=\w)", "", grounding_normalized)
+    grounding_normalized = re.sub(r"\s+", " ", grounding_normalized).strip().casefold()
+    grounding_token = _generation_grounding_text.set(grounding_text)
+    grounding_normalized_token = _generation_grounding_normalized.set(grounding_normalized)
     try:
         payload, used_models, fallback, incomplete = generate_with_fallback(prompt_for_remaining, schema, selected_model, question_count, excluded_questions, format)
     finally:
         _material_figures.reset(figure_token)
         _generation_grounding_text.reset(grounding_token)
+        _generation_grounding_normalized.reset(grounding_normalized_token)
     result = {
         "title": str(payload.get("title") or filename.rsplit(".", 1)[0])[:100],
         "type": format,
