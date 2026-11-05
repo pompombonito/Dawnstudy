@@ -1,10 +1,8 @@
 import json
-import hashlib
 import unittest
 from unittest.mock import patch
 from urllib.parse import unquote
 import accounts
-import figure_repairs
 
 
 class LargeStudySetStorageTests(unittest.TestCase):
@@ -122,21 +120,6 @@ class LargeStudySetStorageTests(unittest.TestCase):
         with patch.object(accounts, "_rows", return_value=[(2, row)]):
             restored = accounts.list_study_sets("student")[0]
         self.assertEqual(restored["items"], self.study_set["items"])
-
-    def test_legacy_figure_repair_runs_after_asset_hydration_without_writing_sheets(self):
-        red, pink = "data:image/webp;base64,cmVk", "data:image/webp;base64,cGluaw=="
-        self.study_set["items"] = [
-            {"card_id": "xld", "imported": True, "question": "The bacterial isolate on XLD agar was isolated from a routine stool culture.", "answer": "Saved XLD answer"},
-            {"card_id": "cin", "imported": True, "question": "The bacterial isolate on CIN agar was isolated from a routine stool culture.", "answer": "Saved CIN answer", "images": [pink, red]},
-        ]
-        row = dict(zip(accounts.SET_COLUMNS, self.packed_row()))
-        hashes = {hashlib.sha256(red.encode()).hexdigest(): "Figure 1-4", hashlib.sha256(pink.encode()).hexdigest(): "Figure 1-5"}
-        with patch.object(figure_repairs, "KNOWN_IMAGE_SHA256", hashes), patch.object(accounts, "_rows", return_value=[(2, row)]), patch.object(accounts, "_api", side_effect=AssertionError("Read repair must not write Sheets")):
-            restored = accounts.list_study_sets("student")[0]
-        self.assertEqual([card["images"] for card in restored["items"]], [[red], [pink]])
-        self.assertEqual([card["image_labels"] for card in restored["items"]], [["Figure 1-4"], ["Figure 1-5"]])
-        self.assertEqual([card["answer"] for card in restored["items"]], ["Saved XLD answer", "Saved CIN answer"])
-        self.assertEqual([card["card_id"] for card in restored["items"]], ["xld", "cin"])
 
     def test_schema_upgrade_appends_headers_without_rewriting_existing_data(self):
         headers = {accounts.USERS_TAB: accounts.USER_COLUMNS, accounts.SETS_TAB: accounts.SET_COLUMNS[:13], accounts.USAGE_TAB: accounts.USAGE_COLUMNS,

@@ -5,13 +5,12 @@ import { useParams } from "next/navigation";
 import { importedOptionIsCorrect } from "../../imported-answers";
 import { normalizedAnswer, resolveChoiceAnswers, quizKind, quizAnswerIsCorrect } from "../../quiz-answers";
 import ThemePicker from "../../components/ThemePicker";
-import StudyFigures from "../../components/StudyFigures";
 import { applyTheme, DEFAULT_THEME, GUEST_THEME_STORAGE_KEY, normalizeTheme, readInitialTheme, THEME_STORAGE_KEY, SESSION_STORAGE_KEY, type Theme } from "../../community/themes";
 import { communityApi } from "../../community/api";
 import type { Bootstrap, Profile } from "../../community/types";
 import { ArrowUpRight, BookOpen, Check, ChevronLeft, ChevronRight, CircleHelp, ExternalLink, Maximize2, Minimize2, RotateCcw, Share2 } from "lucide-react";
 
-type SharedCard = { question: string; answer: string; options?: string[]; correct_answer?: string; correct_answers?: string[]; explanation?: string; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred"; images?: string[]; image_labels?: string[]; image_captions?: string[]; quiz_type?: "multiple_choice" | "checkbox" | "identification" | "matching"; matching_prompts?: string[]; matching_options?: string[]; matching_pairs?: { prompt: string; answer: string }[] };
+type SharedCard = { question: string; answer: string; options?: string[]; correct_answer?: string; correct_answers?: string[]; explanation?: string; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred"; images?: string[]; image_captions?: string[]; quiz_type?: "multiple_choice" | "checkbox" | "identification" | "matching"; matching_prompts?: string[]; matching_options?: string[]; matching_pairs?: { prompt: string; answer: string }[] };
 type SharedSet = { title: string; type: string; items: SharedCard[]; sources?: { title: string; url: string }[] };
 type AnswerState = { selected: string | null; selectedMany: string[]; matches: Record<string, string>; revealed: boolean };
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
@@ -229,7 +228,7 @@ export default function SharedStudySetPage() {
             <div className="shared-question-top"><span>QUESTION {String(index + 1).padStart(2, "0")}</span><span>{String(index + 1).padStart(2, "0")}<i>/</i>{String(studySet.items.length).padStart(2, "0")}</span></div>
             <h2>{card.question}</h2>
             <p className="shared-answer-hint">{cardType === "matching" ? "Match each item with its description." : choiceMode && card.options?.length ? checkboxMode ? "Select every answer that applies, then check your choices." : "Choose the best answer below." : identificationMode ? "Recall the term or concept and type your answer." : "Think it through, then reveal the answer when you’re ready."}</p>
-            <StudyFigures card={card}/>
+            {card.images?.length ? <div className="study-figure-list">{card.images.map((image, imageIndex) => <img key={`${index}-figure-${imageIndex}`} src={image} alt={card.image_captions?.[imageIndex] || `Figure ${imageIndex + 1} from your study material`} loading="lazy"/>)}</div> : null}
             {cardType === "matching" ? <>
               <div className="matching-rows shared-matching-rows">{(card.matching_prompts || []).map((prompt, promptIndex) => <label className="matching-row" key={`${promptIndex}-${prompt}`}><span>{prompt}</span><select value={response.matches[prompt] || ""} disabled={response.revealed} onChange={(event) => updateCurrentResponse({ ...response, matches: { ...response.matches, [prompt]: event.target.value } })}><option value="">Choose a match</option>{(card.matching_options || []).map((option, optionIndex) => <option key={`${optionIndex}-${option}`} value={option} disabled={Object.entries(response.matches).some(([otherPrompt, selected]) => otherPrompt !== prompt && selected === option)}>{String.fromCharCode(65 + optionIndex)}. {option}</option>)}</select></label>)}</div>
               {!response.revealed && <button className="shared-primary-button shared-check-button" type="button" disabled={!(card.matching_prompts || []).length || !(card.matching_prompts || []).every((prompt) => Boolean(response.matches[prompt]))} onClick={() => updateCurrentResponse({ ...response, revealed: true })}>Check matches <Check size={17}/></button>}

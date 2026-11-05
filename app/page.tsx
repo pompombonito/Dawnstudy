@@ -4,7 +4,6 @@ import { type FormEvent, useEffect, useRef, useState } from "react";
 import { importedAnswerMatches, importedOptionIsCorrect } from "./imported-answers";
 import { normalizedAnswer, resolveChoiceAnswers as choiceAnswerOptions, quizKind, quizAnswerIsCorrect } from "./quiz-answers";
 import Avatar from "./components/Avatar";
-import StudyFigures from "./components/StudyFigures";
 import ThemePicker from "./components/ThemePicker";
 import { applyTheme, DEFAULT_THEME, GUEST_THEME_STORAGE_KEY, getTheme, normalizeTheme, readInitialTheme, THEME_STORAGE_KEY } from "./community/themes";
 import { useCommunity } from "./community/useCommunity";
@@ -17,7 +16,7 @@ import GameRoom from "./community/GameRoom";
 import CompanionDock from "./community/CompanionDock";
 import Agreement from "./community/Agreement";
 import { DawnArtwork, DawnMark } from "./components/DawnArtwork";
-import { cancelGenerationJob, findGenerationJob, generationReadyText, GenerationCancelledError, GenerationJobError, pollGenerationJob, startGenerationJob, QuestionnaireTypeMismatchError, type GenerationJob, type GenerationStatus, type QuestionnaireMismatchPreview } from "./generation-jobs";
+import { cancelGenerationJob, findGenerationJob, GenerationCancelledError, GenerationJobError, pollGenerationJob, startGenerationJob, QuestionnaireTypeMismatchError, type GenerationJob, type GenerationStatus, type QuestionnaireMismatchPreview } from "./generation-jobs";
 import { deleteUnsyncedStudyDraft, getUnsyncedStudyDraft, saveUnsyncedStudyDraft } from "./unsynced-study-drafts";
 import {
   AlarmClock, ArrowLeftRight, BookOpen, Check, CheckSquare, ChevronLeft, ChevronRight, CircleHelp, Clock3,
@@ -27,7 +26,7 @@ import {
 } from "lucide-react";
 
 type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification" | "same_as_source";
-type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; correct_answers?: string[]; explanation?: string; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred"; images?: string[]; image_labels?: string[]; image_captions?: string[]; questionnaire_index?: number; quiz_type?: "multiple_choice" | "checkbox" | "identification" | "matching"; questionnaire_type_confirmed?: boolean; questionnaire_type_policy?: "convert" | "mixed"; matching_prompts?: string[]; matching_options?: string[]; matching_pairs?: { prompt: string; answer: string }[] };
+type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; correct_answers?: string[]; explanation?: string; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred"; images?: string[]; image_captions?: string[]; questionnaire_index?: number; quiz_type?: "multiple_choice" | "checkbox" | "identification" | "matching"; questionnaire_type_confirmed?: boolean; questionnaire_type_policy?: "convert" | "mixed"; matching_prompts?: string[]; matching_options?: string[]; matching_pairs?: { prompt: string; answer: string }[] };
 type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; source_url?: string; include_images?: boolean; created_at: string; material_fingerprint?: string; page_ranges?: Record<string, string>; focus_topic?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; questionnaire_type_confirmed?: boolean; questionnaire_type_policy?: "convert" | "mixed" | null; notices?: string[]; usage?: { remaining: number | null; limit: number | null; resets_at: string | null; unlimited?: boolean } };
 type ActiveShare = { set_id: string; title: string; token: string; created_at: string };
 type ReviewItem = { study_set_id: string; study_set_title: string; type: Kind; card: Card; retried?: boolean; intervals: { again: string; hard: string; good: string; easy: string } };
@@ -76,8 +75,8 @@ function rememberGeneration(userId: string, pending: PendingGeneration | null) {
   } catch { /* Account job discovery also works when device storage is unavailable. */ }
 }
 const supportedFiles = new Set(["pdf", "pptx", "docx", "txt", "md", "png", "jpg", "jpeg", "webp"]);
-const maxFileBytes = 64 * 1024 * 1024;
-const maxCombinedFileBytes = 80 * 1024 * 1024;
+const maxFileBytes = 15 * 1024 * 1024;
+const maxCombinedFileBytes = 30 * 1024 * 1024;
 const voicePersonas: { id: VoicePersona; name: string; rate: number; pitch: number }[] = [
   { id: "warm_tutor", name: "Warm tutor", rate: 0.96, pitch: 1.04 },
   { id: "calm_mentor", name: "Calm mentor", rate: 0.88, pitch: 0.92 },
@@ -511,17 +510,17 @@ export default function Home() {
     }
     if (next.length > 5) { setError("Choose up to five files per study set."); return; }
     if (next.reduce((total, candidate) => total + candidate.size, 0) > maxCombinedFileBytes) {
-      setError("Keep the combined file size under 80 MB. Each file can be up to 64 MB.");
+      setError("Keep the combined file size under 30 MB. Each file can be up to 15 MB.");
       return;
     }
     if (!next.length) {
-      setError(invalidCount ? "Choose supported, nonempty files up to 64 MB each (80 MB total)." : "Choose at least one study material.");
+      setError(invalidCount ? "Choose supported, nonempty files up to 15 MB each (30 MB total)." : "Choose at least one study material.");
       return;
     }
     setSourceMode("file");
     setActiveView("study");
     setComposerStep(0);
-    setFiles(next); setError(invalidCount ? "Some files were skipped. Use PDF, PPTX, DOCX, TXT, MD, or an image up to 64 MB." : ""); setNotice("");
+    setFiles(next); setError(invalidCount ? "Some files were skipped. Use PDF, PPTX, DOCX, TXT, MD, or an image up to 15 MB." : ""); setNotice("");
     if (!result?.incomplete) setResult(null);
     setSelectedOption(null); setStudySelectedOptions([]); setStudyIdentificationAnswer("");
   }
@@ -757,7 +756,7 @@ export default function Home() {
     if (signal.aborted) throw new DOMException("Generation monitoring stopped.", "AbortError");
     if (synced) setSets((old) => [studySet, ...old.filter((item) => item.id !== studySet.id && item.id !== base?.id)].slice(0, 100));
     const notices = [studySet.incomplete
-      ? `${studySet.items.length} of ${Math.max(studySet.items.length, studySet.requested_count || 0)} questions are ${synced ? "saved" : "ready"}. The others could not be completed in this run; continue generating to retry with the available models.`
+      ? `${studySet.items.length} of ${studySet.requested_count || studySet.items.length} questions are saved. Continue generating when you are ready.`
       : `Your study set is ready with ${studySet.items.length} questions.`];
     if (data.auto_model) notices.push("Auto chose " + modelName(data.auto_model) + ".");
     if (data.fallback) notices.push(modelName(data.fallback.to) + " helped complete the generation.");
@@ -787,7 +786,7 @@ export default function Home() {
       if (synced) resetGenerationCancellation();
       setGenerationNeedsReconnect(!synced);
       setGenerationStatus(synced ? null : {
-        status: "paused", stage: "saving", message: `${data.items.length} questions are ready. Reconnect to retry account sync.`,
+        status: "paused", stage: "saving", message: "Your questions are ready. Reconnect to retry saving them to your account.",
         completed: data.items.length, requested: data.requested_count || data.items.length,
       });
     }
@@ -953,7 +952,7 @@ export default function Home() {
     if (sourceMode !== "file" && !websiteUrl.trim()) { setComposerStep(0); setError("Paste a public website link first."); return; }
     if (inputMode === "questionnaire") primeQuestionnaireMismatchSound();
     setBusy(true); setError(""); setNotice("");
-    setGenerationStatus({ status: "queued", stage: "queued", message: "Joining the study queue…", completed: 0, requested: inputMode === "questionnaire" ? 0 : questionCount });
+    setGenerationStatus({ status: "queued", stage: "queued", message: "Joining the study queue…", completed: 0, requested: questionCount });
     const form = new FormData();
     if (sourceMode === "file") files.forEach((selectedFile) => form.append("files", selectedFile));
     else form.append("source_url", websiteUrl.trim());
@@ -1363,7 +1362,7 @@ export default function Home() {
     ["bad_source", "Source reference is wrong"], ["other", "Other issue"],
   ];
   function renderQuestionImages(card: Card) {
-    return <StudyFigures card={card}/>;
+    return card.images?.length ? <div className="study-figure-list">{card.images.map((image, index) => <img key={`${card.card_id || card.question}-figure-${index}`} src={image} alt={card.image_captions?.[index] || `Figure ${index + 1} from your study material`} loading="lazy"/>)}</div> : null;
   }
 
   function renderMatchingQuiz(card: Card, isReview = false, practiceAt?: number) {
@@ -1492,9 +1491,22 @@ export default function Home() {
         </div>
       </aside>
       <section className="main-area" id="home">
-        <header className="topbar"><div className="topbar-left"><button className="mobile-brand" type="button" aria-label="Dawnstudy home" onClick={() => navigateTo("study")}><DawnMark/></button><div className="crumb"><span>YOUR SPACE</span><b>{viewTitle[activeView]}</b></div></div><div className="top-actions">{account && <button className="online-friends" title="Recently online friends" onClick={() => navigateTo("friends")} aria-label={`${community.data?.friends.filter(p => p.online).length || 0} friends online`}><span className="online-friend-faces">{community.data?.friends.filter(p => p.online).slice(0, 3).map(p => <Avatar key={p.id} id={p.avatar_id}/>)}</span><Users size={16}/><span>{community.data?.friends.filter(p => p.online).length || 0} online</span></button>}<ThemePicker value={theme} onChange={chooseTheme}/><span className="workspace-label"><span/> STUDY WORKSPACE</span><button className="top-account" onClick={() => account ? signOut() : setAuthOpen(true)} title={account ? "Sign out" : "Sign in"}>{account ? <LogOut size={18}/> : <UserRound size={18}/>}<span>{account ? "Sign out" : "Sign in"}</span></button></div></header>
+        <header className="topbar"><div className="topbar-left"><button className="mobile-brand" type="button" aria-label="Dawnstudy home" onClick={() => navigateTo("study")}><DawnMark/></button><div className="crumb"><span>YOUR SPACE</span><b>{viewTitle[activeView]}</b></div></div><div className="top-actions">{account && <button className="online-friends" title="Recently online friends" onClick={() => navigateTo("friends")} aria-label={`${community.data?.friends.filter(p => p.online).length || 0} friends online`}><span className="online-friend-faces">{community.data?.friends.filter(p => p.online).slice(0, 3).map(p => <Avatar key={p.id} id={p.avatar_id}/>)}</span><Users size={16}/><span>{community.data?.friends.filter(p => p.online).length || 0} online</span></button>}{generationStatus && <button className="activity-pill" onClick={() => navigateTo("study")}><span/>{generationNeedsReconnect ? "Reconnect" : generationStopping ? "Stopping" : "Generating"}</button>}<ThemePicker value={theme} onChange={chooseTheme}/><span className="workspace-label"><span/> STUDY WORKSPACE</span><button className="top-account" onClick={() => account ? signOut() : setAuthOpen(true)} title={account ? "Sign out" : "Sign in"}>{account ? <LogOut size={18}/> : <UserRound size={18}/>}<span>{account ? "Sign out" : "Sign in"}</span></button></div></header>
         <div className="content">
           {(error || notice) && <div className="workspace-feedback" aria-live="polite">{error && <div className="error-box"><CircleHelp size={18}/><span>{error}</span><button className="plain-icon" aria-label="Dismiss error" onClick={() => setError("")}><X size={16}/></button></div>}{notice && <div className="notice-box"><Check size={18}/><span>{notice}</span><button className="plain-icon" aria-label="Dismiss message" onClick={() => setNotice("")}><X size={16}/></button></div>}</div>}
+          {generationStatus && <div className="generation-status" role="status" aria-live="polite">
+            <span className="generation-status-pulse"/>
+            <div className="generation-status-copy">
+              <strong>{generationStopping ? generationNeedsReconnect ? "Stopping… Reconnect to confirm cancellation." : "Stopping… The current request may finish first." : generationStatus.message || "Preparing your study set…"}</strong>
+              <small>{generationStatus.model ? modelName(generationStatus.model) : generationStatus.stage === "queued" ? "Waiting for an available model" : "Dawnstudy generation service"}{generationStatus.requested > 0 && ` · ${generationStatus.completed} of ${generationStatus.requested} ready`}</small>
+              {generationCancelError && <span className="generation-cancel-error" role="alert">{generationCancelError}</span>}
+            </div>
+            {generationStatus.requested > 0 && <div className="generation-progress-track" aria-label={`${generationStatus.completed} of ${generationStatus.requested} questions ready`}><i style={{ width: `${Math.min(100, generationStatus.completed / generationStatus.requested * 100)}%` }}/></div>}
+            {account && <div className="generation-status-actions">
+              {generationNeedsReconnect && <button type="button" className="generation-reconnect" disabled={busy || continueBusy} onClick={() => void restoreGeneration(authToken, account.id)}>Reconnect</button>}
+              <button type="button" className="generation-cancel" disabled={!generationCanCancel || generationStopping || generationCancelBusy} title={generationStatus.stage === "saving" ? "Your questions are being saved." : undefined} onClick={() => void cancelGeneration()}>{generationStopping || generationCancelBusy ? "Stopping…" : "Cancel generation"}</button>
+            </div>}
+          </div>}
           {community.error && account && <div className="social-error" role="alert">{community.error} <button className="text-button" onClick={() => void community.refresh()}>Retry profile connection</button></div>}
           {activeView === "agreement" && <div className="workspace-view social-card agreement-page"><Agreement/></div>}
           {(["friends", "games", "profile"] as WorkspaceView[]).includes(activeView) && !community.data?.profile?.onboarded && <div className="social-card social-empty"><h2>{account ? "Getting your space ready…" : "A little better together."}</h2><p>{account ? "Complete your profile to join the community." : "Sign in with your Google account to meet friends and play together."}</p><button className="social-button primary" onClick={() => account ? void community.refresh() : setAuthOpen(true)}>{account ? "Retry" : "Sign in"}</button></div>}
@@ -1534,7 +1546,7 @@ export default function Home() {
               <span className="upload-copy"><strong>{files.length ? "Add another material" : "Drop your study materials here"}</strong><small>{files.length ? files.length + " of 5 files selected" : "Upload more than one file, or choose them from your device."}</small></span>
               <button type="button" className="upload-browse-button" onClick={pickStudyFiles}><Plus size={15}/>{files.length ? "Add files" : "Browse files"}</button>
             </div>
-            <div className="upload-limits">PDF, PPTX, DOCX, TXT, MD, PNG, JPG, WEBP, BMP, GIF, TIFF · 64 MB each · 80 MB total</div>
+            <div className="upload-limits">PDF, PPTX, DOCX, TXT, MD, PNG, JPG, WEBP, BMP, GIF, TIFF · 15 MB each · 30 MB total</div>
             {files.length > 0 && <div className="selected-files">{files.map((selectedFile, index) => {
               const extension = selectedFile.name.split(".").pop()?.toLowerCase() || "";
               const pageSelectable = extension === "pdf" || extension === "pptx";
@@ -1586,7 +1598,7 @@ export default function Home() {
           </section>}
           {result && currentCard && !reviewActive && !practiceActive && <section className="result-panel"><div className="result-head"><div><div className="result-kicker"><span/> YOUR STUDY SET</div><h2>{result.title}</h2><p>{result.items.length} {studySetTypeLabel(result).toLowerCase()} · ready when you are{result.model ? ` · ${modelName(result.model)}` : ""}</p></div><button className="plain-icon" title="Close study set" onClick={() => setResult(null)}><X size={18}/></button></div>
             <div className="set-action-row"><label>Test pace<select value={practiceSecondsPerQuestion} onChange={(event) => setPracticeSecondsPerQuestion(Number(event.target.value))}><option value={0}>No timer</option><option value={20}>20 sec / question</option><option value={30}>30 sec / question</option><option value={45}>45 sec / question</option></select></label>{result.items.some((card) => quizKind(card, result.type) !== "flashcards") && <button className="action-button" onClick={() => { if (result) setGameSet(result.id); navigateTo("games"); }}><Gamepad2 size={15}/> Play with friends</button>}<button className="action-button" onClick={startPractice}><AlarmClock size={15}/> {practiceSecondsPerQuestion === 0 ? "Start practice" : "Start timed test"}</button><button className="action-button" onClick={() => void shareCurrentSet()} disabled={shareBusy}><Share2 size={15}/>{shareBusy ? "Working…" : "Share set"}</button></div>
-            {result.incomplete && <div className="incomplete-generation"><div><strong>{result.items.length} of {Math.max(result.items.length, result.requested_count || 0)} questions {result.items.some(card => card.imported) ? "imported" : "generated"}</strong><span>{result.source_url ? "Your generated questions are held. Continue from the same public webpage when ready." : files.length ? "Your completed questions are kept. Use the original files to finish the remaining questions." : "Re-select the original files to continue this set."}</span>{!result.source_url && files.length > 0 && <button type="button" className="resume-source-button" onClick={pickOriginalFiles}>Replace original files ({files.length} selected)</button>}</div><button className="continue-generation-button" disabled={continueBusy || busy || generationNeedsReconnect} onClick={() => { if (!files.length && !result.source_url) pickOriginalFiles(); else void continueGenerating(); }}>{continueBusy ? <><span className="spinner"/> Continuing…</> : <><Sparkles size={17}/> {!files.length && !result.source_url ? "Select original files" : "Continue generating"}</>}</button></div>}
+            {result.incomplete && <div className="incomplete-generation"><div><strong>{result.items.length} of {result.requested_count || result.items.length} questions generated</strong><span>{result.source_url ? "Your generated questions are held. Continue from the same public webpage when ready." : files.length ? "Your generated questions are held. Continue with the selected original files when ready." : "Re-select the original files to continue this set."}</span>{!result.source_url && files.length > 0 && <button type="button" className="resume-source-button" onClick={pickOriginalFiles}>Replace original files ({files.length} selected)</button>}</div><button className="continue-generation-button" disabled={continueBusy || busy || generationNeedsReconnect} onClick={() => { if (!files.length && !result.source_url) pickOriginalFiles(); else void continueGenerating(); }}>{continueBusy ? <><span className="spinner"/> Continuing…</> : <><Sparkles size={17}/> {!files.length && !result.source_url ? "Select original files" : "Continue generating"}</>}</button></div>}
             {shareUrl && <div className="share-link-row"><span>Anyone with this link can view this set:</span><a href={shareUrl} target="_blank" rel="noreferrer">{shareUrl}</a><button className="plain-icon" title="Copy share link" onClick={() => { void navigator.clipboard.writeText(shareUrl).then(() => setNotice("Share link copied.")).catch(() => setNotice("Select and copy the share link above.")); }}><Copy size={15}/></button><button className="share-revoke" disabled={shareBusy} onClick={() => void turnOffShareLink(result.id)}>Turn off link</button></div>}
             <div className="study-card"><div className="study-card-top"><span className="flashcard-label">{quizTypeLabel(quizKind(currentCard, result.type)).toUpperCase()}</span><span className="card-number">{String(current + 1).padStart(2,"0")} <i>/</i> {String(result.items.length).padStart(2,"0")}</span></div>
               {currentCard.answer_origin === "inferred" && <p className="import-review-note">AI-inferred answer · review for accuracy</p>}{renderQuestionImages(currentCard)}{renderCardInteraction(currentCard, result.type)}
@@ -1672,19 +1684,7 @@ export default function Home() {
         <button aria-expanded={moreOpen} onClick={() => setMoreOpen(v => !v)}><Menu size={18}/><span>More</span></button>
       </nav>
       {moreOpen && <div className="more-menu-backdrop" onClick={() => setMoreOpen(false)}><nav className="more-menu" aria-label="More pages" onClick={e => e.stopPropagation()}><div><strong>Find your way</strong><button className="plain-icon" onClick={() => setMoreOpen(false)} aria-label="Close more pages"><X size={19}/></button></div>{([ ["finder", "PDF Finder"], ["voice", "Voice review"], ["profile", "My profile"], ["agreement", "Agreement & privacy"], ["about", "About Dawnstudy"] ] as [WorkspaceView, string][]).map(([id, title]) => <button key={id} onClick={() => navigateTo(id)}>{title}<ArrowRight size={16}/></button>)}</nav></div>}
-      <CompanionDock key={`buddy-${account?.id || "guest"}`} community={community} friends={() => navigateTo("friends")} signIn={() => setAuthOpen(true)} generation={generationStatus ? {
-        title: generationStopping ? generationNeedsReconnect ? "Stopping… Reconnect to confirm cancellation." : "Stopping… The current request may finish first." : generationStatus.message || "Preparing your study set…",
-        detail: `${generationStatus.model ? modelName(generationStatus.model) : generationStatus.stage === "queued" ? "Waiting for a processing slot" : inputMode === "questionnaire" ? "Questionnaire import" : "Study set creation"}${generationReadyText(generationStatus.completed, generationStatus.requested) ? ` · ${generationReadyText(generationStatus.completed, generationStatus.requested)}` : ""}`,
-        progress: generationStatus.requested > 0 && generationStatus.requested >= generationStatus.completed ? Math.min(100, generationStatus.completed / generationStatus.requested * 100) : null,
-        reconnect: Boolean(account && generationNeedsReconnect),
-        reconnectDisabled: busy || continueBusy,
-        cancel: Boolean(account),
-        cancelDisabled: !generationCanCancel || generationStopping || generationCancelBusy,
-        cancelTitle: generationStopping || generationCancelBusy ? "Stopping generation…" : generationStatus.stage === "saving" ? "Questions are being saved" : "Cancel generation",
-        error: generationCancelError || undefined,
-        onReconnect: () => { if (account) void restoreGeneration(authToken, account.id); },
-        onCancel: () => void cancelGeneration(),
-      } : null}/>
+      <CompanionDock key={`buddy-${account?.id || "guest"}`} community={community} friends={() => navigateTo("friends")} signIn={() => setAuthOpen(true)}/>
       {account && community.data && !community.data.profile?.onboarded && <Onboarding key={`setup-${account.id}`} community={community} setTheme={setColorTheme} signOut={signOut}/>}
 
       {questionnaireMismatch && <div className="modal-backdrop questionnaire-mismatch-backdrop">

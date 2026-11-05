@@ -139,7 +139,6 @@ def snapshot(room, user, profiles):
         card = room["cards"][room["index"]]
         data["question"] = {"question": card["question"], "options": card.get("options", []),
                             "quiz_type": card_kind(card, room["kind"]), "images": card.get("images", []),
-                            "image_labels": card.get("image_labels", []),
                             "matching_prompts": card.get("matching_prompts", []),
                             "matching_options": card.get("matching_options", [])}
         if room["phase"] == "reveal":

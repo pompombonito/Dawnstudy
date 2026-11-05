@@ -4,12 +4,7 @@ import base64
 import re
 from collections import defaultdict
 from io import StringIO, BytesIO
-from contextvars import ContextVar
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
-from typhoon_ocr import extract_image_text, TyphoonOcrUnavailable
-
-
-ocr_cancellation = ContextVar("ocr_cancellation", default=None)
 
 
 def prepare_questionnaire_image(image):
@@ -95,13 +90,13 @@ def questionnaire_text_from_tsv(tsv, highlight_mask, reading_order="rows"):
 
 def image_data_url(image):
     """Bound stored figure size independently of a scanned page's resolution."""
-    for dimensions, quality in (((840, 840), 76), ((640, 640), 68), ((420, 420), 58), ((280, 280), 50)):
+    for dimensions, quality in (((420, 420), 68), ((360, 360), 58), ((280, 280), 50)):
         with image.copy() as candidate:
             candidate.thumbnail(dimensions, Image.Resampling.LANCZOS)
             output = BytesIO()
             candidate.convert("RGB").save(output, format="WEBP", quality=quality, method=5)
             payload = output.getvalue()
-        if len(payload) <= 60_000:
+        if len(payload) <= 30_000:
             return "data:image/webp;base64," + base64.b64encode(payload).decode("ascii")
     return None
 
@@ -157,21 +152,16 @@ def scanned_figure_regions(image, tsv):
     return sorted(regions, key=lambda bounds: (bounds[1], bounds[0]))[:12]
 
 
-def _ocr_questionnaire_image_local(image, include_images=True):
+def ocr_questionnaire_image(image, include_images=True):
     """OCR a page/image locally, retain visible answer highlights and figure crops."""
     import tessdata
     import tesserocr
 
     clean, mask = prepare_questionnaire_image(image)
-    try:
-        with tesserocr.PyTessBaseAPI(path=tessdata.data_path(), lang="eng", psm=tesserocr.PSM.AUTO) as ocr:
-            ocr.SetImage(clean)
-            ocr.Recognize()
-            tsv = ocr.GetTSVText(0)
-    except (ImportError, RuntimeError):
-        clean.close()
-        mask.close()
-        raise
+    with tesserocr.PyTessBaseAPI(path=tessdata.data_path(), lang="eng", psm=tesserocr.PSM.AUTO) as ocr:
+        ocr.SetImage(clean)
+        ocr.Recognize()
+        tsv = ocr.GetTSVText(0)
     text = questionnaire_text_from_tsv(tsv, mask, reading_order="blocks")
     if not include_images:
         clean.close()
@@ -211,7 +201,7 @@ def _ocr_questionnaire_image_local(image, include_images=True):
     return text
 
 
-def _ocr_learning_image_local(image, include_images=False):
+def ocr_learning_image(image, include_images=False):
     """Return ordinary study text and optional non-text figure crops from a scan."""
     import tessdata
     import tesserocr
@@ -246,111 +236,3 @@ def _ocr_learning_image_local(image, include_images=False):
     finally:
         clean.close()
         mask.close()
-
-
-def _readable_questionnaire(text):
-    from questionnaire import parse_questionnaire, QuestionnaireError
-    try:
-        return bool(text.strip()) and bool(parse_questionnaire([text]))
-    except QuestionnaireError:
-        return False
-
-
-def _question_blocks(text):
-    starts = list(re.finditer(r"(?m)^\s*(\d+)[.)]\s+(.+)$", text))
-    return [(match[1], match[2], text[match.start():starts[index+1].start() if index+1 < len(starts) else len(text)])
-            for index, match in enumerate(starts)]
-
-
-def _protect_local_evidence(local, recovered, include_images):
-    """Move only exactly matched local evidence, not model-created figure links."""
-    from questionnaire import parse_questionnaire
-    local_blocks = {}
-    for number, stem, block in _question_blocks(local):
-        local_blocks.setdefault(number, []).append((stem, block))
-    recovered_blocks = _question_blocks(recovered)
-    recovered_numbers = {number for number, _, _ in recovered_blocks}
-    if set(local_blocks) - recovered_numbers:
-        raise RuntimeError("The recovered page is missing a source question. Upload a clearer copy.")
-    output = []
-    for number, stem, block in recovered_blocks:
-        candidates = local_blocks.get(number, [])
-        matches_source = len(candidates) == 1 and " ".join(candidates[0][0].split()).casefold() == " ".join(stem.split()).casefold()
-        if not matches_source and any(re.search(r"(?im)^\s*Answer:\s*\S", old) for _, old in candidates):
-            raise RuntimeError("A recovered question could not be matched to its verified source answer.")
-        if matches_source:
-            old = candidates[0][1]
-            keys = re.findall(r"(?im)^\s*Answer:\s*(\S[^\n]*)", old)
-            if keys:
-                for key in keys:
-                    if re.fullmatch(r"[A-Ha-h]", key):
-                        option = re.search(r"(?im)^\s*" + re.escape(key) + r"[.)]\s+([^\n]+)", old)
-                        new_option = re.search(r"(?im)^\s*" + re.escape(key) + r"[.)]\s+([^\n]+)", block)
-                        if not option or not new_option or option[1].strip() != new_option[1].strip():
-                            raise RuntimeError("A recovered choice could not be matched to its verified source answer.")
-                block = re.sub(r"(?im)^\s*Answer:[^\n]*\n?", "", block).rstrip() + "\n" + "\n".join("Answer: " + key for key in keys) + "\n"
-            if include_images:
-                markers = re.findall(r"(?m)^\[PDF_IMAGE(?:_CAPTION)?:[^\n]+\]$", old)
-                if markers:
-                    first, separator, rest = block.partition("\n")
-                    block = first + "\n" + "\n".join(markers) + separator + rest
-        output.append(block.strip())
-    result = "\n".join(output)
-    if not output:
-        result = recovered
-    if include_images:
-        for record in parse_questionnaire([result]):
-            if (re.search(r"\b(?:image|figure|shown|pictured|photograph|diagram|micrograph)\b", record["question"], re.I)
-                    and not record.get("images")):
-                raise RuntimeError("This page's text was recovered, but its question figure could not be positioned reliably. Upload a clearer copy of this page.")
-    return result
-
-
-def ocr_questionnaire_image(image, include_images=True, check_cancel=None):
-    """Use remote transcription only when local scan structure cannot be read."""
-    check_cancel = check_cancel or ocr_cancellation.get()
-    if check_cancel:
-        check_cancel()
-    local, error = "", None
-    try:
-        local = _ocr_questionnaire_image_local(image, include_images)
-    except (ImportError, RuntimeError) as exc:
-        error = exc
-    if check_cancel:
-        check_cancel()
-    if _readable_questionnaire(local):
-        return local
-    try:
-        recovered = extract_image_text(image, check_cancel=check_cancel)
-    except TyphoonOcrUnavailable:
-        recovered = None
-    if recovered and _readable_questionnaire(recovered):
-        return _protect_local_evidence(local, recovered, include_images)
-    if error:
-        raise RuntimeError("Local OCR is unavailable and the optional Typhoon reader could not recover this page.") from error
-    return local
-
-
-def ocr_learning_image(image, include_images=False, check_cancel=None):
-    """Recover scan text while retaining only locally measured figure crops."""
-    check_cancel = check_cancel or ocr_cancellation.get()
-    if check_cancel:
-        check_cancel()
-    local, figures, error = "", [], None
-    try:
-        local, figures = _ocr_learning_image_local(image, include_images)
-    except (ImportError, RuntimeError) as exc:
-        error = exc
-    if check_cancel:
-        check_cancel()
-    if len("".join(local.split())) >= 40:
-        return local, figures
-    try:
-        recovered = extract_image_text(image, check_cancel=check_cancel)
-    except TyphoonOcrUnavailable:
-        recovered = None
-    if recovered:
-        return recovered, figures
-    if error:
-        raise RuntimeError("Local OCR is unavailable and the optional Typhoon reader could not recover this page.") from error
-    return local, figures

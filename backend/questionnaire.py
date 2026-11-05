@@ -13,8 +13,7 @@ OPTION = re.compile(r"^(?:\(([A-Ha-h])\)|([A-Ha-h])[.)])\s+(.+)$")
 ANSWER = re.compile(r"^(?:Correct\s+answer|Answer|Ans|A)\s*[:=]\s*(.*)$", re.I)
 KEY_HEADING = re.compile(r"^(?:answer\s*key|answers|key\s+to\s+answers)\s*:?(.*)$", re.I)
 SOURCE = re.compile(r"^\[SOURCE: (.+)\]$")
-PDF_IMAGE = re.compile(r"^\[PDF_IMAGE:\s*(data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=_-]+)\]$", re.I)
-PDF_IMAGE_CAPTION = re.compile(r"^\[PDF_IMAGE_CAPTION:\s*(.+?)\]$", re.I)
+PDF_IMAGE = re.compile(r"^\[PDF_IMAGE:\s*(data:image/(?:jpeg|webp);base64,[A-Za-z0-9+/=_-]+)\]$", re.I)
 SECTION = re.compile(r"^(?:(?:section|part|quiz|test|chapter|unit|set)\s+(?:\d+|[ivxlcdm]+|[a-z])(?:\b|[:.)])|(?-i:[IVXLCDM]+[.)]\s+(?:[A-Z][a-z]+|[A-Z0-9\s,:;—-]{3,}))|#{1,6}\s+\S)", re.I)
 MULTIPLE_ANSWER_STEM = re.compile(r"\b(?:select|choose|check|mark)\s+(?:all|every|(?:the\s+)?(?:two|three|four|[2-8]))\b|\b(?:select|choose)\b.{0,50}\bthat apply\b", re.I)
 
@@ -201,7 +200,6 @@ def parse_questionnaire(documents, limit=200):
     for document_index, document in enumerate(documents):
         current, in_key, source = None, False, ""
         pending_images = []
-        pending_image_labels = []
         scope = new_scope(document_index)
         lines = document.splitlines()
         # Split same-line choices only at explicit labels; preserve their order.
@@ -213,26 +211,13 @@ def parse_questionnaire(documents, limit=200):
             if image:
                 if current is None:
                     pending_images.append(image[1])
-                    pending_image_labels.append("")
                 else:
                     current.setdefault("images", []).append(image[1])
-                    if "image_labels" in current:
-                        current["image_labels"].append("")
-                    if source and source not in current["source_refs"]:
-                        current["source_refs"].append(source)
-                continue
-            image_caption = PDF_IMAGE_CAPTION.match(line)
-            if image_caption:
-                if current is not None and current.get("images"):
-                    labels = current.setdefault("image_labels", [""] * len(current["images"]))
-                    labels[-1] = image_caption[1]
-                elif pending_images:
-                    pending_image_labels[-1] = image_caption[1]
                 continue
             marker = SOURCE.match(line)
             if marker:
                 source = marker[1]
-                following = next((value.strip() for value in lines[line_index + 1:] if value.strip() and not SOURCE.match(value.strip()) and not PDF_IMAGE.match(value.strip()) and not PDF_IMAGE_CAPTION.match(value.strip())), "")
+                following = next((value.strip() for value in lines[line_index + 1:] if value.strip() and not SOURCE.match(value.strip()) and not PDF_IMAGE.match(value.strip())), "")
                 continues_current = current is not None and not (QUESTION.match(following) or QA.match(following) or KEY_HEADING.match(following))
                 if continues_current and source not in current["source_refs"]:
                     current["source_refs"].append(source)
@@ -280,10 +265,7 @@ def parse_questionnaire(documents, limit=200):
                 current["matching_prompts"] = []
                 if pending_images:
                     current["images"] = pending_images[:]
-                    if any(pending_image_labels):
-                        current["image_labels"] = pending_image_labels[:]
                     pending_images.clear()
-                    pending_image_labels.clear()
                 records.append(current)
                 scope["records"].append(current)
                 if len(records) > limit:
@@ -571,12 +553,8 @@ def convert_questionnaire(records, study_format, completions, existing_items=Non
             saved = {**existing, "question": record["question"],
                      "source_number": record.get("source_number", record["number"]),
                      "questionnaire_index": questionnaire_index}
-            for field in ("images", "image_labels", "image_captions"):
-                saved.pop(field, None)
             if record.get("images"):
                 saved["images"] = record["images"]
-                if record.get("image_labels"):
-                    saved["image_labels"] = record["image_labels"]
             if record.get("source_refs"):
                 saved["source_refs"] = record["source_refs"]
             items.append(saved)
@@ -591,8 +569,6 @@ def convert_questionnaire(records, study_format, completions, existing_items=Non
         item = {"question": record["question"], "answer": answer, "source_refs": record["source_refs"], "source_number": record.get("source_number", record["number"]), "questionnaire_index": questionnaire_index, "imported": True, "answer_origin": "inferred" if inferred else "provided"}
         if record.get("images"):
             item["images"] = record["images"]
-            if record.get("image_labels"):
-                item["image_labels"] = record["image_labels"]
         correct_answers = record.get("correct_answers") or completion.get("correct_answers")
         preserve_source_type = str(record["number"]) in preserve_types
         record_format = questionnaire_record_type(record) if preserve_source_type else study_format

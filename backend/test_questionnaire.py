@@ -137,27 +137,6 @@ class ParserTests(unittest.TestCase):
 
 
 class ImportRouteTests(unittest.TestCase):
-    def test_partial_136_question_import_progress_uses_source_total_not_notes_default(self):
-        source = "\n".join(f"{number}. Choose item {number}?\nA. Alpha\nB. Beta\n" + ("Answer: A" if number <= 134 else "") for number in range(1, 137))
-        snapshots = []
-        update = main.generation_jobs.update
-
-        def record(job_id, **fields):
-            result = update(job_id, **fields)
-            snapshots.append(main.generation_jobs.get(job_id, self.user["user_id"]))
-            return result
-
-        with patch.object(main, "configured_ai_models", return_value=[]), patch.object(main.generation_jobs, "update", side_effect=record):
-            response = self.request(source, "same_as_source", route="/api/generation-jobs", question_count="10")
-        self.assertEqual(response.status_code, 202, response.text)
-        job = main.generation_jobs.get(response.json()["job_id"], self.user["user_id"])
-        self.assertEqual(job["status"], "complete")
-        self.assertEqual((job["completed"], job["requested"]), (134, 136))
-        self.assertIn("134 of 136 questions are saved", job["message"])
-        self.assertIn("other 2 could not be completed in this run", job["message"])
-        self.assertTrue(any(s["stage"] == "preparing" and s["requested"] == 136 for s in snapshots))
-        self.assertTrue(all(s["requested"] == 0 or s["requested"] >= s["completed"] for s in snapshots))
-
     def setUp(self):
         self.user = {"user_id": "gmail-student", "email": "student@gmail.com"}
         main.app.dependency_overrides[main.onboarded_user] = lambda: self.user
@@ -207,55 +186,6 @@ class ImportRouteTests(unittest.TestCase):
             self.assertEqual(item["options"], ["Mitochondrion", "Nucleus", "Ribosome", "Chloroplast"])
             self.assertEqual(item["answer_origin"], "provided" if with_key else "inferred")
             self.assertEqual("AI-inferred" in item["explanation"], not with_key)
-
-    def test_partial_questionnaire_completion_retries_only_missing_records_in_smaller_batches(self):
-        calls = []
-
-        def partial_completion(_provider, _model, _key, prompt, _schema, _max_tokens):
-            batch = json.loads(prompt.split("\n", 1)[1])
-            calls.append([record["number"] for record in batch])
-            returned = batch[:2] if len(batch) > 2 else batch
-            return {"title": "Ignored", "items": [{
-                "number": record["number"], "question": record["question"], "answer": f"Term {record['number']}",
-                "uncertain": False, "distractors": [], "matching_pairs": [],
-            } for record in returned]}
-
-        self.provider.side_effect = partial_completion
-        source = "\n".join(f"{number}. Identify energy concept {number}." for number in range(1, 9))
-        result = self.request(source, "flashcards")
-        self.assertEqual(result.status_code, 200, result.text)
-        self.assertFalse(result.json()["incomplete"], (result.json(), calls))
-        self.assertEqual(len(result.json()["items"]), 8)
-        self.assertEqual([item["answer"] for item in result.json()["items"]], [f"Term {number}" for number in range(1, 9)])
-        self.assertEqual(len(calls), 5)
-        self.assertTrue(any(len(batch) == 3 for batch in calls))
-        self.assertEqual(set(number for batch in calls for number in batch), {str(number) for number in range(1, 9)})
-
-    def test_questionnaire_retries_after_a_short_explicit_provider_rate_limit(self):
-        model = ("mock:test", "mock", "test", "fake-key", "Test model")
-        clock, calls = [0.0], [0]
-
-        def provider(*_args):
-            calls[0] += 1
-            if calls[0] == 1:
-                raise main.ProviderError("mock", model[0], 429, "temporary rate limit", retry_after=5)
-            return {"title": "Ignored", "items": [{
-                "number": "1", "question": "Name the electron carrier.", "answer": "NADH",
-                "uncertain": False, "distractors": [], "matching_pairs": [],
-            }]}
-
-        with patch.object(main, "configured_ai_models", return_value=[model]), \
-             patch.object(main, "generate_with_provider", side_effect=provider), \
-             patch.object(main.time, "monotonic", side_effect=lambda: clock[0]), \
-             patch.object(main.time, "sleep", side_effect=lambda duration: clock.__setitem__(0, clock[0] + duration)):
-            items, used, incomplete, requested, _unresolved = main.import_questionnaire(
-                ["1. Name the electron carrier."], "flashcards", "auto")
-        self.assertEqual(calls[0], 2)
-        self.assertEqual(clock[0], 5)
-        self.assertEqual(used, [model[0]])
-        self.assertFalse(incomplete)
-        self.assertEqual(requested, 1)
-        self.assertEqual(items[0]["answer"], "NADH")
 
     def test_missing_key_preserves_original_choices_and_infers_only_answer(self):
         result = self.request(CHOICES.split("Answer key")[0])
@@ -367,7 +297,7 @@ class ImportRouteTests(unittest.TestCase):
         self.assertTrue(job["result"]["incomplete"])
         self.assertEqual(job["result"]["requested_count"], 2)
         self.assertEqual([item["answer"] for item in job["result"]["items"]], ["Alpha"])
-        self.assertIn("Questions 2 still need verified answers or choices", job["result"]["notices"][0])
+        self.assertIn("Questions 2 still need a verified answer", job["result"]["notices"][0])
         self.assertTrue(self.saved[0]["incomplete"])
         self.assertEqual(self.saved[0]["requested_count"], 2)
 
@@ -382,24 +312,16 @@ class ImportRouteTests(unittest.TestCase):
         self.assertEqual([item["question"] for item in job["result"]["items"]], ["Which is a primary color?"])
         self.assertEqual(job["result"]["items"][0]["options"], ["Red", "Table", "Cloud", "Chair"])
 
-    def test_figure_stays_on_card_and_is_sent_separately_to_a_vision_model(self):
+    def test_figure_stays_on_returned_card_without_entering_text_model_prompt(self):
         image = "data:image/webp;base64,AA=="
         source = f"1. Which option is shown?\n[PDF_IMAGE: {image}]\nA. Alpha\nB. Beta\nC. Gamma\nD. Delta"
-        vision = [("gemini:test", "gemini", "gemini-test", "test-key", "Vision test")]
-        with patch.object(main, "configured_ai_models", return_value=vision):
-            response = self.request(source)
+        response = self.request(source)
         self.assertEqual(response.status_code, 200, response.text)
         item = response.json()["items"][0]
         self.assertEqual(item["images"], [image])
         prompt = self.provider.call_args.args[3]
         self.assertNotIn(image, prompt)
         self.assertIn('"image_count": 1', prompt)
-
-    def test_unanswered_image_question_is_not_guessed_by_a_text_only_model(self):
-        source = "1. Which option is shown?\n[PDF_IMAGE: data:image/webp;base64,AA==]\nA. Alpha\nB. Beta"
-        response = self.request(source)
-        self.assertEqual(response.status_code, 503)
-        self.provider.assert_not_called()
 
     def test_questionnaire_partial_set_can_resume_without_reanswering_saved_cards(self):
         source = "1. First question?\nAnswer: Alpha\n2. Second question?"

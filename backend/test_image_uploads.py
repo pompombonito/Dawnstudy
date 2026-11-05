@@ -11,9 +11,6 @@ main = fixtures.main
 
 
 def raster_bytes(format_name):
-    # Test suites may import Pillow lazily through another module first. Make
-    # this fixture's decoder registry deterministic when generating the bytes.
-    Image.init()
     image = Image.new("RGB", (80, 60), "white")
     output = BytesIO()
     image.save(output, format=format_name)

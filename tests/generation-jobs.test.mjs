@@ -7,7 +7,7 @@ const source = readFileSync(new URL("../app/generation-jobs.ts", import.meta.url
 const javascript = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
 }).outputText;
-const { findGenerationJob, startGenerationJob, cancelGenerationJob, pollGenerationJob, generationReadyText, GenerationJobError, GenerationCancelledError, QuestionnaireTypeMismatchError } =
+const { findGenerationJob, startGenerationJob, cancelGenerationJob, pollGenerationJob, GenerationJobError, GenerationCancelledError, QuestionnaireTypeMismatchError } =
   await import("data:text/javascript;base64," + Buffer.from(javascript).toString("base64"));
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -15,14 +15,6 @@ const running = { job_id: "job-1", status: "running", stage: "generating", messa
 const result = { id: "saved-set", title: "Recovered questions", items: [{ question: "Already generated" }] };
 const options = (fetcher, controller = new AbortController()) => ({
   baseUrl: "https://api.example", token: "own-account-token", signal: controller.signal, fetcher, intervalMs: 0, timeoutMs: 1000,
-});
-
-test("progress reports source totals and never renders the stale 134-of-10 ratio", () => {
-  assert.equal(generationReadyText(134, 136), "134 of 136 questions ready");
-  assert.equal(generationReadyText(134, 10), "134 questions ready");
-  assert.equal(generationReadyText(0, 0), "");
-  assert.equal(generationReadyText(1, 0), "1 question ready");
-  assert.equal(generationReadyText(136, 136), "136 of 136 questions ready");
 });
 
 test("page reload discovers and polls the existing job using GET only", async () => {
