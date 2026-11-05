@@ -6,6 +6,15 @@ import { characterMotionStyle } from "./character-motion";
 
 const ink = "#302b35";
 const silver = "#cbd1dd";
+
+function shadeHex(color: string, amount: number) {
+  const match = /^#?([0-9a-f]{6})$/i.exec(color);
+  if (!match) return color;
+  const value = match[1];
+  const channels = [0, 2, 4].map(index => parseInt(value.slice(index, index + 2), 16));
+  const target = amount < 0 ? 0 : 255;
+  return `#${channels.map(channel => Math.round(channel + (target - channel) * Math.abs(amount)).toString(16).padStart(2, "0")).join("")}`;
+}
 const eyeScale: Record<string, [number, number]> = {
   "kpop-rm": [1.16, 1.1], "kpop-jin": [1.2, 1.24], "kpop-suga": [1.18, .94], "kpop-jhope": [1.24, 1.16],
   "kpop-jimin": [1.2, 1.03], "kpop-v": [1.25, 1.32], "kpop-jungkook": [1.31, 1.45],
@@ -249,8 +258,10 @@ function CatalogHair({ c, front }: { c: AnimeCharacter; front: boolean }) {
   const color = detail.gender === "feminine" ? "#59414a" : ink;
   return <g className={front ? "anime-hair-front" : "anime-hair-back"} transform={detail.part === "right" ? "translate(100 0) scale(-1 1)" : undefined} fill={c.hair} stroke={color} strokeWidth="1.15" strokeLinejoin="round">
     {!front && style === "updo" && <><path d="M36 21q-9-3-5-10 3-6 11-4 10-4 14 4 5 8-3 12Z"/><path d="M37 12q8-4 12 4" fill="none" stroke="#b29891" strokeWidth=".65" opacity=".6"/></>}
+    {!front && <path d="M21 48Q15 23 35 13Q50 5 65 14Q84 23 79 49L73 46Q71 31 61 25Q50 19 39 25Q28 31 27 46Z" stroke="none"/>}
     <path d={!front && style === "curly" && detail.gender === "masculine" ? "M23 28q-8 6-5 16-4 9 3 16l9 8h40l10-11q4-9-1-17 2-12-10-15Z" : (front ? catalogFrontHair : catalogBackHair)[style]}/>
     {front && <Fringe c={c}/>}
+    {front && style === "slicked-back" && <path d="M23 37Q31 20 49 18q12 0 22 8-10 0-17 7-11-5-22 5l-7 11Z" stroke="none"/>}
     {front && (!detail.fringe || detail.fringe === "none") && detail.gender === "feminine" && <path d="M23 45Q23 30 42 25Q31 35 28 52l-2 9Zm54 0Q77 30 58 25q11 10 14 27l2 9Z" fill={c.hair} stroke="none"/>}
     {front && <path d={style === "curly" ? "M24 29q-3-7 6-8m4-4q1-5 8-2m5-1q7-4 11 3m7 1q8 0 10 8" : "M27 30q2-12 17-14m15 1q12 3 15 16"} fill="none" stroke="#d4bdad" strokeWidth=".65" opacity=".33"/>}
     {!front && style === "braids" && <path d="m23 74 3 2m-3 3 3 2m-3 3 3 2m-3 3 3 2m46-14 3-2m-3 7 3-2m-3 7 3-2m-3 7 3-2" fill="none" stroke="#d0aea0" strokeWidth=".65" opacity=".5"/>}
@@ -324,7 +335,7 @@ function Hair({ c, front = false }: { c: AnimeCharacter; front?: boolean }) {
   </g>;
 }
 
-function ChibiBody({ c, skin }: { c: AnimeCharacter; skin: string }) {
+function ChibiBody({ c, skin, fabricId }: { c: AnimeCharacter; skin: string; fabricId: string }) {
   const detail = artistStyling(c), bp = c.series === "BLACKPINK";
   const feminine = bp || detail.gender === "feminine";
   const jisoo = c.id === "kpop-jisoo", lisa = c.id === "kpop-lisa", rose = c.id === "kpop-rose", jennie = c.id === "kpop-jennie";
@@ -332,13 +343,14 @@ function ChibiBody({ c, skin }: { c: AnimeCharacter; skin: string }) {
   const trousers = !feminine || jisoo || lisa;
   const shortSleeves = bp || detail.outfitStyle === "casual" || dress;
   const bottom = trousers ? "#292730" : "#37313d";
+  const outfitFill = `url(#${fabricId})`;
   return <g strokeLinecap="round" strokeLinejoin="round">
     <path d={lisa ? "M39 97h10l-1 25H35l4-25Zm13 0h9l5 25H53Z" : "M40 98h9l-1 25h-9Zm12 0h9l1 25h-9Z"} fill={trousers ? bottom : skin} stroke={trousers ? "#24212b" : "#bc9384"} strokeWidth=".9"/>
     {!trousers && <path d="M39 115h9v9h-9Zm14 0h9v9h-9Z" fill={rose ? "#f2eff2" : "#25222a"} stroke={rose ? "#aaa4af" : "#25222a"} strokeWidth=".7"/>}
     <path d="M39 122q-5 1-5 5 4 3 14 1v-6Zm14 0v6q10 2 14-1 0-4-5-5Z" fill={rose ? "#f6f3f5" : "#24212a"} stroke={rose ? "#8d8793" : "#19171f"} strokeWidth=".9"/>
     <path d="M35 127h12m7 0h12" stroke={rose ? "#c4beca" : "#625969"} strokeWidth=".6"/>
     {rose && <path d="m40 123 5 1m-5 1 5 1m10-3 5 1m-5 1 5 1" stroke="#b5adbb" strokeWidth=".65"/>}
-    <path d="M41 80q-9 1-11 10l3 12 5-1-1-11 7-5Zm18 0q9 1 11 10l-3 12-5-1 1-11-7-5Z" fill={c.outfit} stroke={ink} strokeWidth="1"/>
+    <path d="M41 80q-9 1-11 10l3 12 5-1-1-11 7-5Zm18 0q9 1 11 10l-3 12-5-1 1-11-7-5Z" fill={outfitFill} stroke={ink} strokeWidth="1"/>
     {shortSleeves && <>
       <path d={jisoo ? "M31 89q-1 8 5 13l4-3q-5-4-5-10Z" : "M31 89q-1 8 3 14l4-2-3-12Z"} fill={jisoo ? "#e9bb43" : skin} stroke={jisoo ? "#ab8229" : "#bc9384"} strokeWidth=".8"/>
       <path d={bp ? "m66 89 3 2-4 12-5-2 5-5Z" : "M65 89q4 7 0 14l-4-2 3-12Z"} fill={skin} stroke="#bc9384" strokeWidth=".8"/>
@@ -346,10 +358,10 @@ function ChibiBody({ c, skin }: { c: AnimeCharacter; skin: string }) {
     <ellipse cx={jisoo ? 39 : 35} cy={jisoo ? 100 : 103} rx="2.3" ry="2.8" fill={skin} stroke="#bc9384" strokeWidth=".7"/>
     <ellipse cx={bp ? 62 : 65} cy="102" rx="2.3" ry="2.8" fill={skin} stroke="#bc9384" strokeWidth=".7"/>
     {feminine && !jisoo && !lisa && <>
-      <path d={dress ? "M39 97h22l8 15q-19 5-38 0Z" : "M38 97h24l4 11q-16 4-32 0Z"} fill={dress ? c.outfit : bottom} stroke={ink} strokeWidth="1"/>
+      <path d={dress ? "M39 97h22l8 15q-19 5-38 0Z" : "M38 97h24l4 11q-16 4-32 0Z"} fill={dress ? outfitFill : bottom} stroke={ink} strokeWidth="1"/>
       <path d={dress ? "m40 102-3 9m9-9-1 11m9-11 1 11m5-11 3 9" : "m41 100-2 7m9-7v9m8-9 2 7"} fill="none" stroke={dress ? "#ffffff" : "#6f626e"} strokeOpacity=".35" strokeWidth=".7"/>
     </>}
-    <Outfit c={c} skin={skin}/>
+    <Outfit c={c} skin={skin} fabricId={fabricId} shortSleeves={shortSleeves}/>
     {bp && <>
       <text x="50" y="88" textAnchor="middle" fontFamily="Arial Black, sans-serif" fontStyle="italic" fontWeight="900" fontSize="4.5" fill="#fff" letterSpacing=".05">JUMP!</text>
       <path d="M38 98h24" fill="none" stroke="#b6a3a0" strokeWidth=".6"/>
@@ -361,13 +373,25 @@ function ChibiBody({ c, skin }: { c: AnimeCharacter; skin: string }) {
   </g>;
 }
 
-function Outfit({ c, skin }: { c: AnimeCharacter; skin: string }) {
+function Outfit({ c, skin, fabricId, shortSleeves }: { c: AnimeCharacter; skin: string; fabricId: string; shortSleeves: boolean }) {
   const bp = c.series === "BLACKPINK", detail = artistStyling(c);
   const rose = c.id === "kpop-rose";
+  const fabric = `url(#${fabricId})`;
+  const seam = shadeHex(c.outfit, -.22);
+  const topShape = shortSleeves
+    ? bp
+      ? "M42 78q-5-1-8 2l-4 6q-1 3 3 5l4-2 1-4 1 12q11 3 22 0l1-12 1 4 4 2q4-2 3-5l-4-6q-3-3-8-2l-5-2q-5 5-10 0Z"
+      : "M42 78q-5-1-8 2l-4 7q-1 3 3 5l4-2 1-4 1 14q11 4 22 0l1-14 1 4 4 2q4-2 3-5l-4-7q-3-3-8-2l-5-2q-5 5-10 0Z"
+    : bp
+      ? "M42 78q-6 1-8 6l-3 10q0 3 4 4 15 3 30 0 4-1 4-4l-3-10q-2-5-8-6l-5-2q-5 5-10 0Z"
+      : "M42 78q-7 1-9 7l-3 13q0 4 4 5 16 4 32 0 4-1 4-5l-3-13q-2-6-9-7l-5-2q-5 5-10 0Z";
   return <g strokeLinejoin="round">
-    <path d={bp ? "M40 80q-6 2-6 10l3 7q13 2 26 0l3-7q0-8-6-10Z" : "M40 80q-7 2-7 11l3 12q14 3 28 0l3-12q0-9-7-11Z"} fill={c.outfit} stroke={ink} strokeWidth="1"/>
+    <path d={topShape} fill={fabric} stroke={ink} strokeWidth="1"/>
+    {shortSleeves && <path d="M32 88q3 2 6 .5m24-.5q3 1.5 6-.5" fill="none" stroke={seam} strokeWidth=".65" strokeLinecap="round"/>}
     <path d="M44 73v7q6 5 12 0v-7" fill={skin} stroke="#bc9384" strokeWidth=".8"/>
     {rose ? <path d="M38 81q11 8 24 1" fill="none" stroke="#dedde5" strokeWidth="2.2"/> : <path d="M43 80q7 6 14 0" fill="none" stroke={bp ? "#78717d" : "#ded6d1"} strokeWidth=".85"/>}
+    <path d={bp ? "M36 94q14 2 28 0m-22-11 3 2m15-2-3 2" : "M35 100q15 3 30 0m-24-16 3 2m15-2-3 2"} fill="none" stroke={seam} strokeOpacity=".55" strokeWidth=".6"/>
+    <path d={bp ? "M37 87q2 4 1 7m25-7q-2 4-1 7" : "M36 90q2 4 1 7m27-7q-2 4-1 7"} fill="none" stroke="#fff8ee" strokeOpacity=".22" strokeWidth=".65"/>
     {!bp && (detail.outfitStyle === "suit" || detail.outfitStyle === "coat") && <>
       <path d="m41 81 7 7-6 8-5-11m22-4-7 7 6 8 5-11" fill="#ece6e2" stroke="#b9afb8" strokeWidth=".5"/>
       <path d="m48 84 2 2 2-2-1 14h-2Z" fill="#746078"/>
@@ -390,11 +414,14 @@ export default function KpopAvatar({ character: c, className = "", label, hoverL
   const p = c.series === "BLACKPINK" ? portraits[c.id] || chibiPortrait(c) : chibiPortrait(c);
   const skin = "skin" in c && typeof c.skin === "string" ? c.skin : "#f0d0ba";
   const bp = c.series === "BLACKPINK";
+  const outfitColor = typeof c.outfit === "string" ? c.outfit : "#657080";
+  const fabricId = `idol-fabric-${uid}`;
   return <svg className={`ds-avatar anime-avatar motion-avatar kpop-avatar ${className}`} style={characterMotionStyle(c.id)} data-character={c.id} data-transparent="true" data-animated="true" viewBox="0 0 100 132" xmlns="http://www.w3.org/2000/svg" role={label ? "img" : undefined} aria-label={label} aria-hidden={!label || undefined}>
     {hoverLine && <title>{`${c.name} · ${c.series}\n${animeCompanionBubble(c.id, 1)?.text || ""}`}</title>}
+    <defs><linearGradient id={fabricId} x1="0" y1="0" x2="1" y2="0"><stop stopColor={shadeHex(outfitColor, .13)}/><stop offset=".48" stopColor={outfitColor}/><stop offset="1" stopColor={shadeHex(outfitColor, -.16)}/></linearGradient></defs>
     {bp && <defs><radialGradient id={`idol-face-light-${uid}`} cx="35%" cy="30%" r="75%"><stop stopColor="#fff8ee" stopOpacity=".3"/><stop offset="1" stopColor="#fff8ee" stopOpacity="0"/></radialGradient></defs>}
     <Hair c={c}/>
-    <ChibiBody c={c} skin={skin}/>
+    <ChibiBody c={c} skin={skin} fabricId={fabricId}/>
     <ellipse cx="18" cy="52" rx="3.6" ry="5.5" fill={skin} stroke="#ba9380" strokeWidth="1"/><ellipse cx="82" cy="52" rx="3.6" ry="5.5" fill={skin} stroke="#ba9380" strokeWidth="1"/>
     <path d={p.jaw} fill={skin} stroke={bp ? "#72515d" : ink} strokeWidth={bp ? 1.1 : 1.4}/>
     {bp ? <path d={p.jaw} fill={`url(#idol-face-light-${uid})`}/> : <path d="M25 55q2 13 14 17m36-17q-2 13-14 17" fill="none" stroke="#d6ab96" opacity=".25" strokeWidth="2"/>}
