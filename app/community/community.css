@@ -312,6 +312,9 @@
   gap: 13px;
   margin-bottom: 15px;
 }
+.avatar-picker > .segmented button {
+  flex: 1 0 74px;
+}
 .avatar-grid {
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));

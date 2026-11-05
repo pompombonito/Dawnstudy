@@ -87,8 +87,10 @@ export default function CompanionDock({
     } catch {
       /* Use defaults. */
     }
-    const chosenId = p?.companion_id || local?.id || "cat",
-      chosenName = p?.companion_name || local?.name || findAnimeCharacter(chosenId)?.name || "Miso";
+    const storedId = p?.companion_id || local?.id || "cat",
+      chosenId = findAnimeCharacter(storedId)?.id || storedId,
+      storedName = p?.companion_name || local?.name || "",
+      chosenName = companionNameAfterSelection(storedName, storedId, chosenId) || findAnimeCharacter(chosenId)?.name || "Miso";
     setId(chosenId);
     setName(chosenName);
     setDraftId(chosenId);

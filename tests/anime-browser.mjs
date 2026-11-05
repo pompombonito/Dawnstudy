@@ -4,6 +4,9 @@ import { readFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 const catalog = JSON.parse(await readFile(new URL("../backend/anime-characters.json", import.meta.url), "utf8"));
+const animeCatalog = catalog.filter(character => !character.id.startsWith("kpop-"));
+const kpopCatalog = catalog.filter(character => character.id.startsWith("kpop-"));
+const animeSeries = [...new Set(animeCatalog.map(character => character.series))];
 const { chromium } = await import(process.env.DAWNSTUDY_PLAYWRIGHT_PATH ? pathToFileURL(process.env.DAWNSTUDY_PLAYWRIGHT_PATH).href : "playwright-core");
 const browser = await chromium.launch({ executablePath: process.env.DAWNSTUDY_BROWSER || "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", headless: true });
 const artifacts = join(tmpdir(), "dawnstudy-anime-qa");
@@ -12,7 +15,7 @@ const base = process.env.DAWNSTUDY_TEST_URL || "http://127.0.0.1:3044";
 let profile = { user_id: "anime-student", nickname: "Student", avatar_id: "cat", theme: "kuromi-dark", gender: "prefer-not-to-say", companion_id: "cat", companion_name: "Miso", onboarded: true, terms_version: "2026-10-30", public_key: null, key_fingerprint: "" };
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
 await context.addInitScript(() => localStorage.setItem("dawnstudy_session_v1", "test-token"));
-await context.route(`${process.env.DAWNSTUDY_TEST_API_URL || "http://localhost:8000"}/**`, async route => {
+await context.route(`${process.env.DAWNSTUDY_TEST_API_URL || "http://localhost:8000"}/api/**`, async route => {
   const req = route.request(), path = new URL(req.url()).pathname;
   const headers = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "*" };
   if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers });
@@ -29,17 +32,125 @@ await context.route(`${process.env.DAWNSTUDY_TEST_API_URL || "http://localhost:8
 const page = await context.newPage(), errors = [];
 page.on("pageerror", error => errors.push(error.message));
 async function noOverflow() { assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false); }
+async function openProfile() {
+  if (await page.locator(".profile-settings").count()) return;
+  const desktop = page.locator(".sidebar").getByRole("button", { name: "My profile", exact: true });
+  if (await desktop.isVisible()) await desktop.click();
+  else {
+    await page.getByRole("button", { name: "More", exact: true }).click();
+    await page.getByRole("button", { name: "My profile", exact: true }).click();
+  }
+  await page.locator(".profile-settings").waitFor();
+}
 try {
   await page.goto(base); await page.waitForLoadState("networkidle");
+  if (process.env.DAWNSTUDY_KPOP_ONLY) {
+    await page.locator(".sidebar").getByRole("button", { name: "My profile", exact: true }).click();
+    const picker = page.locator(".profile-settings .avatar-picker");
+    await picker.getByRole("button", { name: "K-pop", exact: true }).click();
+    for (const [group, count] of [["BLACKPINK", 4], ["BTS", 7]]) {
+      await picker.getByLabel("K-pop group", { exact: true }).selectOption(group);
+      assert.equal(await picker.locator(".avatar-grid button").count(), count, group);
+      assert.equal(await picker.locator('svg[data-character^="anime-"]').count(), 0);
+      for (const artist of kpopCatalog.filter(character => character.series === group)) {
+        const option = picker.getByRole("button", { name: `${artist.name} · ${group}`, exact: true });
+        assert.equal(await option.locator(`svg[data-character="${artist.id}"]`).count(), 1);
+        assert.equal(await option.locator("svg").getAttribute("data-transparent"), "true");
+        assert.equal(await option.locator("svg").getAttribute("data-animated"), "true");
+        assert.ok((await option.getAttribute("title")).includes(artist.studyLine));
+        const motion = await option.locator("svg").evaluate(svg => {
+          return [".anime-eye-blink", ".anime-mouth-motion", ".anime-hair-front", ".anime-hair-back"].every(selector => {
+            const nodes = [...svg.querySelectorAll(selector)];
+            return nodes.length > 0 && nodes.every(node => {
+              const animation = node.getAnimations()[0];
+              if (!animation) return false;
+              const timing = animation.effect.getTiming(), time = animation.currentTime, state = animation.playState;
+              const duration = Number(timing.duration), phase = selector === ".anime-eye-blink" ? .905 : .5;
+              animation.pause(); animation.currentTime = timing.delay + duration;
+              const start = getComputedStyle(node).transform;
+              animation.currentTime = timing.delay + duration * (1 + phase);
+              const moved = getComputedStyle(node).transform;
+              animation.currentTime = time;
+              if (state === "running") animation.play();
+              return start !== moved;
+            });
+          });
+        });
+        assert.ok(motion, `${artist.name} has visible eye, mouth and hair motion`);
+        if (["kpop-jisoo", "kpop-rm"].includes(artist.id)) {
+          const transparent = await option.locator("svg").evaluate(async svg => {
+            if (getComputedStyle(svg).backgroundColor !== "rgba(0, 0, 0, 0)") return false;
+            const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)], { type: "image/svg+xml" }));
+            try {
+              const image = new Image(); image.src = url; await image.decode();
+              const canvas = document.createElement("canvas"); canvas.width = canvas.height = 100;
+              const drawing = canvas.getContext("2d"); drawing.drawImage(image, 0, 0, 100, 100);
+              return [[0,0],[99,0],[0,99],[99,99]].every(([x,y]) => drawing.getImageData(x,y,1,1).data[3] === 0);
+            } finally { URL.revokeObjectURL(url); }
+          });
+          assert.ok(transparent, `${artist.name} retains empty transparent surroundings`);
+        }
+      }
+    }
+    await picker.getByLabel("Search artists", { exact: true }).fill("Kim Namjoon");
+    assert.equal(await picker.locator(".avatar-grid button").count(), 1);
+    await picker.getByRole("button", { name: "RM · BTS", exact: true }).waitFor();
+    await picker.getByRole("button", { name: "Anime", exact: true }).click();
+    assert.equal(await picker.getByLabel("Anime series", { exact: true }).inputValue(), "all");
+    assert.equal(await picker.getByLabel("Search anime characters", { exact: true }).inputValue(), "");
+    assert.equal(await picker.locator('svg[data-character^="kpop-"]').count(), 0);
+    await picker.getByLabel("Anime series", { exact: true }).selectOption("Naruto");
+    await picker.getByLabel("Search anime characters", { exact: true }).fill("Sasuke");
+    await picker.getByRole("button", { name: "K-pop", exact: true }).click();
+    assert.equal(await picker.getByLabel("K-pop group", { exact: true }).inputValue(), "all");
+    assert.equal(await picker.getByLabel("Search artists", { exact: true }).inputValue(), "");
+    assert.equal(await picker.locator(".avatar-grid button").count(), kpopCatalog.length);
+    await picker.getByRole("button", { name: "JISOO · BLACKPINK", exact: true }).click();
+    await page.getByRole("button", { name: "Save profile", exact: true }).click();
+    await page.getByText("Your profile is saved.", { exact: true }).waitFor();
+    assert.equal(profile.avatar_id, "kpop-jisoo");
+    await page.reload(); await page.waitForLoadState("networkidle");
+    await openProfile();
+    assert.equal(await page.locator('.profile-avatar-button svg[data-character="kpop-jisoo"]').count(), 1);
+    assert.equal(await picker.getByRole("button", { name: "K-pop", exact: true }).getAttribute("aria-pressed"), "true");
+    await page.setViewportSize({ width: 390, height: 844 });
+    await picker.getByLabel("K-pop group", { exact: true }).selectOption("BTS");
+    await picker.getByLabel("Search artists", { exact: true }).fill("Kim Namjoon");
+    await picker.getByRole("button", { name: "RM · BTS", exact: true }).click();
+    await page.getByRole("button", { name: "Save profile", exact: true }).click();
+    await page.getByText("Your profile is saved.", { exact: true }).waitFor();
+    assert.equal(profile.avatar_id, "kpop-rm");
+    await page.reload(); await page.waitForLoadState("networkidle");
+    await openProfile();
+    assert.equal(await page.locator('.profile-avatar-button svg[data-character="kpop-rm"]').count(), 1);
+    await page.getByRole("button", { name: "Miso, open companion chat", exact: true }).click();
+    await page.getByRole("button", { name: "Customize companion", exact: true }).click();
+    const buddy = page.locator(".buddy-settings");
+    await buddy.getByRole("button", { name: "K-pop", exact: true }).click();
+    await buddy.getByLabel("K-pop group", { exact: true }).selectOption("BLACKPINK");
+    await buddy.getByRole("button", { name: "JENNIE · BLACKPINK", exact: true }).click();
+    assert.equal(await buddy.getByLabel("Companion name", { exact: true }).inputValue(), "JENNIE");
+    await buddy.getByRole("button", { name: "Save companion", exact: true }).click();
+    await page.getByText("Saved. Your buddy has a new look!", { exact: true }).waitFor();
+    assert.equal(profile.companion_id, "kpop-jennie");
+    assert.equal(profile.companion_name, "JENNIE");
+    await page.getByRole("button", { name: "Close companion", exact: true }).click();
+    await page.mouse.move(0, 0); await page.locator(".buddy-launcher").hover();
+    assert.equal(await page.locator(".buddy-bubble span").innerText(), kpopCatalog.find(character => character.id === "kpop-jennie").studyLine);
+    assert.equal(await page.locator(".buddy-quote-source").count(), 0);
+    await noOverflow();
+    await page.screenshot({ path: join(artifacts, "mobile-kpop-targeted.png"), animations: "disabled" });
+    console.log("PASS K-pop rosters, actual artist names, category separation/reset, full-name search, desktop/mobile profile persistence, named mobile companion save, and original hover encouragement.");
+  } else {
   if (!process.env.DAWNSTUDY_DIALOGUE_ONLY) {
   await page.locator(".sidebar").getByRole("button", { name: "My profile", exact: true }).click();
   await page.getByText(`${115 + catalog.length} icons`, { exact: true }).waitFor();
   await page.getByRole("button", { name: "Anime", exact: true }).click();
   const picker = page.locator(".profile-settings .avatar-picker");
-  for (const series of [...new Set(catalog.map(character => character.series))]) {
+  for (const series of animeSeries) {
     await picker.getByLabel("Anime series", { exact: true }).selectOption(series);
     assert.equal(await picker.locator(".avatar-grid button").count(), 5, series);
-    for (const character of catalog.filter(character => character.series === series)) {
+    for (const character of animeCatalog.filter(character => character.series === series)) {
       const option = picker.getByRole("button", { name: `${character.name} · ${series}`, exact: true });
       assert.equal(await option.locator(`svg[data-character="${character.id}"]`).count(), 1, character.name);
       const hoverTitle = await option.getAttribute("title");
@@ -49,9 +160,9 @@ try {
   }
   await picker.getByLabel("Anime series", { exact: true }).selectOption("all");
   while (await picker.getByRole("button", { name: "Show more icons", exact: true }).count()) await picker.getByRole("button", { name: "Show more icons", exact: true }).click();
-  assert.equal(await picker.locator(".avatar-grid button").count(), catalog.length);
+  assert.equal(await picker.locator(".avatar-grid button").count(), animeCatalog.length);
   const portraits = picker.locator(".avatar-grid svg[data-character]");
-  assert.equal(await portraits.count(), catalog.length);
+  assert.equal(await portraits.count(), animeCatalog.length);
   for (const portrait of await portraits.all()) {
     assert.equal(await portrait.getAttribute("data-transparent"), "true");
     assert.equal(await portrait.locator("[data-face][data-eyes]").count(), 1, await portrait.getAttribute("data-character"));
@@ -124,9 +235,9 @@ try {
   await page.emulateMedia({ reducedMotion: "reduce" });
   assert.equal(await firstPortrait.locator(".anime-hair-front").evaluate(node => getComputedStyle(node).animationName), "none");
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  console.log(`PASS all ${catalog.length} characters have expression-preserving eye/mouth/hair/headwear motion; hidden mouths and reduced motion remain respected.`);
+  console.log(`PASS all ${animeCatalog.length} anime characters have expression-preserving eye/mouth/hair/headwear motion; hidden mouths and reduced motion remain respected.`);
   await picker.locator(".avatar-grid").evaluate(grid => grid.style.maxHeight = "none");
-  await picker.locator(".avatar-grid").screenshot({ path: join(artifacts, `all-${catalog.length}-chibis.png`), animations: "disabled" });
+  await picker.locator(".avatar-grid").screenshot({ path: join(artifacts, `all-${animeCatalog.length}-anime-chibis.png`), animations: "disabled" });
   await picker.locator(".avatar-grid").evaluate(grid => grid.style.removeProperty("max-height"));
   await page.evaluate(() => {
     const stage = document.createElement("div"); stage.id = "chibi-style-preview";
@@ -157,6 +268,45 @@ try {
   await page.locator("#kaoruhana-preview").screenshot({path:join(artifacts,"kaoruhana-preview.png"), animations:"disabled"});
   await page.locator("#kaoruhana-preview").evaluate(stage => stage.remove());
 
+  // K-pop contains actual artists in its own category, without assuming sourced dialogue.
+  await picker.getByRole("button", { name: "K-pop", exact: true }).click();
+  assert.deepEqual(await picker.getByLabel("K-pop group", { exact: true }).locator("option").evaluateAll(options => options.map(option => option.value)), ["all", "BLACKPINK", "BTS"]);
+  for (const [group, count] of [["BLACKPINK", 4], ["BTS", 7]]) {
+    await picker.getByLabel("K-pop group", { exact: true }).selectOption(group);
+    assert.equal(await picker.locator(".avatar-grid button").count(), count, group);
+    assert.equal(await picker.locator('svg[data-character^="anime-"]').count(), 0);
+    for (const artist of kpopCatalog.filter(character => character.series === group)) {
+      const option = picker.getByRole("button", { name: `${artist.name} · ${group}`, exact: true });
+      assert.equal(await option.locator(`svg[data-character="${artist.id}"]`).count(), 1, artist.name);
+      assert.equal(await option.locator("svg").getAttribute("data-transparent"), "true");
+      assert.equal(await option.locator("svg").getAttribute("data-animated"), "true");
+      assert.ok((await option.getAttribute("title")).includes(artist.studyLine), `${artist.name} has original study encouragement`);
+    }
+  }
+  await picker.getByLabel("Search artists", { exact: true }).fill("Kim Namjoon");
+  assert.equal(await picker.locator(".avatar-grid button").count(), 1);
+  await picker.getByRole("button", { name: "RM · BTS", exact: true }).waitFor();
+  await picker.getByRole("button", { name: "Anime", exact: true }).click();
+  assert.equal(await picker.getByLabel("Anime series", { exact: true }).inputValue(), "all");
+  assert.equal(await picker.getByLabel("Search anime characters", { exact: true }).inputValue(), "");
+  assert.equal(await picker.locator('svg[data-character^="kpop-"]').count(), 0);
+  await picker.getByLabel("Anime series", { exact: true }).selectOption("Naruto");
+  await picker.getByLabel("Search anime characters", { exact: true }).fill("Sasuke");
+  await picker.getByRole("button", { name: "K-pop", exact: true }).click();
+  assert.equal(await picker.getByLabel("K-pop group", { exact: true }).inputValue(), "all");
+  assert.equal(await picker.getByLabel("Search artists", { exact: true }).inputValue(), "");
+  assert.equal(await picker.locator(".avatar-grid button").count(), kpopCatalog.length);
+  await picker.getByLabel("K-pop group", { exact: true }).selectOption("BLACKPINK");
+  await picker.getByRole("button", { name: "JISOO · BLACKPINK", exact: true }).click();
+  await page.getByRole("button", { name: "Save profile", exact: true }).click();
+  await page.getByText("Your profile is saved.", { exact: true }).waitFor();
+  assert.equal(profile.avatar_id, "kpop-jisoo");
+  await page.reload(); await page.waitForLoadState("networkidle");
+  await openProfile();
+  assert.equal(await page.locator('.profile-avatar-button svg[data-character="kpop-jisoo"]').count(), 1);
+  assert.equal(await picker.getByRole("button", { name: "K-pop", exact: true }).getAttribute("aria-pressed"), "true");
+  console.log("PASS separate K-pop category shows 4 BLACKPINK and 7 BTS artists; category switches clear stale group/search filters, and actual-artist profile selection survives reload.");
+
 
   // Existing animals, Sanrio and all human portraits share eye/mouth motion too.
   let otherIcons = 0;
@@ -185,12 +335,13 @@ try {
   await page.getByText("Your profile is saved.", { exact: true }).waitFor();
   assert.equal(profile.avatar_id, "anime-gojo");
   await page.reload(); await page.waitForLoadState("networkidle");
+  await openProfile();
   assert.equal(await page.locator('.profile-avatar-button svg[data-character="anime-gojo"]').count(), 1);
-  console.log(`PASS all ${catalog.length} individual face designs render with transparent SVG surroundings; search and saved selections work.`);
+  console.log(`PASS all ${animeCatalog.length} individual anime face designs render with transparent SVG surroundings; search and saved selections work.`);
 
   for (const width of [320, 390, 768]) {
     await page.setViewportSize({ width, height: 900 });
-    // The profile view is stored in the URL hash and restored after reload.
+    // Reload can return to the study desk; reopen the profile when necessary.
     if (!(await page.locator(".profile-settings").count())) {
       await page.getByRole("button", { name: "More", exact: true }).click();
       await page.getByRole("button", { name: "My profile", exact: true }).click();
@@ -199,13 +350,37 @@ try {
     await page.locator(".profile-settings").getByLabel("Anime series", { exact: true }).selectOption("That Time I Got Reincarnated as a Slime");
     await noOverflow();
   }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await picker.getByRole("button", { name: "K-pop", exact: true }).click();
+  await picker.getByLabel("K-pop group", { exact: true }).selectOption("BTS");
+  await picker.getByLabel("Search artists", { exact: true }).fill("Kim Namjoon");
+  await picker.getByRole("button", { name: "RM · BTS", exact: true }).click();
+  await page.getByRole("button", { name: "Save profile", exact: true }).click();
+  await page.getByText("Your profile is saved.", { exact: true }).waitFor();
+  assert.equal(profile.avatar_id, "kpop-rm");
+  await page.reload(); await page.waitForLoadState("networkidle");
+  await openProfile();
+  assert.equal(await page.locator('.profile-avatar-button svg[data-character="kpop-rm"]').count(), 1);
+  await noOverflow();
   }
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "Miso, open companion chat", exact: true }).click();
   await page.getByRole("button", { name: "Customize companion", exact: true }).click();
   const buddy = page.locator(".buddy-settings");
+  await buddy.getByRole("button", { name: "K-pop", exact: true }).click();
+  await buddy.getByLabel("K-pop group", { exact: true }).selectOption("BLACKPINK");
+  assert.equal(await buddy.locator(".avatar-grid button").count(), 4);
+  await buddy.getByRole("button", { name: "JENNIE · BLACKPINK", exact: true }).click();
+  assert.equal(await buddy.getByLabel("Companion name", { exact: true }).inputValue(), "JENNIE");
+  await buddy.getByRole("button", { name: "Save companion", exact: true }).click();
+  await page.getByText("Saved. Your buddy has a new look!", { exact: true }).waitFor();
+  assert.equal(profile.companion_id, "kpop-jennie");
+  assert.equal(profile.companion_name, "JENNIE");
+  await noOverflow();
+  await page.screenshot({ path: join(artifacts, "mobile-kpop-companion.png"), fullPage: true });
   await buddy.getByRole("button", { name: "Anime", exact: true }).click();
-  assert.equal(await buddy.getByLabel("Anime series", { exact: true }).locator("option").count(), 1 + new Set(catalog.map(character => character.series)).size);
+  assert.equal(await buddy.getByLabel("Anime series", { exact: true }).locator("option").count(), 1 + animeSeries.length);
+  assert.equal(await buddy.getByLabel("Anime series", { exact: true }).inputValue(), "all");
   await buddy.getByLabel("Anime series", { exact: true }).selectOption("Naruto");
   await buddy.getByRole("button", { name: "Naruto Uzumaki · Naruto", exact: true }).click();
   assert.equal(await buddy.getByLabel("Companion name", { exact: true }).inputValue(), "Naruto Uzumaki");
@@ -276,8 +451,9 @@ try {
   await launcher.click();
   assert.equal(await launcher.getAttribute("aria-expanded"), "true", "Tap/click still opens chat");
   await page.getByRole("button", { name: "Close companion", exact: true }).click();
-  assert.deepEqual(errors, []);
   console.log("PASS first quote at30s, two-minute encouragement, hover, keyboard focus, dismissal, cooldown, quiet-mode manual lines, hidden-tab cleanup and touch/click behavior.");
+  }
+  assert.deepEqual(errors, []);
   console.log(`Screenshots: ${artifacts}`);
 } catch (error) {
   console.error("Browser errors:", errors);
