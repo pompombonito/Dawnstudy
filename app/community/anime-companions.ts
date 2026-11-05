@@ -6,11 +6,14 @@ export type AnimeCharacter = (typeof catalog)[number] & {
 };
 
 export const allCompanionCharacters: readonly AnimeCharacter[] = catalog;
-export const animeCharacters = allCompanionCharacters.filter(character => !character.id.startsWith("kpop-"));
+export const animeCharacters = allCompanionCharacters.filter(character => character.id.startsWith("anime-"));
 export const kpopCharacters = allCompanionCharacters.filter(character => character.id.startsWith("kpop-"));
+export const screenCharacters = allCompanionCharacters.filter(character => character.id.startsWith("screen-"));
 export const animeSeries = [...new Set(animeCharacters.map((character) => character.series))]
   .sort((left, right) => left.localeCompare(right));
 export const kpopGroups = [...new Set(kpopCharacters.map((character) => character.series))]
+  .sort((left, right) => left.localeCompare(right));
+export const screenSeries = [...new Set(screenCharacters.map(character => character.series))]
   .sort((left, right) => left.localeCompare(right));
 const charactersById = new Map(allCompanionCharacters.map((character) => [character.id, character]));
 // Preserve saved selections from the brief mascot release while showing the artist.
@@ -35,7 +38,7 @@ export function findAnimeCharacter(id: string) {
 
 export function companionCategory(id: string) {
   const character = findAnimeCharacter(id);
-  return character ? character.id.startsWith("kpop-") ? "kpop" : "anime" : undefined;
+  return character ? character.id.startsWith("kpop-") ? "kpop" : character.id.startsWith("screen-") ? "screen" : "anime" : undefined;
 }
 
 function searchable(value: string) {
@@ -57,6 +60,10 @@ export function filterAnimeCharacters(series = "all", search = "") {
 
 export function filterKpopCharacters(group = "all", search = "") {
   return filterCharacters(kpopCharacters, group, search);
+}
+
+export function filterScreenCharacters(series = "all", search = "") {
+  return filterCharacters(screenCharacters, series, search);
 }
 
 export function companionNameAfterSelection(name: string, previousId: string, nextId: string) {

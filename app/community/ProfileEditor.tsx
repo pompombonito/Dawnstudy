@@ -2,7 +2,7 @@
 import { useState } from "react";
 import Avatar from "../components/Avatar";
 import { animals, portraits } from "./catalog";
-import { allCompanionCharacters, animeSeries, kpopGroups, animeCompanionBubble, companionCategory, filterAnimeCharacters, filterKpopCharacters, findAnimeCharacter } from "./anime-companions";
+import { allCompanionCharacters, animeSeries, kpopGroups, screenSeries, animeCompanionBubble, companionCategory, filterAnimeCharacters, filterKpopCharacters, filterScreenCharacters, findAnimeCharacter } from "./anime-companions";
 import ThemePicker from "../components/ThemePicker";
 import { DEFAULT_THEME } from "./themes";
 import type { ProfileInput, Theme } from "./types";
@@ -40,13 +40,16 @@ export function AvatarPicker({
   const [search, setSearch] = useState("");
   const [limit, setLimit] = useState(24);
   const selectedId = findAnimeCharacter(value)?.id || value;
+  const characterFilter = ["anime", "kpop", "screen"].includes(filter);
+  const seriesLabel = filter === "kpop" ? "K-pop group" : filter === "screen" ? "Movie or TV series" : "Anime series";
+  const searchLabel = filter === "kpop" ? "Search artists" : filter === "screen" ? "Search movie and TV characters" : "Search anime characters";
   const choices =
     filter === "animals"
       ? animals.slice(0, 10).map(([id, label]) => ({ id, label }))
       : filter === "characters"
         ? animals.slice(10).map(([id, label]) => ({ id, label }))
-        : filter === "anime" || filter === "kpop"
-          ? (filter === "kpop" ? filterKpopCharacters(series, search) : filterAnimeCharacters(series, search)).map((character) => ({
+        : characterFilter
+          ? (filter === "kpop" ? filterKpopCharacters(series, search) : filter === "screen" ? filterScreenCharacters(series, search) : filterAnimeCharacters(series, search)).map((character) => ({
               id: character.id,
               label: character.name,
               series: character.series,
@@ -65,6 +68,7 @@ export function AvatarPicker({
             ["characters", "Characters"],
             ["anime", "Anime"],
             ["kpop", "K-pop"],
+            ["screen", "Movies & TV"],
           ],
           ...(!companions
             ? [
@@ -88,33 +92,33 @@ export function AvatarPicker({
           </button>
         ))}
       </div>
-      {(filter === "anime" || filter === "kpop") && (
+      {characterFilter && (
         <div className="anime-filters">
           <label className="outfit-filter">
-            {filter === "kpop" ? "K-pop group" : "Anime series"}
+            {seriesLabel}
             <select
-              aria-label={filter === "kpop" ? "K-pop group" : "Anime series"}
+              aria-label={seriesLabel}
               value={series}
               onChange={(event) => {
                 setSeries(event.target.value);
                 setLimit(24);
               }}
             >
-              <option value="all">{filter === "kpop" ? "All groups" : "All series"}</option>
-              {(filter === "kpop" ? kpopGroups : animeSeries).map((title) => <option key={title} value={title}>{title}</option>)}
+              <option value="all">{filter === "kpop" ? "All groups" : filter === "screen" ? "All movies & series" : "All series"}</option>
+              {(filter === "kpop" ? kpopGroups : filter === "screen" ? screenSeries : animeSeries).map((title) => <option key={title} value={title}>{title}</option>)}
             </select>
           </label>
           <label className="outfit-filter">
-            {filter === "kpop" ? "Search artists" : "Search anime characters"}
+            {searchLabel}
             <input
-              aria-label={filter === "kpop" ? "Search artists" : "Search anime characters"}
+              aria-label={searchLabel}
               type="search"
               value={search}
               onChange={(event) => {
                 setSearch(event.target.value);
                 setLimit(24);
               }}
-              placeholder={filter === "kpop" ? "Artist or group" : "Character or series"}
+              placeholder={filter === "kpop" ? "Artist or group" : filter === "screen" ? "Character, movie or series" : "Character or series"}
             />
           </label>
           <small className="subtle" role="status">{choices.length} {filter === "kpop" ? choices.length === 1 ? "artist" : "artists" : choices.length === 1 ? "character" : "characters"}</small>
