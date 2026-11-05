@@ -1977,6 +1977,11 @@ def add_unique_items(existing: list[dict[str, Any]], candidates: list[dict[str, 
 
 
 def provider_failure_reason(error: ProviderError) -> str:
+    # Z.AI uses 429 / 1305 for temporary service overload, not exhausted
+    # account quota. Move to another model immediately instead of cooling down
+    # the whole generation on a misleading quota signal.
+    if error.provider == "zai" and error.error_code == "1305":
+        return "busy"
     if error.status == 429:
         return "limit"
     if error.status is None or error.status >= 500:
@@ -2017,6 +2022,7 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
     queue = deque(ordered)
     cooldowns, rate_retries = {}, defaultdict(int)
     attempt_policy = ProviderAttemptPolicy()
+    source_window_cycles = 0
     while queue and attempts < attempt_limit and time.monotonic() < deadline:
         if time.monotonic() - last_progress > 180:
             break
@@ -2071,7 +2077,9 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
             except ProviderError as exc:
                 check_generation_cancelled()
                 reset_after = exc.retry_after if exc.retry_after is not None else 60
-                if exc.status == 429 and 0 <= reset_after <= 60 and rate_retries[provider] < 2:
+                zai_overloaded = provider == "zai" and exc.error_code == "1305"
+                if (exc.status == 429 and not zai_overloaded and 0 <= reset_after <= 60
+                        and rate_retries[provider] < 2):
                     failures.append(exc)
                     rate_retries[provider] += 1
                     cooldowns[provider] = time.monotonic() + max(1, reset_after)
@@ -2129,11 +2137,31 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
         if len(completed) == question_count:
             return {"title": title, "items": completed}, used_models, fallback, False
         pending = pending or (model_id, "incomplete")
+        if not queue:
+            # A source window can be exhausted even while later pages still
+            # contain usable material. Once every currently eligible model
+            # has tried the same window, move on and let healthy models inspect
+            # the next one instead of returning the same partial set forever.
+            advance_source_window = getattr(prompt_builder, "advance_source_window", None)
+            source_window_count = getattr(prompt_builder, "source_window_count", 1)
+            if (callable(advance_source_window) and source_window_cycles < source_window_count - 1
+                    and advance_source_window(len(completed))):
+                source_window_cycles += 1
+                generation_progress(
+                    "finishing",
+                    f"Trying another source section with the available models · {len(completed)} of {question_count} ready",
+                    len(completed),
+                )
+                queue = deque(choice for choice in ordered
+                              if attempt_policy.can_attempt(choice[1], choice[2]))
+                if queue:
+                    continue
     if completed:
         # Keep usable work even if every provider stops before reaching the
         # requested count. The UI can save this partial set and offer Continue.
         return {"title": title, "items": completed}, used_models, fallback, True
-    if failures and all(error.status == 429 for error in failures):
+    if failures and all(error.status == 429 and not (error.provider == "zai" and error.error_code == "1305")
+                        for error in failures):
         raise HTTPException(status_code=429, detail="All available provider quotas are currently exhausted. Try again when a provider is available.")
     raise HTTPException(status_code=503, detail="The configured models could not produce usable questions. Try again shortly or choose another model.")
 
@@ -2813,6 +2841,19 @@ def generate(
             previous_questions = json.dumps([item["question"] for item in (related or completed)[-30:]], ensure_ascii=False)
             continuation = f"\n\nContinue the same study set. Create exactly {remaining} ADDITIONAL items. Do not repeat or closely paraphrase these already completed questions: {previous_questions}."
         return batch_prompt.replace("{count}", str(remaining)) + continuation
+
+    def advance_source_window_after_provider_cycle(completed_count: int) -> bool:
+        """Move to the next source slice after every eligible model stalls."""
+        nonlocal window_index, window_completed_count
+        if len(windows) < 2:
+            return False
+        window_index = (window_index + 1) % len(windows)
+        # The next prompt must remain on this window until it yields progress.
+        window_completed_count = completed_count
+        return True
+
+    prompt_for_remaining.advance_source_window = advance_source_window_after_provider_cycle
+    prompt_for_remaining.source_window_count = len(windows)
     schema = {
         "type": "object",
         "properties": {

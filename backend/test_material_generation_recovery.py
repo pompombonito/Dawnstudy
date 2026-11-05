@@ -99,6 +99,72 @@ class RecoveryTests(unittest.TestCase):
         labels = {label for _text, labels in windows for label in labels}
         self.assertEqual(labels, {f"PDF page {n}" for n in range(1, 128)})
 
+    def test_compact_course_packet_keeps_all_pages_in_one_source_context(self):
+        source = "\n\n".join(f"[SOURCE: PDF page {n}]\n" + f"Concept {n} is supported by this page. " * 30 for n in range(1, 9))
+        self.assertLess(len(source), 48_000)
+        windows = source_windows(source)
+        self.assertEqual(len(windows), 1)
+        self.assertEqual(windows[0][0], source)
+        self.assertEqual(windows[0][1], [f"PDF page {n}" for n in range(1, 9)])
+
+    def test_generation_advances_source_after_all_models_stall_on_one_window(self):
+        model = ("groq:test", "groq", "test", "test", "Test")
+        source_window = [0]
+        calls = []
+
+        def prompt_builder(_count, _done):
+            return f"Create questions from source window {source_window[0]}"
+
+        def advance_source_window(_completed_count):
+            if source_window[0] >= 1:
+                return False
+            source_window[0] += 1
+            return True
+
+        prompt_builder.advance_source_window = advance_source_window
+        prompt_builder.source_window_count = 2
+
+        def provider(_provider, _model, _key, prompt, schema, _budget):
+            window = int(prompt.split("source window ", 1)[1].split()[0])
+            calls.append(window)
+            if window == 0:
+                return {"title": "Set", "items": []}
+            return {"title": "Set", "items": [
+                {"question": "What does the first concept establish?", "answer": "A supported fact"},
+                {"question": "What does the second concept establish?", "answer": "Another supported fact"},
+            ][:schema["properties"]["items"]["maxItems"]]}
+
+        schema = {"properties": {"items": {"type": "array", "items": {"properties": {}}}}}
+        with patch.object(main, "configured_ai_models", return_value=[model]), \
+             patch.object(main, "generate_with_provider", side_effect=provider):
+            result, _used, _fallback, incomplete = main.generate_with_fallback(
+                prompt_builder, schema, model[0], 2, study_format="identification")
+        self.assertEqual(len(result["items"]), 2)
+        self.assertFalse(incomplete)
+        self.assertEqual(source_window[0], 1)
+        self.assertEqual(calls, [0, 0, 0, 0, 0, 1])
+
+    def test_zai_1305_overload_fails_over_without_quota_cooldown(self):
+        zai = ("zai:glm-4.7-flash", "zai", "glm-4.7-flash", "zai-key", "GLM Flash")
+        groq = ("groq:qwen", "groq", "qwen/qwen3.8-27b", "groq-key", "Qwen")
+        schema = {"properties": {"items": {"type": "array", "items": {"properties": {}}}}}
+
+        def provider(provider_name, model_name, _key, _prompt, _schema, _budget):
+            if provider_name == "zai":
+                raise main.ProviderError("zai", f"zai:{model_name}", 429, "overloaded", error_code="1305")
+            return {"title": "Set", "items": [{"question": "What is the supported concept?", "answer": "A fact"}]}
+
+        with patch.object(main, "configured_ai_models", return_value=[zai, groq]), \
+             patch.object(main, "generate_with_provider", side_effect=provider), \
+             patch.object(main.time, "sleep", side_effect=AssertionError("Z.AI overload should fail over immediately")):
+            result, used, fallback, incomplete = main.generate_with_fallback(
+                lambda _count, _done: "Use the supplied source", schema, zai[0], 1, study_format="identification")
+        self.assertEqual(len(result["items"]), 1)
+        self.assertEqual(used, [groq[0]])
+        self.assertEqual(fallback["reason"], "busy")
+        self.assertFalse(incomplete)
+        self.assertEqual(main.provider_failure_reason(main.ProviderError("zai", zai[0], 429, "overloaded", error_code="1305")), "busy")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,7 +15,17 @@ def advance_source_window_index(window_index, completed_count, previous_complete
     return window_index % window_count
 
 
-def source_windows(text, maximum=6000):
+def source_windows(text, maximum=6000, full_context_maximum=48_000):
+    """Keep ordinary course packets intact; bound only genuinely long inputs.
+
+    Small windows made textbook generation less useful: a model saw only a
+    slice at a time, and a continuation restarted at the first slice. Keeping a
+    modest packet whole preserves the working full-source behavior while still
+    bounding very large books and websites.
+    """
+    labels = list(dict.fromkeys(re.findall(r"(?m)^\[SOURCE: ([^\]]+)\]", text)))
+    if len(text) <= full_context_maximum:
+        return [(text, labels)]
     chunks = []
     for block in re.split(r"(?=\[SOURCE: )", text):
         match = re.match(r"\[SOURCE: ([^\]]+)\]\s*", block)
