@@ -194,10 +194,10 @@ const backHair: Record<string, string> = {
 };
 
 const frontHair: Record<string, string> = {
-  "kpop-jisoo": "M18 40Q17 12 50 11q33 1 32 29v18l-4 5-2-18Q74 38 64 36 53 26 50 26t-14 10q-10 2-18 8l-2 18-4-5Z",
-  "kpop-jennie": "M18 40Q17 12 50 11q33 1 32 29v16l-3 5-2-17Q73 38 63 35 52 24 50 24t-13 11q-10 3-17 9l-2 17-3-5Z",
-  "kpop-rose": "M19 38Q18 10 50 9q32 1 31 28v16q4 5 1 10-4 4-7 1l-2-15Q73 38 60 33 48 23 38 33q-10 6-12 18l-3 14q-4 3-7-1 0-7 3-14v-12Z",
-  "kpop-lisa": "M19 38Q18 11 50 10q32 1 31 28v18l-3 4-2-17Q50 40 24 42l-2 17-3-4Z",
+  "kpop-jisoo": "M18 43Q15 15 50 14q34 0 32 29v15l-5 6-2-19Q71 31 50 25 30 27 24 44l-2 20-5-6Z",
+  "kpop-jennie": "M18 43Q16 15 50 14q34 0 32 29v15l-5 5-2-19Q70 30 50 24 31 27 24 44l-2 19-5-5Z",
+  "kpop-rose": "M19 42Q16 14 50 13q34 0 32 29v13q3 5 0 10-4 3-7-1l-2-17Q70 32 51 25 33 27 26 45l-3 19q-4 3-7-1 0-7 3-13Z",
+  "kpop-lisa": "M19 42Q16 14 50 13q34 0 32 29v16l-5 5-2-20-2-7q-3 3-7 1-4 3-8 0-4 3-8 0-4 3-8 0-4 3-8 0-4 2-7-1l-2 7-2 20-5-5Z",
   "kpop-rm": "M21 42 19 31q-2-12 9-16l-1-4 10 3 4-5 8 4 8-5 3 5 10-2-1 4q14 1 13 15l-7 17-5-18Q52 20 31 31l-5 23Z",
   "kpop-jin": "M21 43Q12 20 33 12q14-6 26-1 17-4 22 16 3 10-2 21l-6 10-2-23q-2-13-15-16-18 3-27 19l-1 17Z",
   "kpop-suga": "M21 48Q12 20 32 13q14-9 27-2 23-3 22 22l-5 20-6-15-2-15Q56 17 48 24q-13 7-19 25l-3 11Z",
@@ -337,8 +337,8 @@ function ChibiBody({ c, skin }: { c: AnimeCharacter; skin: string }) {
     <ellipse cx="35.5" cy="105" rx="2.6" ry="3" fill={skin} stroke="#bd9584" strokeWidth=".7"/>
     <ellipse cx="63.5" cy="104" rx="2.6" ry="3" fill={skin} stroke="#bd9584" strokeWidth=".7"/>
 
-    {/* Top / Midriff / Skirt */}
-    <g transform="translate(50 76) scale(.72 1) translate(-50 -76)"><Outfit c={c} skin={skin}/></g>
+    {/* The shoulders join the sleeves and taper toward the waist. */}
+    <Outfit c={c} skin={skin}/>
 
     {/* JUMP! Tee text on chest - crisp, bold, uncompressed */}
     {bp && <text x="50" y="87" textAnchor="middle" fontFamily="'Impact', 'Arial Black', sans-serif" fontWeight="900" fontSize="4.6" fill="#ffffff" letterSpacing=".4">JUMP!</text>}
@@ -368,12 +368,12 @@ function Outfit({ c, skin }: { c: AnimeCharacter; skin: string }) {
   return <g strokeLinejoin="round">
     {bp ? <>
       {/* Cropped JUMP! tee */}
-      <path d="M27 92v-8q1-9 17-11h12q17 2 17 11v8" fill={c.outfit} stroke={ink} strokeWidth="1.4"/>
+      <path d="M35 85q2-8 9-10h12q7 2 9 10l-2 10H37Z" fill={c.outfit} stroke={ink} strokeWidth="1.1"/>
       {/* Bare midriff */}
-      <path d="M38 92h24v5H38Z" fill={skin} stroke="#bc927e" strokeWidth=".7"/>
-      <path d="M43 73v7q7 6 14 0v-7" fill={skin} stroke="#be9580" strokeWidth=".8"/>
+      <path d="M38 95h24v2H38Z" fill={skin} stroke="#bc927e" strokeWidth=".7"/>
+      <path d="M43 73v5q7 5 14 0v-5" fill={skin} stroke="#be9580" strokeWidth=".8"/>
     </> : <>
-      <path d="M27 99v-7q1-11 17-13h12q17 2 17 13v7" fill={c.outfit} stroke={ink} strokeWidth="1.5"/>
+      <path d="M35 99v-9q1-8 9-11h12q9 3 9 11v9Z" fill={c.outfit} stroke={ink} strokeWidth="1.2"/>
       <path d="M43 73v8q7 7 14 0v-8" fill={skin} stroke="#be9580" strokeWidth=".8"/>
       {detail.outfitStyle === "cardigan" ? <><path d="m39 80 11 8 11-8m-11 8v11" fill="none" stroke="#fff0e6" strokeWidth="2"/><path d="M49 91h2m-2 4h2" stroke="#9d7e7b" strokeWidth="1"/></> : detail.outfitStyle === "suit" || detail.outfitStyle === "coat" ? <><path d="m38 80 9 8-6 7-8-11m29-4-9 8 6 7 8-11" fill="#efebe3" opacity=".8"/><path d="m47 83 3 4 3-4-2 14h-2Z" fill="#655565"/></> : <><path d="M40 81q10 8 20 0" fill="none" stroke="#f5e8db" strokeWidth="1.5"/><path d="M36 90h28" stroke="#fff0ed" opacity=".65" strokeWidth="1.5"/></>}
     </>}
