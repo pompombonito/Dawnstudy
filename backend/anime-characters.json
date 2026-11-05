@@ -2711,7 +2711,7 @@
     "studyLine": "Keep jumping forward, one steady step at a time!",
     "hair": "#1c1c23",
     "eyes": "#3c2e2c",
-    "outfit": "#8b2635",
+    "outfit": "#26222c",
     "skin": "#f2d3bb",
     "bg": "transparent",
     "style": "jump-single-maroon",
@@ -2738,7 +2738,7 @@
       "highlights": true
     },
     "portrait": {
-      "hairStyle": "updo",
+      "hairStyle": "long",
       "fringe": "none",
       "part": "left",
       "outfitStyle": "cardigan",
@@ -2781,7 +2781,7 @@
       "highlights": true
     },
     "portrait": {
-      "hairStyle": "braids",
+      "hairStyle": "long",
       "fringe": "none",
       "part": "center",
       "outfitStyle": "casual",
@@ -2824,7 +2824,7 @@
       "highlights": true
     },
     "portrait": {
-      "hairStyle": "wavy",
+      "hairStyle": "curly",
       "fringe": "none",
       "part": "left",
       "outfitStyle": "cardigan",
@@ -2840,7 +2840,7 @@
     "studyLine": "Ready, set, jump! You've got all the energy you need to ace this!",
     "hair": "#685448",
     "eyes": "#3e302c",
-    "outfit": "#e2a829",
+    "outfit": "#e2b83c",
     "skin": "#eac6a8",
     "bg": "transparent",
     "style": "jump-single-yellow",
@@ -2867,7 +2867,7 @@
       "highlights": true
     },
     "portrait": {
-      "hairStyle": "updo",
+      "hairStyle": "long",
       "fringe": "full",
       "part": "center",
       "outfitStyle": "casual",

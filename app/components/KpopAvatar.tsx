@@ -164,7 +164,7 @@ function CuteIdolFace({ c, p, uid }: { c: AnimeCharacter; p: Portrait; uid: stri
     <g transform={`translate(50 ${jennie ? 65.3 : 65.8})`}><g className="anime-mouth-motion" strokeLinecap="round" strokeLinejoin="round">
       {c.id === "kpop-jisoo" && <><path d="M-3.4 0-1.7-1.4 0-.5 1.7-1.4 3.4 0Q0 4.2-3.4 0Z" fill="#d97387"/><path d="M-3.4 0Q0 .8 3.4 0" fill="none" stroke="#944254" strokeWidth=".7"/><path d="M-1.6 2.1q1.6 .7 3.2 0" fill="none" stroke="#f8bcc7" strokeWidth="1"/></>}
       {jennie && <><path d="m-3 0 1.6-1.1 1.4.7 1.4-.7 1.6 1.1Q0 4.8-3 0Z" fill="#d4798a"/><path d="M-3 0q3 .9 6 0" fill="none" stroke="#944654" strokeWidth=".8"/><path d="M-1.8 2.2q1.8 .8 3.6 0" fill="none" stroke="#f6b8c4" strokeWidth="1"/></>}
-      {rose && <><ellipse cx="0" cy="-.3" rx="1.6" ry="2.2" fill="#de6f84" stroke="#943d52" strokeWidth=".7"/><ellipse cx="0" cy="-.7" rx="1.1" ry="1.1" fill="#752235"/></>}
+      {rose && <><path d="M-2.8 0q2.8 2.2 5.6-.2" fill="none" stroke="#b0697b" strokeWidth=".9"/><path d="M-.9 1.4h1.8" stroke="#ecc0c4" strokeWidth=".65"/></>}
       {lisa && <><path d="M-3.6-.2q3.6 3.6 7.2 0Q2.6 4.3 0 4.3T-3.6-.2Z" fill="#de6f84" stroke="#943d52" strokeWidth=".8"/><path d="M-2.4 .6h4.8" stroke="#ffffff" strokeWidth=".9"/></>}
       {c.series !== "BLACKPINK" && (c.face.mouth === "open-smile" || c.face.mouth === "grin" ? <><path d="M-3.5-.5q3.5 1.1 7 0Q2.7 4.3 0 4.3T-3.5-.5Z" fill={p.lipColor}/><path d="M-2.3 2.8q2.3-1 4.6 0" fill="none" stroke="#efb3bd" strokeWidth="1"/></> : <path d={c.face.mouth === "neutral" ? "M-2.6 .7q2.6.6 5.2 0" : "M-3 .1q3 2.4 6-.3"} fill="none" stroke={p.lipColor} strokeWidth="1.05"/>)}
     </g></g>
@@ -235,25 +235,58 @@ const catalogFrontHair: Record<NonNullable<ArtistStyling["hairStyle"]>, string> 
   ponytail: "M23 44Q17 23 36 16q15-8 29 1 15 6 14 24l-5 16-4-22q-22-16-39 2l-4 19Z",
 };
 
+function Fringe({ c }: { c: AnimeCharacter }) {
+  const fringe = artistStyling(c).fringe;
+  const outline = fringe === "full" ? "M25 32Q49 16 75 32l-2 7q-4 2-8 0-4 2-8 0-4 2-8 0-4 2-8 0-4 2-8 0l-6 1Z"
+    : fringe === "wispy" ? "M25 32Q49 16 75 32l-2 8-6-4-4 4-5-5-5 7-4-6-6 5-4-5-7 6-3-6-5 7Z"
+    : fringe === "curtain" ? "M25 34Q30 18 50 18q20 0 25 16l-3 13-7-14-8-9-4 17-4-17q-4 13-16 18l-9 8Z"
+    : fringe === "side" ? "M23 34Q33 15 58 20l10 7q-7 10-25 12l-7 8-1-9-12 12Z" : "";
+  return outline ? <path d={outline} fill={c.hair} stroke="none"/> : null;
+}
+
 function CatalogHair({ c, front }: { c: AnimeCharacter; front: boolean }) {
   const detail = artistStyling(c), style = detail.hairStyle || "short";
   const color = detail.gender === "feminine" ? "#59414a" : ink;
   return <g className={front ? "anime-hair-front" : "anime-hair-back"} transform={detail.part === "right" ? "translate(100 0) scale(-1 1)" : undefined} fill={c.hair} stroke={color} strokeWidth="1.15" strokeLinejoin="round">
     {!front && style === "updo" && <><path d="M36 21q-9-3-5-10 3-6 11-4 10-4 14 4 5 8-3 12Z"/><path d="M37 12q8-4 12 4" fill="none" stroke="#b29891" strokeWidth=".65" opacity=".6"/></>}
-    <path d={(front ? catalogFrontHair : catalogBackHair)[style]}/>
-    {front && detail.fringe === "full" && <><path d="M28 30q21-20 44 0l-2 5q-4 2-7 0-4 2-7 0-4 2-7 0-4 2-7 0-4 2-7 0l-6 1Z" stroke="none"/><path d="M29 36l6-1q3 2 7 0 3 2 7 0 3 2 7 0 3 2 7 0 3 2 7 0" fill="none"/></>}
-    {front && detail.fringe === "wispy" && <><path d="M28 32q20-21 44 0l-1 5-5-3-4 2-3-3-5 4-4-4-5 3-3-3-6 4-3-4-5 4Z" stroke="none"/><path d="m28 37 5-4 3 4 6-4 3 3 5-3 4 4 5-4 3 3 4-2 5 3" fill="none" strokeWidth=".85"/></>}
-    {front && detail.fringe === "curtain" && <><path d="M28 34q1-13 22-15 20 2 23 16l-3 10-5-13-8-7-5 10-3-12q-5 10-18 15l-4 10Z" stroke="none"/><path d="m27 48 4-10q13-5 18-15l3 12 5-10 8 7 5 13" fill="none"/></>}
-    {front && detail.fringe === "side" && <><path d="M25 35q8-21 31-17l10 6q-8 8-24 9l-5 8-1-6-11 10Z" stroke="none"/><path d="m25 45 11-10 1 6 5-8q16-1 24-9" fill="none"/></>}
+    <path d={!front && style === "curly" && detail.gender === "masculine" ? "M23 28q-8 6-5 16-4 9 3 16l9 8h40l10-11q4-9-1-17 2-12-10-15Z" : (front ? catalogFrontHair : catalogBackHair)[style]}/>
+    {front && <Fringe c={c}/>}
+    {front && (!detail.fringe || detail.fringe === "none") && detail.gender === "feminine" && <path d="M23 45Q23 30 42 25Q31 35 28 52l-2 9Zm54 0Q77 30 58 25q11 10 14 27l2 9Z" fill={c.hair} stroke="none"/>}
     {front && <path d={style === "curly" ? "M24 29q-3-7 6-8m4-4q1-5 8-2m5-1q7-4 11 3m7 1q8 0 10 8" : "M27 30q2-12 17-14m15 1q12 3 15 16"} fill="none" stroke="#d4bdad" strokeWidth=".65" opacity=".33"/>}
     {!front && style === "braids" && <path d="m23 74 3 2m-3 3 3 2m-3 3 3 2m-3 3 3 2m46-14 3-2m-3 7 3-2m-3 7 3-2m-3 7 3-2" fill="none" stroke="#d0aea0" strokeWidth=".65" opacity=".5"/>}
   </g>;
 }
 
+/** The four JUMP silhouettes use continuous crowns and fitted face framing. */
+function JumpHair({ c, front }: { c: AnimeCharacter; front: boolean }) {
+  const rose = c.id === "kpop-rose", lisa = c.id === "kpop-lisa", jennie = c.id === "kpop-jennie";
+  const back = rose
+    ? "M23 29Q16 29 17 39q-6 6-2 13-5 7 0 14-5 9 3 14 2 7 10 3l6-15h32l6 15q9 4 12-4 7-5 2-13 5-9 0-15 4-8-2-13 0-9-8-11Q50 12 23 29Z"
+    : lisa ? "M20 31Q13 42 17 64l1 27q8 6 16 2l3-24h26l3 24q9 4 17-3l1-29q3-20-6-31Q50 14 20 31Z"
+    : jennie ? "M20 30Q11 41 16 63l-1 22 7 9 9-4 5-22h28l4 23 10 3 8-9-3-25q4-20-7-31Q50 12 20 30Z"
+    : "M20 30Q11 44 15 66l2 24q7 8 16 2l4-24h26l4 24q9 6 16-2l2-26q2-22-9-35Q50 12 20 30Z";
+  const crown = rose
+    ? "M18 47q-5-9 0-17-1-10 10-12 5-10 16-5 8-6 16-1 12-2 16 8 10 4 7 15 4 9-2 17l-5 7-3-15q-3-12-20-19-16-1-24 13l-6 20Z"
+    : lisa ? "M17 46Q13 14 49 13q37 0 35 33l-4 18-4-20-2-9q-4 4-8 2-4 3-8 0-4 3-8 0-4 3-8 0-4 3-8 0-4 2-8-1l-2 8-3 20Z"
+    : jennie ? "M17 46Q12 18 43 14q23-5 35 13 8 9 5 23l-4 15-4-21q-2-13-18-20-5 11-25 17l-7 16-3 10Z"
+    : "M17 46Q13 14 49 13q37-1 35 33l-4 19-4-20q-3-13-26-20-22 4-26 20l-3 20Z";
+  return <g className={front ? "anime-hair-front" : "anime-hair-back"} fill={c.hair} stroke={rose ? "#8e806c" : "#39303a"} strokeWidth="1.1" strokeLinejoin="round" strokeLinecap="round">
+    <path d={front ? crown : back}/>
+    {front && rose && <>
+      <path d="M29 31q-9 3-6 13-8 7-2 15-5 9 2 14 6 3 8-3-9-3-4-10-5-6 0-12-3-8 5-12m39-7q12 4 7 15 9 7 3 15 6 9-1 14-7 3-9-3 8-3 4-10 5-6-1-12 4-8-4-12"/>
+      <path d="M24 29q2-10 13-10m9-3q7-3 13 2m8 4q8 2 9 10M24 47q-5 7 0 12m51-13q6 7 0 13" fill="none" stroke="#fff7e5" strokeWidth="1.2"/>
+    </>}
+    {front && !rose && <path d={lisa ? "M23 30q8-13 25-13m9 0q17 4 21 17m-44-9v9m9-12v12m9-12v12m9-11v11m9-8v8" : jennie ? "M23 32q5-16 26-14m9 1q17 7 20 23m-45-9q11-3 17-12" : "M23 32q4-15 22-14m12 0q18 5 21 21m-54 9-3 27m56-27 3 27"} fill="none" stroke={lisa ? "#9a8066" : "#77717c"} strokeWidth=".7" opacity=".55"/>}
+    {!front && !rose && <path d="M21 60q-2 16 2 27m55-28q3 16-1 28" fill="none" stroke={lisa ? "#a08872" : "#6d626e"} strokeWidth=".7" opacity=".45"/>}
+  </g>;
+}
+
 function Hair({ c, front = false }: { c: AnimeCharacter; front?: boolean }) {
+  if (c.series === "BLACKPINK") return <JumpHair c={c} front={front}/>;
   if (!frontHair[c.id]) return <CatalogHair c={c} front={front}/>;
   return <g className={front ? "anime-hair-front" : "anime-hair-back"} fill={c.hair} stroke={c.series === "BLACKPINK" ? "#493944" : ink} strokeWidth={c.series === "BLACKPINK" ? 1.2 : 1.4} strokeLinejoin="round">
     <path d={(front ? frontHair : backHair)[c.id]}/>
+    {front && <Fringe c={c}/>}
     {!front && c.id === "kpop-rose" && <path d="M22 52q-2 8 2 16t3 12m46-28q2 8-2 16t-3 12" fill="none" stroke="#f5e3b4" strokeWidth=".65" opacity=".55"/>}
     {front && <g fill="none" stroke={c.id === "kpop-rose" ? "#f5e3b4" : c.id === "kpop-jhope" ? "#d0d0df" : "#73717d"} strokeWidth=".65" opacity=".5">
       {c.id === "kpop-jisoo" && <path d="M26 32q4-12 19-15m-16 8q1-10 19-10m24 17Q67 21 54 17"/>}
@@ -292,91 +325,60 @@ function Hair({ c, front = false }: { c: AnimeCharacter; front?: boolean }) {
 }
 
 function ChibiBody({ c, skin }: { c: AnimeCharacter; skin: string }) {
-  const detail = artistStyling(c);
-  const bp = c.series === "BLACKPINK";
+  const detail = artistStyling(c), bp = c.series === "BLACKPINK";
   const feminine = bp || detail.gender === "feminine";
-  const jisoo = c.id === "kpop-jisoo";
-  const lisa = c.id === "kpop-lisa";
-  const rose = c.id === "kpop-rose";
-  const jennie = c.id === "kpop-jennie";
+  const jisoo = c.id === "kpop-jisoo", lisa = c.id === "kpop-lisa", rose = c.id === "kpop-rose", jennie = c.id === "kpop-jennie";
   const dress = !bp && feminine && detail.outfitStyle === "dress";
-  const pale = rose || detail.outfitStyle === "cardigan";
+  const trousers = !feminine || jisoo || lisa;
+  const shortSleeves = bp || detail.outfitStyle === "casual" || dress;
+  const bottom = trousers ? "#292730" : "#37313d";
   return <g strokeLinecap="round" strokeLinejoin="round">
-    {/* Legs / Bottoms */}
-    <path d="M40 96q-2 11 1 24l-1 6h8l1-28m3 0 1 27h8l-1-6q3-12 0-23" fill={bp ? (jisoo || lisa ? "#211f26" : skin) : (feminine ? skin : "#33333e")} stroke={bp ? (jisoo || lisa ? "#18161c" : "#bc9384") : (feminine ? "#bc9384" : "#302c38")} strokeWidth="1"/>
-    {/* Lisa's sparkle chain pants detail */}
-    {lisa && <g fill="none" stroke="#d5dbe5" opacity=".75">
-      <path d="M41 101q4 1 7-1m5 1q4-1 6 0m-17 7q4 1 6-1m6 1q3-1 6 0" strokeWidth=".5"/>
-      <circle cx="43" cy="103" r=".6" fill="#fff"/>
-      <circle cx="56" cy="105" r=".6" fill="#fff"/>
-      <circle cx="46" cy="112" r=".6" fill="#fff"/>
-      <circle cx="58" cy="114" r=".6" fill="#fff"/>
-      <path d="M52 97q4 5 10 1" stroke="#d8dde6" strokeWidth=".9"/>
-    </g>}
-    {/* Boots / Socks */}
-    {feminine && <path d="M40 114h8v10h-8m13-10h8v10h-8" fill={rose ? "#edeaf2" : "#211f26"} stroke={rose ? "#bab5c4" : "#18161c"} strokeWidth=".8"/>}
-    <path d="M39 122q-4 2-3 6 5 3 13 0l-1-6Zm14 0-1 6q8 3 13 0 1-4-4-6Z" fill={rose ? "#f4f1f8" : "#1d1b22"} stroke={rose ? "#787282" : "#141318"} strokeWidth="1"/>
-    <path d="M37 128h11m5 0h11" stroke={rose ? "#c2bdcc" : "#4a4554"} strokeWidth=".8"/>
-
-    {/* Arms with T-shirt sleeves */}
-    {bp ? <>
-      {/* Upper arm sleeves */}
-      <path d="M35 85q-4 4-3 9l5 1 2-4 2-6Z" fill={jisoo ? "#e0a834" : c.outfit} stroke="#544c52" strokeWidth=".8"/>
-      <path d="M65 85q4 4 3 9l-5 1-2-4-2-6Z" fill={c.outfit} stroke="#544c52" strokeWidth=".8"/>
-      {/* Lower bare arms (Jisoo right arm is yellow sleeve) */}
-      <path d="M32 94q0 7 3 11l3-1-2-9Z" fill={jisoo ? "#e0a834" : skin} stroke={jisoo ? "#9e741c" : "#bc9384"} strokeWidth=".8"/>
-      <path d="M68 94q0 7-3 11l-3-1 2-9Z" fill={skin} stroke="#bc9384" strokeWidth=".8"/>
-    </> : <>
-      <path d="M35 86q-5 7-3 15l3 5 3-2-2-5 4-10m24-2q6 5 5 13l-4 5-3-2 3-6-5-8" fill={c.outfit} stroke="#655761" strokeWidth="1"/>
+    <path d={lisa ? "M39 97h10l-1 25H35l4-25Zm13 0h9l5 25H53Z" : "M40 98h9l-1 25h-9Zm12 0h9l1 25h-9Z"} fill={trousers ? bottom : skin} stroke={trousers ? "#24212b" : "#bc9384"} strokeWidth=".9"/>
+    {!trousers && <path d="M39 115h9v9h-9Zm14 0h9v9h-9Z" fill={rose ? "#f2eff2" : "#25222a"} stroke={rose ? "#aaa4af" : "#25222a"} strokeWidth=".7"/>}
+    <path d="M39 122q-5 1-5 5 4 3 14 1v-6Zm14 0v6q10 2 14-1 0-4-5-5Z" fill={rose ? "#f6f3f5" : "#24212a"} stroke={rose ? "#8d8793" : "#19171f"} strokeWidth=".9"/>
+    <path d="M35 127h12m7 0h12" stroke={rose ? "#c4beca" : "#625969"} strokeWidth=".6"/>
+    {rose && <path d="m40 123 5 1m-5 1 5 1m10-3 5 1m-5 1 5 1" stroke="#b5adbb" strokeWidth=".65"/>}
+    <path d="M41 80q-9 1-11 10l3 12 5-1-1-11 7-5Zm18 0q9 1 11 10l-3 12-5-1 1-11-7-5Z" fill={c.outfit} stroke={ink} strokeWidth="1"/>
+    {shortSleeves && <>
+      <path d={jisoo ? "M31 89q-1 8 5 13l4-3q-5-4-5-10Z" : "M31 89q-1 8 3 14l4-2-3-12Z"} fill={jisoo ? "#e9bb43" : skin} stroke={jisoo ? "#ab8229" : "#bc9384"} strokeWidth=".8"/>
+      <path d={bp ? "m66 89 3 2-4 12-5-2 5-5Z" : "M65 89q4 7 0 14l-4-2 3-12Z"} fill={skin} stroke="#bc9384" strokeWidth=".8"/>
     </>}
-
-    {/* Lisa's left wristband */}
-    {lisa && <rect x="63" y="100" width="4.5" height="2.5" rx="1" fill="#1e1c22" stroke="#121116" strokeWidth=".5"/>}
-
-    {/* Hands */}
-    <ellipse cx="35.5" cy="105" rx="2.6" ry="3" fill={skin} stroke="#bd9584" strokeWidth=".7"/>
-    <ellipse cx="63.5" cy="104" rx="2.6" ry="3" fill={skin} stroke="#bd9584" strokeWidth=".7"/>
-
-    {/* The shoulders join the sleeves and taper toward the waist. */}
+    <ellipse cx={jisoo ? 39 : 35} cy={jisoo ? 100 : 103} rx="2.3" ry="2.8" fill={skin} stroke="#bc9384" strokeWidth=".7"/>
+    <ellipse cx={bp ? 62 : 65} cy="102" rx="2.3" ry="2.8" fill={skin} stroke="#bc9384" strokeWidth=".7"/>
+    {feminine && !jisoo && !lisa && <>
+      <path d={dress ? "M39 97h22l8 15q-19 5-38 0Z" : "M38 97h24l4 11q-16 4-32 0Z"} fill={dress ? c.outfit : bottom} stroke={ink} strokeWidth="1"/>
+      <path d={dress ? "m40 102-3 9m9-9-1 11m9-11 1 11m5-11 3 9" : "m41 100-2 7m9-7v9m8-9 2 7"} fill="none" stroke={dress ? "#ffffff" : "#6f626e"} strokeOpacity=".35" strokeWidth=".7"/>
+    </>}
     <Outfit c={c} skin={skin}/>
-
-    {/* JUMP! Tee text on chest - crisp, bold, uncompressed */}
-    {bp && <text x="50" y="87" textAnchor="middle" fontFamily="'Impact', 'Arial Black', sans-serif" fontWeight="900" fontSize="4.6" fill="#ffffff" letterSpacing=".4">JUMP!</text>}
-
-    {/* Skirts / Belts for Jennie & Rose */}
-    {jennie && <>
-      <path d="M37 95h26l1 11q-14 3-28 0Z" fill="#1f1d24" stroke="#16141a" strokeWidth="1"/>
-      {/* Jennie's hanging strap */}
-      <path d="M57 96l1 11h2.8l-1-11Z" fill="#151418" stroke="#000" strokeWidth=".5"/>
-      <path d="M57.8 97v9" stroke="#ffffff" strokeWidth=".6" strokeDasharray="1.2 1.2"/>
+    {bp && <>
+      <text x="50" y="88" textAnchor="middle" fontFamily="Arial Black, sans-serif" fontStyle="italic" fontWeight="900" fontSize="4.5" fill="#fff" letterSpacing=".05">JUMP!</text>
+      <path d="M38 98h24" fill="none" stroke="#b6a3a0" strokeWidth=".6"/>
+      {(jisoo || jennie) && <><rect x="41" y="98" width="3" height="2" rx=".4" fill="none" stroke="#c9c5cc" strokeWidth=".7"/><path d="M57 99v10h2V99" fill="#1c1a23" stroke="#8c838f" strokeWidth=".5"/></>}
+      {rose && <circle cx="57" cy="99" r=".9" fill="#d4b76c"/>}
+      {lisa && <g stroke="#e6dfe8" strokeWidth=".55" fill="none"><path d="M54 99q4 6 9 0m-21 7 3 2m11 3 3-1m-18 7 3-1m15 3 3-1"/>{[[43,103],[57,106],[41,113],[58,116],[45,120],[60,121]].map(([x,y]) => <path key={`${x}-${y}`} d={`M${x-1} ${y}h2m-1-1v2`}/>)}</g>}
     </>}
-    {rose && <>
-      <path d="M37 95h26l2 11q-15 3-30 0Z" fill="#1f1d24" stroke="#16141a" strokeWidth="1"/>
-      <circle cx="56" cy="96" r="1.1" fill="#d9be72" stroke="#8a7337" strokeWidth=".5"/>
-      <path d="m42 97-1 8m8-8v9m8-9 1 8" stroke="#3c3846" strokeWidth=".6"/>
-    </>}
-    {jisoo && <>
-      <path d="M37 95h26v2H37Z" fill="#1a1820" stroke="#141218" strokeWidth=".6"/>
-      <ellipse cx="43" cy="97" rx="1.3" ry="1.3" fill="none" stroke="#d5dbe5" strokeWidth=".8"/>
-    </>}
+    {!bp && trousers && <path d="M38 101h24m-12 0v6" fill="none" stroke="#786979" strokeWidth=".6"/>}
   </g>;
 }
 
 function Outfit({ c, skin }: { c: AnimeCharacter; skin: string }) {
-  const bp = c.series === "BLACKPINK";
-  const detail = artistStyling(c);
+  const bp = c.series === "BLACKPINK", detail = artistStyling(c);
+  const rose = c.id === "kpop-rose";
   return <g strokeLinejoin="round">
-    {bp ? <>
-      {/* Cropped JUMP! tee */}
-      <path d="M35 85q2-8 9-10h12q7 2 9 10l-2 10H37Z" fill={c.outfit} stroke={ink} strokeWidth="1.1"/>
-      {/* Bare midriff */}
-      <path d="M38 95h24v2H38Z" fill={skin} stroke="#bc927e" strokeWidth=".7"/>
-      <path d="M43 73v5q7 5 14 0v-5" fill={skin} stroke="#be9580" strokeWidth=".8"/>
-    </> : <>
-      <path d="M35 99v-9q1-8 9-11h12q9 3 9 11v9Z" fill={c.outfit} stroke={ink} strokeWidth="1.2"/>
-      <path d="M43 73v8q7 7 14 0v-8" fill={skin} stroke="#be9580" strokeWidth=".8"/>
-      {detail.outfitStyle === "cardigan" ? <><path d="m39 80 11 8 11-8m-11 8v11" fill="none" stroke="#fff0e6" strokeWidth="2"/><path d="M49 91h2m-2 4h2" stroke="#9d7e7b" strokeWidth="1"/></> : detail.outfitStyle === "suit" || detail.outfitStyle === "coat" ? <><path d="m38 80 9 8-6 7-8-11m29-4-9 8 6 7 8-11" fill="#efebe3" opacity=".8"/><path d="m47 83 3 4 3-4-2 14h-2Z" fill="#655565"/></> : <><path d="M40 81q10 8 20 0" fill="none" stroke="#f5e8db" strokeWidth="1.5"/><path d="M36 90h28" stroke="#fff0ed" opacity=".65" strokeWidth="1.5"/></>}
+    <path d={bp ? "M40 80q-6 2-6 10l3 7q13 2 26 0l3-7q0-8-6-10Z" : "M40 80q-7 2-7 11l3 12q14 3 28 0l3-12q0-9-7-11Z"} fill={c.outfit} stroke={ink} strokeWidth="1"/>
+    <path d="M44 73v7q6 5 12 0v-7" fill={skin} stroke="#bc9384" strokeWidth=".8"/>
+    {rose ? <path d="M38 81q11 8 24 1" fill="none" stroke="#dedde5" strokeWidth="2.2"/> : <path d="M43 80q7 6 14 0" fill="none" stroke={bp ? "#78717d" : "#ded6d1"} strokeWidth=".85"/>}
+    {!bp && (detail.outfitStyle === "suit" || detail.outfitStyle === "coat") && <>
+      <path d="m41 81 7 7-6 8-5-11m22-4-7 7 6 8 5-11" fill="#ece6e2" stroke="#b9afb8" strokeWidth=".5"/>
+      <path d="m48 84 2 2 2-2-1 14h-2Z" fill="#746078"/>
+      <path d="M50 99v4m8-9h5" stroke="#8a7c90" strokeWidth=".65"/>
     </>}
+    {!bp && detail.outfitStyle === "cardigan" && <>
+      <path d="m41 81 9 8 9-8m-9 8v14" fill="none" stroke="#f2e9df" strokeWidth="1.1"/>
+      {[92,97,101].map(y => <circle key={y} cx="51.5" cy={y} r=".55" fill="#927782"/>)}
+    </>}
+    {!bp && detail.outfitStyle === "dress" && <path d="M39 98q11 3 22 0m-11 0-3-2v4l3-2 3-2v4Z" fill="none" stroke="#e5cfd6" strokeWidth=".8"/>}
+    <path d="m38 90 1 4m23-4-1 4" stroke="#ffffff" strokeOpacity=".15" strokeWidth=".65"/>
   </g>;
 }
 
