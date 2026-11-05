@@ -44,6 +44,35 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(calls, [4, 2, 2, 2])
         self.assertTrue(all(item["answer"] == item["correct_answer"] == "Alpha" for item in result["items"]))
 
+    def test_partial_provider_run_gets_a_bounded_smaller_batch_recovery_cycle(self):
+        model = ("groq:openai/gpt-oss-120b", "groq", "openai/gpt-oss-120b", "test", "Test")
+        calls, created = [], [0]
+
+        def provider(_provider, _model, _key, _prompt, schema, _budget):
+            batch_size = schema["properties"]["items"]["maxItems"]
+            calls.append(batch_size)
+            if len(calls) == 1:
+                amount = min(4, batch_size)
+            elif len(calls) <= 5:
+                return {"title": "Set", "items": []}
+            else:
+                amount = min(batch_size, 8 - created[0])
+            items = []
+            for _ in range(amount):
+                created[0] += 1
+                items.append({"question": f"What does concept {created[0]} establish?", "answer": "A supported fact"})
+            return {"title": "Set", "items": items}
+
+        schema = {"properties": {"items": {"type": "array", "items": {"properties": {}}}}}
+        with patch.object(main, "configured_ai_models", return_value=[model]), \
+             patch.object(main, "generate_with_provider", side_effect=provider):
+            result, _used, _fallback, incomplete = main.generate_with_fallback(
+                lambda _count, _done: "Use the supplied source", schema, model[0], 8, study_format="identification")
+        self.assertEqual(len(result["items"]), 8)
+        self.assertFalse(incomplete)
+        self.assertEqual(calls[:5], [4, 4, 2, 1, 1])
+        self.assertTrue(all(size <= 2 for size in calls[5:]))
+
     def test_exact_source_evidence_accepts_pdf_line_wrap_hyphenation_only(self):
         source = "The micro-\norganism produces a distinctive result in culture."
         token = main._generation_grounding_text.set(source)
@@ -59,7 +88,7 @@ class RecoveryTests(unittest.TestCase):
         def provider(_provider, _model, _key, _prompt, schema, _budget):
             calls[0] += 1
             if calls[0] in {1, 5}:
-                raise main.ProviderError("groq", model[0], 429, "quota", retry_after=45)
+                raise main.ProviderError("groq", model[0], 429, "quota", retry_after=75)
             items = []
             for _ in range(schema["properties"]["items"]["maxItems"]):
                 count[0] += 1
@@ -75,7 +104,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(len(result["items"]), 150)
         self.assertFalse(incomplete)
         self.assertEqual(used, [model[0]])
-        self.assertGreaterEqual(clock[0], 90)
+        self.assertGreaterEqual(clock[0], 150)
         self.assertTrue(all(item["answer"] == item["correct_answer"] == "Alpha" for item in result["items"]))
 
     def test_groq_rejected_json_recovers_only_items_with_real_evidence(self):

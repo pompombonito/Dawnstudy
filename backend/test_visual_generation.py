@@ -27,6 +27,16 @@ class VisualGenerationTests(unittest.TestCase):
     def request(self, kind, include_images):
         return self.client.post("/api/generation-jobs", data={"format": kind, "question_count": "1", "include_images": str(include_images).lower()}, files={"files": ("notes.pdf", self.pdf, "application/pdf")})
 
+    def test_visual_question_selection_spreads_across_pages_then_keeps_same_page_figures(self):
+        figures = [
+            {"id": "p1-a", "source_ref": "PDF page 1"},
+            {"id": "p1-b", "source_ref": "PDF page 1"},
+            {"id": "p2-a", "source_ref": "PDF page 2"},
+            {"id": "p2-b", "source_ref": "PDF page 2"},
+        ]
+        selected = main.select_visual_question_figures(figures, 100)
+        self.assertEqual([figure["id"] for figure in selected], ["p1-a", "p2-a", "p1-b", "p2-b"])
+
     def test_optional_images_reach_saved_cards_in_every_notes_format(self):
         for kind in ("flashcards", "identification", "multiple_choice", "checkbox"):
             with self.subTest(kind=kind):
@@ -34,7 +44,7 @@ class VisualGenerationTests(unittest.TestCase):
                     if prompt.startswith("Inspect this actual image"):
                         self.assertEqual(main._provider_images.get(), (("file-0-pdf-p1-figure-1", self.image),))
                         return {"title": "Figure", "items": [{"question": "file-0-pdf-p1-figure-1", "answer": self.figure["context"], "relevant": True}]}
-                    return {"title": "Plant biology", "items": [{"question": "Which structure in the attached diagram contains thylakoids?", "answer": "Chloroplast", "correct_answer": "Chloroplast", "options": ["Chloroplast", "Mitochondria", "Nucleoplasm", "Cytoplasmic"], "figure_refs": ["file-0-pdf-p1-figure-1"], "source_refs": ["notes.pdf · PDF page 1"]}]}
+                    return {"title": "Plant biology", "items": [{"question": "Which structure in the attached diagram contains thylakoids?", "answer": "Chloroplast", "correct_answer": "Chloroplast", "options": ["Chloroplast", "Mitochondria", "Nucleoplasm", "Cytoplasmic"], "figure_refs": ["file-0-pdf-p1-figure-1"], "source_refs": ["notes.pdf · PDF page 1"], "source_evidence": "The diagram shows a chloroplast containing thylakoids."}]}
                 with patch.object(main, "extract_material", return_value=("[SOURCE: notes.pdf · PDF page 1]\n" + self.material.decode(), ["PDF page 1"], [])), patch.object(main, "extract_pdf_figures", return_value=[self.figure]), patch.object(main, "configured_ai_models", return_value=[("gemini:gemini-3.8-flash", "gemini", "gemini-3.8-flash", "test-key", "Vision")]), patch.object(main, "generate_with_provider", side_effect=provide):
                     response = self.request(kind, True)
                 self.assertEqual(response.status_code, 202, response.text)
@@ -45,6 +55,48 @@ class VisualGenerationTests(unittest.TestCase):
                 self.assertTrue(job["result"]["include_images"])
                 self.assertEqual(next(iter(self.sets.values()))["items"][0]["images"], [self.image])
                 self.sets.clear()
+
+    def test_verified_figure_questions_are_prioritized_and_fill_the_requested_total(self):
+        figure = {**self.figure, "id": "file-0-pdf-p1-figure-1", "source_ref": "notes.pdf · PDF page 1",
+                  "description": "The diagram shows a chloroplast containing thylakoids."}
+        calls = []
+
+        def provide(_provider, _model, _key, prompt, schema, _max_tokens):
+            calls.append(prompt)
+            if prompt.startswith("Create accurate, useful study questions"):
+                return {"title": "Plant biology", "items": [{
+                    "question": "Which structure in the diagram contains thylakoids?",
+                    "answer": "Chloroplast", "source_evidence": "The diagram shows a chloroplast containing thylakoids.",
+                    "source_refs": [figure["source_ref"]], "figure_refs": [figure["id"]],
+                }]}
+            count = schema["properties"]["items"]["maxItems"]
+            return {"title": "Plant biology", "items": [{
+                "question": f"What supported plant biology concept is item {index + 1}?",
+                "answer": "A supported concept", "source_evidence": "Chlorophyll absorbs light",
+                "source_refs": [figure["source_ref"]],
+            } for index in range(count)]}
+
+        with patch.object(main, "extract_material", return_value=("[SOURCE: notes.pdf · PDF page 1]\n" + self.material.decode(), ["PDF page 1"], [])), \
+             patch.object(main, "extract_pdf_figures", return_value=[self.figure]), \
+             patch.object(main, "describe_material_figures", return_value={figure["id"]: figure}), \
+             patch.object(main, "configured_ai_models", return_value=[("zai:glm-4.7-flash", "zai", "glm-4.7-flash", "test-key", "Text model")]), \
+             patch.object(main, "generate_with_provider", side_effect=provide):
+            response = self.client.post(
+                "/api/generation-jobs",
+                data={"format": "flashcards", "question_count": "3", "include_images": "true"},
+                files={"files": ("notes.pdf", self.pdf, "application/pdf")},
+            )
+        self.assertEqual(response.status_code, 202, response.text)
+        job = self.client.get("/api/generation-jobs/" + response.json()["job_id"]).json()
+        self.assertEqual(job["status"], "complete", job)
+        items = job["result"]["items"]
+        self.assertEqual(len(items), 3)
+        attached = [item for item in items if item.get("images")]
+        self.assertEqual(len(attached), 1, (job["result"], calls))
+        self.assertEqual(attached[0]["images"], [self.image])
+        self.assertEqual(attached[0]["source_refs"], [figure["source_ref"]])
+        self.assertTrue(any("Create accurate, useful study questions" in prompt for prompt in calls))
+        self.assertEqual(len(next(iter(self.sets.values()))["items"]), 3)
 
     def test_png_and_webp_upload_text_are_combined_in_one_generation(self):
         excerpts = {

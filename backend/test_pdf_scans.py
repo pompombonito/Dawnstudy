@@ -38,6 +38,45 @@ def native_figure_pdf():
     return output.getvalue()
 
 
+def vector_figure_pdf():
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=600, height=800)
+    font = writer._add_object(DictionaryObject({NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"), NameObject("/BaseFont"): NameObject("/Helvetica")}))
+    page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})})
+    stream = DecodedStreamObject()
+    stream.set_data(
+        b"BT /F1 12 Tf 45 750 Td "
+        b"(Vector diagrams can be part of a PDF page even when the file has no embedded image objects.) Tj "
+        b"0 -18 Td (The page should remain available as a visual study reference.) Tj ET "
+        b"0 0 1 rg 150 400 220 180 re f"
+    )
+    page[NameObject("/Contents")] = writer._add_object(stream)
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def repeated_figure_pdf():
+    writer = PdfWriter()
+    font = writer._add_object(DictionaryObject({NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"), NameObject("/BaseFont"): NameObject("/Helvetica")}))
+    figure = DecodedStreamObject()
+    figure.set_data(Image.new("RGB", (100, 100), "navy").tobytes())
+    figure.update({NameObject("/Type"): NameObject("/XObject"), NameObject("/Subtype"): NameObject("/Image"), NameObject("/Width"): NumberObject(100), NameObject("/Height"): NumberObject(100), NameObject("/ColorSpace"): NameObject("/DeviceRGB"), NameObject("/BitsPerComponent"): NumberObject(8)})
+    figure_ref = writer._add_object(figure)
+    for number in (1, 2):
+        page = writer.add_blank_page(width=600, height=800)
+        page[NameObject("/Resources")] = DictionaryObject({
+            NameObject("/Font"): DictionaryObject({NameObject("/F1"): font}),
+            NameObject("/XObject"): DictionaryObject({NameObject("/Img"): figure_ref}),
+        })
+        stream = DecodedStreamObject()
+        stream.set_data(f"BT /F1 14 Tf 50 750 Td (Question context for page {number}.) Tj ET\nq 150 0 0 150 50 550 cm /Img Do Q".encode())
+        page[NameObject("/Contents")] = writer._add_object(stream)
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
 class PdfScanTests(unittest.TestCase):
     def test_long_pdf_figure_scan_is_broad_and_bounded(self):
         selected = sample_figure_pages(range(127))
@@ -55,6 +94,16 @@ class PdfScanTests(unittest.TestCase):
         self.assertIn("blue region", text)
         self.assertEqual(labels, ["PDF page 1"])
         self.assertEqual(progress, [(1, 1, 1)])
+
+    def test_vector_only_page_is_kept_as_a_visual_candidate(self):
+        raw = vector_figure_pdf()
+        with patch("pdf_questionnaire.ocr_learning_image", side_effect=AssertionError("Readable vector pages should not need OCR")):
+            figures = extract_pdf_figures(raw, [0])
+        self.assertEqual(len(figures), 1)
+        self.assertEqual(figures[0]["id"], "pdf-p1-visual-page")
+        self.assertEqual(figures[0]["source_ref"], "PDF page 1")
+        self.assertIn("Vector diagrams", figures[0]["context"])
+        self.assertTrue(figures[0]["data_url"].startswith("data:image/webp;base64,"))
 
     def test_uploaded_scan_attaches_detected_diagram_only_to_its_question(self):
         image = Image.new("RGB", (600, 800), "white")
@@ -118,12 +167,30 @@ class PdfScanTests(unittest.TestCase):
             text, _ = extract_pdf_learning_material(raw, PdfReader(BytesIO(raw)), [0])
         self.assertIn("blue region", text)
 
+    def test_repeated_image_on_separate_pages_keeps_each_page_context(self):
+        figures = extract_pdf_figures(repeated_figure_pdf(), [0, 1])
+        self.assertEqual([figure["source_ref"] for figure in figures], ["PDF page 1", "PDF page 2"])
+        self.assertIn("page 1", figures[0]["context"])
+        self.assertIn("page 2", figures[1]["context"])
+        self.assertEqual(figures[0]["data_url"], figures[1]["data_url"])
+
     def test_scanned_notes_figures_have_page_context(self):
         raw = scan_pdf()
         crop = {"data_url": "data:image/webp;base64,AA==", "context": "Cell diagram"}
         with patch("pdf_questionnaire.ocr_learning_image", return_value=("Cell diagram", [crop])):
             figures = extract_pdf_figures(raw, [0])
         self.assertEqual(figures, [{**crop, "id": "pdf-p1-scan-figure-1", "page": 1, "source_ref": "PDF page 1"}])
+
+    def test_scanned_pages_keep_a_small_number_of_best_figure_crops(self):
+        raw = scan_pdf()
+        crops = [{"data_url": f"data:image/webp;base64,{value}", "context": f"Figure region {value}"}
+                 for value in ("AA==", "AQ==", "Ag==", "Aw==", "BA==")]
+        with patch("pdf_questionnaire.ocr_learning_image", return_value=("Cell diagram", crops)):
+            figures = extract_pdf_figures(raw, [0])
+        self.assertEqual(len(figures), 3)
+        self.assertEqual([figure["id"] for figure in figures], [
+            "pdf-p1-scan-figure-1", "pdf-p1-scan-figure-2", "pdf-p1-scan-figure-3",
+        ])
 
     def test_scanned_region_detection_keeps_diagram_and_discards_text(self):
         image = Image.new("RGB", (600, 800), "white")

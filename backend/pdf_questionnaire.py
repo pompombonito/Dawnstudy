@@ -2,7 +2,6 @@
 import re
 import threading
 import hashlib
-import random
 
 from PIL import Image
 
@@ -191,24 +190,21 @@ def extract_pdf_figures(raw, page_indices, limit=MAX_PDF_FIGURE_CANDIDATES, prog
     import pypdfium2 as pdfium
 
     page_indices = sample_figure_pages(page_indices)
-    figures = []
-    seen_images = set()
-    seen_count = 0
-    sampling = random.Random(0)
+    candidates_by_page = {}
+    seen_images_by_page = {}
 
-    def keep(figure):
-        nonlocal seen_count
+    def keep(figure, score=0.0):
         digest = hashlib.sha256(figure["data_url"].encode()).digest()
+        page_number = figure.get("page")
+        seen_images = seen_images_by_page.setdefault(page_number, set())
         if digest in seen_images:
             return
         seen_images.add(digest)
-        seen_count += 1
-        if len(figures) < limit:
-            figures.append(figure)
-        else:
-            position = sampling.randrange(seen_count)
-            if position < limit:
-                figures[position] = figure
+        if page_number is not None:
+            page_candidates = candidates_by_page.setdefault(page_number, [])
+            page_candidates.append((score, figure))
+            page_candidates.sort(key=lambda candidate: (-candidate[0], candidate[1]["id"]))
+            del page_candidates[3:]
     with _pdfium_lock:
         document = pdfium.PdfDocument(raw)
         try:
@@ -229,41 +225,71 @@ def extract_pdf_figures(raw, page_indices, limit=MAX_PDF_FIGURE_CANDIDATES, prog
                     for obj in page.get_objects(filter=[pdfium.raw.FPDF_PAGEOBJ_IMAGE]):
                         bounds = obj.get_bounds()
                         has_scan = has_scan or ((bounds[2]-bounds[0])*(bounds[3]-bounds[1]) > page_width*page_height*.4)
-                        data = _image_data_url(obj, bounds, page_width * page_height, maximum_area=.98)
+                        # Keep actual figure crops here. Full-slide scans and
+                        # background layers are handled by the page-render
+                        # fallback below so they cannot crowd out diagrams.
+                        data = _image_data_url(obj, bounds, page_width * page_height, maximum_area=.4)
                         if not data:
                             continue
                         number += 1
                         nearby = sorted(((value, box) for value, box in lines if box), key=lambda item: _rect_distance(item[1], bounds))[:10]
+                        context = _clean_pdf_text("\n".join(value for value, _box in nearby))[:1800]
+                        area_ratio = ((bounds[2]-bounds[0]) * (bounds[3]-bounds[1])) / max(1, page_width * page_height)
                         keep({"id": f"pdf-p{index + 1}-figure-{number}", "page": index + 1,
                                         "source_ref": f"PDF page {index + 1}",
-                                        "context": _clean_pdf_text("\n".join(value for value, _box in nearby))[:1800],
-                                        "data_url": data})
+                                        "context": context,
+                                        "data_url": data}, score=min(area_ratio, .7) + min(len(context), 600) / 6000 + 1.0)
                         if number >= 3:
                             break
-                    if (has_scan or number == 0) and len(text.strip()) < 150:
+                    if number == 0 or (has_scan and number < 2):
                         bitmap = page.render(scale=min(2.5, 2600/max(page_width, page_height)))
                         image = bitmap.to_pil().convert("RGB")
                         bitmap.close()
                         scanned = []
                         try:
-                            _text, scanned = ocr_learning_image(image, include_images=True)
-                            for ordinal, figure in enumerate(scanned, 1):
-                                keep({**figure, "id": f"pdf-p{index+1}-scan-figure-{ordinal}",
-                                                "page": index+1, "source_ref": f"PDF page {index+1}"})
-                        except (ImportError, RuntimeError):
-                            pass
-                        finally:
-                            if number == 0 and not scanned:
+                            if len(text.strip()) < 150:
+                                try:
+                                    _text, scanned = ocr_learning_image(image, include_images=True)
+                                    for ordinal, figure in enumerate(scanned[:3], 1):
+                                        context = _clean_pdf_text(figure.get("context", text))[:1800]
+                                        keep({**figure, "id": f"pdf-p{index+1}-scan-figure-{ordinal}",
+                                                      "page": index+1, "source_ref": f"PDF page {index+1}",
+                                                      "context": context}, score=.5 + min(len(context), 600) / 6000)
+                                except (ImportError, RuntimeError):
+                                    pass
+                            # Vector-only slides have no image XObjects for
+                            # PDFium to crop. Keep a rendered page candidate so
+                            # its embedded diagram/photo is still available to
+                            # vision review, even when the slide has readable
+                            # text and OCR does not produce separate crops.
+                            if (number == 0 and not scanned) or (has_scan and number > 0):
                                 data = image_data_url(image)
                                 if data:
+                                    context = _clean_pdf_text(text)[:1800]
                                     keep({"id": f"pdf-p{index+1}-visual-page", "page": index+1,
-                                          "source_ref": f"PDF page {index+1}", "context": _clean_pdf_text(text)[:1800], "data_url": data})
+                                          "source_ref": f"PDF page {index+1}", "context": context, "data_url": data},
+                                         score=.25 + min(len(context), 600) / 6000)
+                        finally:
                             image.close()
                 finally:
                     textpage.close()
                     page.close()
         finally:
             document.close()
+    # Use one representative per page before filling spare slots with a second
+    # figure. Reservoir sampling could accidentally spend most of the small
+    # candidate budget on one section and omit later photos/diagrams entirely.
+    pages = sorted(candidates_by_page)
+    selected_pages = sample_figure_pages(pages, maximum=limit)
+    figures = [max(candidates_by_page[page_number], key=lambda candidate: candidate[0])[1]
+               for page_number in selected_pages]
+    if len(figures) < limit:
+        selected_ids = {figure["id"] for figure in figures}
+        extras = sorted(
+            (candidate for page_number in pages for candidate in candidates_by_page[page_number]
+             if candidate[1]["id"] not in selected_ids),
+            key=lambda candidate: (-candidate[0], candidate[1].get("page", 0), candidate[1]["id"]))
+        figures.extend(figure for _score, figure in extras[:limit-len(figures)])
     return sorted(figures, key=lambda figure: (figure.get("page", 0), figure["id"]))
 
 

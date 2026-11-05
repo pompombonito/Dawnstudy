@@ -208,6 +208,55 @@ class ImportRouteTests(unittest.TestCase):
             self.assertEqual(item["answer_origin"], "provided" if with_key else "inferred")
             self.assertEqual("AI-inferred" in item["explanation"], not with_key)
 
+    def test_partial_questionnaire_completion_retries_only_missing_records_in_smaller_batches(self):
+        calls = []
+
+        def partial_completion(_provider, _model, _key, prompt, _schema, _max_tokens):
+            batch = json.loads(prompt.split("\n", 1)[1])
+            calls.append([record["number"] for record in batch])
+            returned = batch[:2] if len(batch) > 2 else batch
+            return {"title": "Ignored", "items": [{
+                "number": record["number"], "question": record["question"], "answer": f"Term {record['number']}",
+                "uncertain": False, "distractors": [], "matching_pairs": [],
+            } for record in returned]}
+
+        self.provider.side_effect = partial_completion
+        source = "\n".join(f"{number}. Identify energy concept {number}." for number in range(1, 9))
+        result = self.request(source, "flashcards")
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertFalse(result.json()["incomplete"], (result.json(), calls))
+        self.assertEqual(len(result.json()["items"]), 8)
+        self.assertEqual([item["answer"] for item in result.json()["items"]], [f"Term {number}" for number in range(1, 9)])
+        self.assertEqual(len(calls), 5)
+        self.assertTrue(any(len(batch) == 3 for batch in calls))
+        self.assertEqual(set(number for batch in calls for number in batch), {str(number) for number in range(1, 9)})
+
+    def test_questionnaire_retries_after_a_short_explicit_provider_rate_limit(self):
+        model = ("mock:test", "mock", "test", "fake-key", "Test model")
+        clock, calls = [0.0], [0]
+
+        def provider(*_args):
+            calls[0] += 1
+            if calls[0] == 1:
+                raise main.ProviderError("mock", model[0], 429, "temporary rate limit", retry_after=5)
+            return {"title": "Ignored", "items": [{
+                "number": "1", "question": "Name the electron carrier.", "answer": "NADH",
+                "uncertain": False, "distractors": [], "matching_pairs": [],
+            }]}
+
+        with patch.object(main, "configured_ai_models", return_value=[model]), \
+             patch.object(main, "generate_with_provider", side_effect=provider), \
+             patch.object(main.time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(main.time, "sleep", side_effect=lambda duration: clock.__setitem__(0, clock[0] + duration)):
+            items, used, incomplete, requested, _unresolved = main.import_questionnaire(
+                ["1. Name the electron carrier."], "flashcards", "auto")
+        self.assertEqual(calls[0], 2)
+        self.assertEqual(clock[0], 5)
+        self.assertEqual(used, [model[0]])
+        self.assertFalse(incomplete)
+        self.assertEqual(requested, 1)
+        self.assertEqual(items[0]["answer"], "NADH")
+
     def test_missing_key_preserves_original_choices_and_infers_only_answer(self):
         result = self.request(CHOICES.split("Answer key")[0])
         self.assertEqual(result.status_code, 200, result.text)
