@@ -17,7 +17,7 @@ import GameRoom from "./community/GameRoom";
 import CompanionDock from "./community/CompanionDock";
 import Agreement from "./community/Agreement";
 import { DawnArtwork, DawnMark } from "./components/DawnArtwork";
-import { cancelGenerationJob, findGenerationJob, GenerationCancelledError, GenerationJobError, pollGenerationJob, startGenerationJob, QuestionnaireTypeMismatchError, type GenerationJob, type GenerationStatus, type QuestionnaireMismatchPreview } from "./generation-jobs";
+import { cancelGenerationJob, findGenerationJob, generationReadyText, GenerationCancelledError, GenerationJobError, pollGenerationJob, startGenerationJob, QuestionnaireTypeMismatchError, type GenerationJob, type GenerationStatus, type QuestionnaireMismatchPreview } from "./generation-jobs";
 import { deleteUnsyncedStudyDraft, getUnsyncedStudyDraft, saveUnsyncedStudyDraft } from "./unsynced-study-drafts";
 import {
   AlarmClock, ArrowLeftRight, BookOpen, Check, CheckSquare, ChevronLeft, ChevronRight, CircleHelp, Clock3,
@@ -757,7 +757,7 @@ export default function Home() {
     if (signal.aborted) throw new DOMException("Generation monitoring stopped.", "AbortError");
     if (synced) setSets((old) => [studySet, ...old.filter((item) => item.id !== studySet.id && item.id !== base?.id)].slice(0, 100));
     const notices = [studySet.incomplete
-      ? `${studySet.items.length} of ${studySet.requested_count || studySet.items.length} questions are saved. Continue generating when you are ready.`
+      ? `${studySet.items.length} of ${Math.max(studySet.items.length, studySet.requested_count || 0)} questions are ${synced ? "saved" : "ready"}. The remaining questions still need verified answers or choices.`
       : `Your study set is ready with ${studySet.items.length} questions.`];
     if (data.auto_model) notices.push("Auto chose " + modelName(data.auto_model) + ".");
     if (data.fallback) notices.push(modelName(data.fallback.to) + " helped complete the generation.");
@@ -787,7 +787,7 @@ export default function Home() {
       if (synced) resetGenerationCancellation();
       setGenerationNeedsReconnect(!synced);
       setGenerationStatus(synced ? null : {
-        status: "paused", stage: "saving", message: "Your questions are ready. Reconnect to retry saving them to your account.",
+        status: "paused", stage: "saving", message: `${data.items.length} questions are ready. Reconnect to retry account sync.`,
         completed: data.items.length, requested: data.requested_count || data.items.length,
       });
     }
@@ -953,7 +953,7 @@ export default function Home() {
     if (sourceMode !== "file" && !websiteUrl.trim()) { setComposerStep(0); setError("Paste a public website link first."); return; }
     if (inputMode === "questionnaire") primeQuestionnaireMismatchSound();
     setBusy(true); setError(""); setNotice("");
-    setGenerationStatus({ status: "queued", stage: "queued", message: "Joining the study queue…", completed: 0, requested: questionCount });
+    setGenerationStatus({ status: "queued", stage: "queued", message: "Joining the study queue…", completed: 0, requested: inputMode === "questionnaire" ? 0 : questionCount });
     const form = new FormData();
     if (sourceMode === "file") files.forEach((selectedFile) => form.append("files", selectedFile));
     else form.append("source_url", websiteUrl.trim());
@@ -1499,10 +1499,10 @@ export default function Home() {
             <span className="generation-status-pulse"/>
             <div className="generation-status-copy">
               <strong>{generationStopping ? generationNeedsReconnect ? "Stopping… Reconnect to confirm cancellation." : "Stopping… The current request may finish first." : generationStatus.message || "Preparing your study set…"}</strong>
-              <small>{generationStatus.model ? modelName(generationStatus.model) : generationStatus.stage === "queued" ? "Waiting for an available model" : "Dawnstudy generation service"}{generationStatus.requested > 0 && ` · ${generationStatus.completed} of ${generationStatus.requested} ready`}</small>
+              <small>{generationStatus.model ? modelName(generationStatus.model) : generationStatus.stage === "queued" ? "Waiting for a processing slot" : inputMode === "questionnaire" ? "Questionnaire import" : "Study set creation"}{generationReadyText(generationStatus.completed, generationStatus.requested) && ` · ${generationReadyText(generationStatus.completed, generationStatus.requested)}`}</small>
               {generationCancelError && <span className="generation-cancel-error" role="alert">{generationCancelError}</span>}
             </div>
-            {generationStatus.requested > 0 && <div className="generation-progress-track" aria-label={`${generationStatus.completed} of ${generationStatus.requested} questions ready`}><i style={{ width: `${Math.min(100, generationStatus.completed / generationStatus.requested * 100)}%` }}/></div>}
+            {generationStatus.requested > 0 && generationStatus.requested >= generationStatus.completed && <div className="generation-progress-track" aria-label={generationReadyText(generationStatus.completed, generationStatus.requested)}><i style={{ width: `${Math.min(100, generationStatus.completed / generationStatus.requested * 100)}%` }}/></div>}
             {account && <div className="generation-status-actions">
               {generationNeedsReconnect && <button type="button" className="generation-reconnect" disabled={busy || continueBusy} onClick={() => void restoreGeneration(authToken, account.id)}>Reconnect</button>}
               <button type="button" className="generation-cancel" disabled={!generationCanCancel || generationStopping || generationCancelBusy} title={generationStatus.stage === "saving" ? "Your questions are being saved." : undefined} onClick={() => void cancelGeneration()}>{generationStopping || generationCancelBusy ? "Stopping…" : "Cancel generation"}</button>
@@ -1599,7 +1599,7 @@ export default function Home() {
           </section>}
           {result && currentCard && !reviewActive && !practiceActive && <section className="result-panel"><div className="result-head"><div><div className="result-kicker"><span/> YOUR STUDY SET</div><h2>{result.title}</h2><p>{result.items.length} {studySetTypeLabel(result).toLowerCase()} · ready when you are{result.model ? ` · ${modelName(result.model)}` : ""}</p></div><button className="plain-icon" title="Close study set" onClick={() => setResult(null)}><X size={18}/></button></div>
             <div className="set-action-row"><label>Test pace<select value={practiceSecondsPerQuestion} onChange={(event) => setPracticeSecondsPerQuestion(Number(event.target.value))}><option value={0}>No timer</option><option value={20}>20 sec / question</option><option value={30}>30 sec / question</option><option value={45}>45 sec / question</option></select></label>{result.items.some((card) => quizKind(card, result.type) !== "flashcards") && <button className="action-button" onClick={() => { if (result) setGameSet(result.id); navigateTo("games"); }}><Gamepad2 size={15}/> Play with friends</button>}<button className="action-button" onClick={startPractice}><AlarmClock size={15}/> {practiceSecondsPerQuestion === 0 ? "Start practice" : "Start timed test"}</button><button className="action-button" onClick={() => void shareCurrentSet()} disabled={shareBusy}><Share2 size={15}/>{shareBusy ? "Working…" : "Share set"}</button></div>
-            {result.incomplete && <div className="incomplete-generation"><div><strong>{result.items.length} of {result.requested_count || result.items.length} questions generated</strong><span>{result.source_url ? "Your generated questions are held. Continue from the same public webpage when ready." : files.length ? "Your generated questions are held. Continue with the selected original files when ready." : "Re-select the original files to continue this set."}</span>{!result.source_url && files.length > 0 && <button type="button" className="resume-source-button" onClick={pickOriginalFiles}>Replace original files ({files.length} selected)</button>}</div><button className="continue-generation-button" disabled={continueBusy || busy || generationNeedsReconnect} onClick={() => { if (!files.length && !result.source_url) pickOriginalFiles(); else void continueGenerating(); }}>{continueBusy ? <><span className="spinner"/> Continuing…</> : <><Sparkles size={17}/> {!files.length && !result.source_url ? "Select original files" : "Continue generating"}</>}</button></div>}
+            {result.incomplete && <div className="incomplete-generation"><div><strong>{result.items.length} of {Math.max(result.items.length, result.requested_count || 0)} questions {result.items.some(card => card.imported) ? "imported" : "generated"}</strong><span>{result.source_url ? "Your generated questions are held. Continue from the same public webpage when ready." : files.length ? "Your completed questions are kept. Use the original files to finish the remaining questions." : "Re-select the original files to continue this set."}</span>{!result.source_url && files.length > 0 && <button type="button" className="resume-source-button" onClick={pickOriginalFiles}>Replace original files ({files.length} selected)</button>}</div><button className="continue-generation-button" disabled={continueBusy || busy || generationNeedsReconnect} onClick={() => { if (!files.length && !result.source_url) pickOriginalFiles(); else void continueGenerating(); }}>{continueBusy ? <><span className="spinner"/> Continuing…</> : <><Sparkles size={17}/> {!files.length && !result.source_url ? "Select original files" : "Continue generating"}</>}</button></div>}
             {shareUrl && <div className="share-link-row"><span>Anyone with this link can view this set:</span><a href={shareUrl} target="_blank" rel="noreferrer">{shareUrl}</a><button className="plain-icon" title="Copy share link" onClick={() => { void navigator.clipboard.writeText(shareUrl).then(() => setNotice("Share link copied.")).catch(() => setNotice("Select and copy the share link above.")); }}><Copy size={15}/></button><button className="share-revoke" disabled={shareBusy} onClick={() => void turnOffShareLink(result.id)}>Turn off link</button></div>}
             <div className="study-card"><div className="study-card-top"><span className="flashcard-label">{quizTypeLabel(quizKind(currentCard, result.type)).toUpperCase()}</span><span className="card-number">{String(current + 1).padStart(2,"0")} <i>/</i> {String(result.items.length).padStart(2,"0")}</span></div>
               {currentCard.answer_origin === "inferred" && <p className="import-review-note">AI-inferred answer · review for accuracy</p>}{renderQuestionImages(currentCard)}{renderCardInteraction(currentCard, result.type)}

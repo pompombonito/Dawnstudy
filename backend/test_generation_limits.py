@@ -122,6 +122,26 @@ class GenerationLimitTests(unittest.TestCase):
         self.assertNotIn("persistence_error", job["result"])
         self.assertEqual(len(self.sets[job["result"]["id"]]["items"]), 200)
 
+    def test_background_generation_binds_and_resets_ocr_cancellation(self):
+        observed = []
+
+        def capture_ocr_context(**_kwargs):
+            callback = main.ocr_cancellation.get()
+            observed.append(callback)
+            self.assertTrue(callable(callback))
+            callback()
+            return {"id": "ocr-cancel-test", "items": [{"question": "Q", "answer": "A"}],
+                    "requested_count": 1, "incomplete": False}
+
+        with patch.object(main, "generate", side_effect=capture_ocr_context):
+            submitted = self.generate(1, "/api/generation-jobs")
+
+        self.assertEqual(submitted.status_code, 202, submitted.text)
+        job = self.client.get(f"/api/generation-jobs/{submitted.json()['job_id']}").json()
+        self.assertEqual(job["status"], "complete", job)
+        self.assertEqual(len(observed), 1)
+        self.assertIsNone(main.ocr_cancellation.get())
+
     def test_continuation_preserves_60_existing_questions_and_finishes_at_200(self):
         original = self.generate(60).json()
         original.update(requested_count=200, incomplete=True)
