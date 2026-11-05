@@ -120,6 +120,33 @@ class VisualGenerationTests(unittest.TestCase):
         finally:
             main._generation_grounding_text.reset(token)
 
+    def test_verified_provider_evidence_survives_job_and_account_save(self):
+        source = "Chlorophyll absorbs light in chloroplasts. During photosynthesis, light energy becomes chemical energy, and plants use water and carbon dioxide to produce sugars and oxygen."
+        provider_item = {
+            "question": "What absorbs light?",
+            "answer": "Chlorophyll",
+            "source_refs": ["notes.txt · PDF page 1"],
+            "source_evidence": "Chlorophyll absorbs light",
+        }
+        response = Mock(ok=True, status_code=200)
+        response.json.return_value = {"choices": [{"message": {"content": json.dumps({"title": "Plant biology", "items": [provider_item]})}}]}
+        with patch.object(main, "extract_material", return_value=(source, ["PDF page 1"], [])), \
+             patch.object(main, "configured_ai_models", return_value=[("zai:glm-4.7-flash", "zai", "glm-4.7-flash", "test-key", "Test model")]), \
+             patch.object(main, "generate_with_provider", side_effect=generate_with_provider), \
+             patch.object(main, "post_provider_json", return_value=response):
+            queued = self.client.post(
+                "/api/generation-jobs",
+                data={"format": "flashcards", "question_count": "1", "include_images": "false"},
+                files={"files": ("notes.txt", source.encode(), "text/plain")},
+            )
+        self.assertEqual(queued.status_code, 202, queued.text)
+        job = self.client.get("/api/generation-jobs/" + queued.json()["job_id"]).json()
+        self.assertEqual(job["status"], "complete", job)
+        generated = job["result"]["items"][0]
+        self.assertEqual(generated["source_evidence"], provider_item["source_evidence"])
+        saved = next(iter(self.sets.values()))["items"][0]
+        self.assertEqual(saved["source_evidence"], provider_item["source_evidence"])
+
 
 if __name__ == "__main__":
     unittest.main()

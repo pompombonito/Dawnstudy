@@ -62,7 +62,7 @@ export function AvatarPicker({
           ...[
             ["animals", "Animals"],
             ["characters", "Characters"],
-            ["anime", "Anime"],
+            ["anime", "Anime & K-pop"],
           ],
           ...(!companions
             ? [
@@ -87,9 +87,9 @@ export function AvatarPicker({
       {filter === "anime" && (
         <div className="anime-filters">
           <label className="outfit-filter">
-            Anime series
+            Show or group
             <select
-              aria-label="Anime series"
+              aria-label="Show or group"
               value={series}
               onChange={(event) => {
                 setSeries(event.target.value);
@@ -101,9 +101,9 @@ export function AvatarPicker({
             </select>
           </label>
           <label className="outfit-filter">
-            Search anime characters
+            Search characters
             <input
-              aria-label="Search anime characters"
+              aria-label="Search characters"
               type="search"
               value={search}
               onChange={(event) => {

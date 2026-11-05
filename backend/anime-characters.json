@@ -2701,5 +2701,121 @@
     },
     "chibiReference": "https://kaoruhana-anime.com/bddvd/special.html",
     "chibiReferenceKind": "licensed-chibi"
+  },
+  {
+    "id": "kpop-sooya",
+    "name": "SOOYA",
+    "series": "BLACKPINK",
+    "studyLine": "You’re making steady progress, hop by hop.",
+    "hair": "#fffaf2", "eyes": "#332b35", "outfit": "#ecb1bd", "bg": "transparent", "style": "mascot-rabbit", "accessory": "none",
+    "reference": "https://www.ygselect.com/product/bptour-blackpink-character-plush-doll/7975/category/43/display/1/",
+    "chibiReference": "https://www.ygselect.com/product/bptour-blackpink-character-plush-doll/7975/category/43/display/1/",
+    "chibiReferenceKind": "official-character-merch",
+    "face": {"eyes":"soft","eyeWidth":8,"eyeHeight":9,"eyeSpacing":25,"irisScale":0.48,"pupilScale":0.5,"eyeTilt":0,"gazeX":0,"brow":"soft","mouth":"small-smile","faceShape":"round","blush":0.18,"lashes":false,"irisDetail":"plain","highlights":true,"mouthScale":0.7}
+  },
+  {
+    "id": "kpop-gomdeuki",
+    "name": "GOMDEUKI",
+    "series": "BLACKPINK",
+    "studyLine": "Take a cozy breath, then we’ll keep going together.",
+    "hair": "#9d6248", "eyes": "#332b35", "outfit": "#e7b0bd", "bg": "transparent", "style": "mascot-bear", "accessory": "none",
+    "reference": "https://www.ygselect.com/product/bptour-blackpink-character-plush-doll/7975/category/43/display/1/",
+    "chibiReference": "https://www.ygselect.com/product/bptour-blackpink-character-plush-doll/7975/category/43/display/1/",
+    "chibiReferenceKind": "official-character-merch",
+    "face": {"eyes":"round","eyeWidth":8,"eyeHeight":9,"eyeSpacing":25,"irisScale":0.48,"pupilScale":0.5,"eyeTilt":0,"gazeX":0,"brow":"soft","mouth":"small-smile","faceShape":"round","blush":0.1,"lashes":false,"irisDetail":"plain","highlights":true,"mouthScale":0.7}
+  },
+  {
+    "id": "kpop-rosie",
+    "name": "ROSIE",
+    "series": "BLACKPINK",
+    "studyLine": "Your knowledge is growing a little more every day.",
+    "hair": "#c98354", "eyes": "#49352c", "outfit": "#f1c7ab", "bg": "transparent", "style": "mascot-squirrel", "accessory": "none",
+    "reference": "https://www.ygselect.com/product/bptour-blackpink-character-plush-doll/7975/category/43/display/1/",
+    "chibiReference": "https://www.ygselect.com/product/bptour-blackpink-character-plush-doll/7975/category/43/display/1/",
+    "chibiReferenceKind": "official-character-merch",
+    "face": {"eyes":"almond","eyeWidth":8,"eyeHeight":9,"eyeSpacing":25,"irisScale":0.5,"pupilScale":0.5,"eyeTilt":2,"gazeX":0,"brow":"raised","mouth":"open-smile","faceShape":"round","blush":0.16,"lashes":false,"irisDetail":"plain","highlights":true,"mouthScale":0.6}
+  },
+  {
+    "id": "kpop-ppeu",
+    "name": "PPEU",
+    "series": "BLACKPINK",
+    "studyLine": "Let’s wing this review, one question at a time.",
+    "hair": "#f6d36d", "eyes": "#49352c", "outfit": "#f6d36d", "bg": "transparent", "style": "mascot-duck", "accessory": "none",
+    "reference": "https://www.ygselect.com/product/bptour-blackpink-character-plush-doll/7975/category/43/display/1/",
+    "chibiReference": "https://www.ygselect.com/product/bptour-blackpink-character-plush-doll/7975/category/43/display/1/",
+    "chibiReferenceKind": "official-character-merch",
+    "face": {"eyes":"dot","eyeWidth":8,"eyeHeight":9,"eyeSpacing":25,"irisScale":0.42,"pupilScale":0.5,"eyeTilt":0,"gazeX":0,"brow":"flat","mouth":"small-smile","faceShape":"round","blush":0.08,"lashes":false,"irisDetail":"plain","highlights":true,"mouthScale":0.65}
+  },
+  {
+    "id": "kpop-koya",
+    "name": "KOYA",
+    "series": "BTS · BT21",
+    "studyLine": "Take a tiny thinking break; your next idea can wait for you.",
+    "hair": "#a8c9d5", "eyes": "#553c88", "outfit": "#8798c9", "bg": "transparent", "style": "bt21-koala", "accessory": "none",
+    "reference": "https://www.bt21.com/character?lang=en", "chibiReference": "https://www.bt21.com/character?lang=en", "chibiReferenceKind": "official-character-profile",
+    "face": {"eyes":"half-lidded","eyeWidth":9,"eyeHeight":8,"eyeSpacing":25,"irisScale":0.46,"pupilScale":0.5,"eyeTilt":0,"gazeX":0,"brow":"tired","mouth":"neutral","faceShape":"round","blush":0,"lashes":false,"irisDetail":"plain","highlights":true,"mouthScale":0.65}
+  },
+  {
+    "id": "kpop-rj",
+    "name": "RJ",
+    "series": "BTS · BT21",
+    "studyLine": "A gentle snack break can make room for a fresh start.",
+    "hair": "#fffaf0", "eyes": "#52424b", "outfit": "#d55760", "bg": "transparent", "style": "bt21-alpaca", "accessory": "none",
+    "reference": "https://www.bt21.com/character?lang=en", "chibiReference": "https://www.bt21.com/character?lang=en", "chibiReferenceKind": "official-character-profile",
+    "face": {"eyes":"soft","eyeWidth":8,"eyeHeight":9,"eyeSpacing":25,"irisScale":0.48,"pupilScale":0.5,"eyeTilt":0,"gazeX":0,"brow":"soft","mouth":"small-smile","faceShape":"round","blush":0.12,"lashes":false,"irisDetail":"plain","highlights":true,"mouthScale":0.65}
+  },
+  {
+    "id": "kpop-shooky",
+    "name": "SHOOKY",
+    "series": "BTS · BT21",
+    "studyLine": "A little playful energy can help this topic stick.",
+    "hair": "#b87645", "eyes": "#302b37", "outfit": "#b87645", "bg": "transparent", "style": "bt21-cookie", "accessory": "none",
+    "reference": "https://www.bt21.com/character?lang=en", "chibiReference": "https://www.bt21.com/character?lang=en", "chibiReferenceKind": "official-character-profile",
+    "face": {"eyes":"narrow","eyeWidth":8,"eyeHeight":7,"eyeSpacing":24,"irisScale":0.46,"pupilScale":0.5,"eyeTilt":1,"gazeX":0,"brow":"angry","mouth":"smirk","faceShape":"round","blush":0,"lashes":false,"irisDetail":"plain","highlights":false,"mouthScale":0.6}
+  },
+  {
+    "id": "kpop-mang",
+    "name": "MANG",
+    "series": "BTS · BT21",
+    "studyLine": "Find your rhythm and take the next question at your pace.",
+    "hair": "#9a79ba", "eyes": "#26394f", "outfit": "#7b9fc6", "bg": "transparent", "style": "bt21-horse", "accessory": "none",
+    "reference": "https://www.bt21.com/character?lang=en", "chibiReference": "https://www.bt21.com/character?lang=en", "chibiReferenceKind": "official-character-profile",
+    "face": {"eyes":"round","eyeWidth":8,"eyeHeight":9,"eyeSpacing":25,"irisScale":0.47,"pupilScale":0.5,"eyeTilt":0,"gazeX":0,"brow":"raised","mouth":"small-smile","faceShape":"round","blush":0.15,"lashes":false,"irisDetail":"plain","highlights":true,"mouthScale":0.65}
+  },
+  {
+    "id": "kpop-chimmy",
+    "name": "CHIMMY",
+    "series": "BTS · BT21",
+    "studyLine": "Keep practicing with heart. You’re getting closer.",
+    "hair": "#f3cf52", "eyes": "#302b37", "outfit": "#f3cf52", "bg": "transparent", "style": "bt21-puppy", "accessory": "none",
+    "reference": "https://www.bt21.com/character?lang=en", "chibiReference": "https://www.bt21.com/character?lang=en", "chibiReferenceKind": "official-character-profile",
+    "face": {"eyes":"wide","eyeWidth":8,"eyeHeight":9,"eyeSpacing":25,"irisScale":0.45,"pupilScale":0.5,"eyeTilt":0,"gazeX":0,"brow":"soft","mouth":"open-smile","faceShape":"round","blush":0.15,"lashes":false,"irisDetail":"plain","highlights":true,"mouthScale":0.65}
+  },
+  {
+    "id": "kpop-tata",
+    "name": "TATA",
+    "series": "BTS · BT21",
+    "studyLine": "Let your curiosity lead you to the next answer.",
+    "hair": "#d8434d", "eyes": "#302b37", "outfit": "#5d82a7", "bg": "transparent", "style": "bt21-heart", "accessory": "none",
+    "reference": "https://www.bt21.com/character?lang=en", "chibiReference": "https://www.bt21.com/character?lang=en", "chibiReferenceKind": "official-character-profile",
+    "face": {"eyes":"round","eyeWidth":8,"eyeHeight":9,"eyeSpacing":25,"irisScale":0.45,"pupilScale":0.5,"eyeTilt":0,"gazeX":0,"brow":"raised","mouth":"surprised","faceShape":"round","blush":0,"lashes":false,"irisDetail":"plain","highlights":true,"mouthScale":0.65}
+  },
+  {
+    "id": "kpop-cooky",
+    "name": "COOKY",
+    "series": "BTS · BT21",
+    "studyLine": "You’ve got the strength to work through one more tricky bit.",
+    "hair": "#f09ab0", "eyes": "#302b37", "outfit": "#f09ab0", "bg": "transparent", "style": "bt21-bunny", "accessory": "none",
+    "reference": "https://www.bt21.com/character?lang=en", "chibiReference": "https://www.bt21.com/character?lang=en", "chibiReferenceKind": "official-character-profile",
+    "face": {"eyes":"angular","eyeWidth":8,"eyeHeight":8,"eyeSpacing":25,"irisScale":0.46,"pupilScale":0.5,"eyeTilt":2,"gazeX":0,"brow":"angry","mouth":"smirk","faceShape":"round","blush":0.08,"lashes":false,"irisDetail":"plain","highlights":true,"mouthScale":0.65}
+  },
+  {
+    "id": "kpop-van",
+    "name": "VAN",
+    "series": "BTS · BT21",
+    "studyLine": "I’m here to help you stay on course, one card at a time.",
+    "hair": "#d9dce7", "eyes": "#394553", "outfit": "#8796aa", "bg": "transparent", "style": "bt21-robot", "accessory": "none",
+    "reference": "https://www.bt21.com/character?lang=en", "chibiReference": "https://www.bt21.com/character?lang=en", "chibiReferenceKind": "official-character-profile",
+    "face": {"eyes":"dot","eyeWidth":8,"eyeHeight":8,"eyeSpacing":25,"irisScale":0.5,"pupilScale":0.5,"eyeTilt":0,"gazeX":0,"brow":"flat","mouth":"neutral","faceShape":"square","blush":0,"lashes":false,"irisDetail":"plain","highlights":true,"mouthScale":0.65}
   }
 ]
