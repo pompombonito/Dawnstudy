@@ -25,6 +25,7 @@ from questionnaire_ocr import prepare_questionnaire_image, questionnaire_text_fr
 from material_figures import extract_embedded_figures
 from pdf_questionnaire import extract_pdf_questionnaire, extract_pdf_figures, extract_pdf_learning_material
 from public_fetch import pinned_public_connection
+from smry_material import SmryUnavailable, extract_public_article as extract_smry_article
 from generation_jobs import GenerationAlreadyRunning, GenerationCancelled, GenerationJobs, GenerationQueueFull, merge_continued_generation
 
 import requests
@@ -1044,10 +1045,21 @@ def extract_public_material_url(value: str, pages: str = "", include_images: boo
         if is_login_page:
             raise HTTPException(status_code=422, detail="This page requires a login or restricts public access, so Dawnstudy cannot read its contents. Sign in yourself and upload an allowed copy of the material instead.")
         if len(re.sub(r"\s+", "", page_text)) < 80:
-            raise HTTPException(status_code=422, detail="That public webpage does not contain enough readable text. Try another page or upload a supported file.")
+            # SMRY can render a public article whose initial HTML is only an
+            # application shell. The URL already passed our public-host checks;
+            # login walls above never reach this optional reader.
+            try:
+                article = extract_smry_article(final_url)
+            except SmryUnavailable:
+                article = None
+            if article is not None:
+                page_text = article.text
+                page_title = article.title or page_title
+            else:
+                raise HTTPException(status_code=422, detail="That public webpage does not contain enough readable text. Try another page or upload a supported file.")
         filename = f"{page_title or parsed_url.hostname}.txt"
         text = f"[SOURCE: Website]\n{page_text}"
-        return text, ["Website"], page_title or parsed_url.hostname or "Webpage", final_url, filename, raw
+        return text, ["Website"], page_title or parsed_url.hostname or "Webpage", final_url, filename, raw, []
 
     mime_suffixes = {
         "application/pdf": ".pdf",

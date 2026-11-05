@@ -39,6 +39,8 @@ Free services have limits: Render spins down after 15 minutes without traffic, a
 
 **Uploaded material and privacy:** Uploaded files are processed in memory and are not stored. Generated study sets are stored in the configured Google Sheet for authorized accounts. Review the selected AI provider's data-use terms before uploading class notes; provider terms and free-tier data handling differ.
 
+**Optional reading fallback:** Set server-only `SMRY_API_KEY` on Render to help read public webpages whose initial HTML has too little source text. This reads full extracted text, not summaries, and does not send uploaded student files to SMRY. See [reading providers](docs/reading-providers.md) for setup, PDF limitations, and verified links for additional provider keys.
+
 ### Google sign-in and Sheets storage
 
 Access requires Google sign-in through a Google Cloud OAuth client and a configured Google Sheet. Username/password and guest access are not available. Sign-in accepts any verified `@gmail.com` account and verified CEU Google accounts (`@ceu.edu.ph`, `@mnl.ceu.edu.ph`, `@mkt.ceu.edu.ph`, `@mls.ceu.edu.ph`). Token signature, audience, and verified-email checks remain required.
