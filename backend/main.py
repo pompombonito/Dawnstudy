@@ -188,6 +188,11 @@ class SavedStudySet(BaseModel):
                     raise ValueError(f"Card {field} must be a list of nonempty text values.")
             if any(not re.fullmatch(r"data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+", image) for image in (item.get("images") or [])):
                 raise ValueError("Question images must be uploaded PNG, JPEG, or WEBP content.")
+            if item.get("image_labels") is not None:
+                labels = item["image_labels"]
+                if (not isinstance(labels, list) or len(labels) != len(item.get("images") or [])
+                        or any(not isinstance(label, str) or len(label) > 160 for label in labels)):
+                    raise ValueError("Source figure labels must align with the question images.")
             if item.get("correct_answer") is not None and not isinstance(item["correct_answer"], str):
                 raise ValueError("The correct answer must be text.")
             if item.get("quiz_type") is not None and item["quiz_type"] not in {"multiple_choice", "checkbox", "identification", "matching"}:
@@ -2250,7 +2255,10 @@ def import_questionnaire(documents, study_format, selected_model, existing_items
                     + json.dumps(prompt_batch, ensure_ascii=False)
                 )
                 generation_progress("generating", f"{label} is filling missing answers and choices…", len(records) - len(pending) + len(completions), label)
-                image_token = _provider_images.set(tuple((f"Question {record['number']} figure {index + 1}", data_url) for record in unresolved for index, data_url in enumerate(record.get("images", []))))
+                image_token = _provider_images.set(tuple(
+                    (f"Question {record['number']} — {(record.get('image_labels') or [])[index] if index < len(record.get('image_labels') or []) and record['image_labels'][index] else f'attached image {index + 1}'}", data_url)
+                    for record in unresolved for index, data_url in enumerate(record.get("images", []))
+                ))
                 try:
                     payload = generate_with_provider(provider, provider_model, key, prompt, schema, 6500)
                     check_generation_cancelled()

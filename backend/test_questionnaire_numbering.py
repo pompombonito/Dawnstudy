@@ -84,7 +84,7 @@ class QuestionnaireNumberingTests(unittest.TestCase):
         main.app.dependency_overrides[main.onboarded_user] = lambda: user
         try:
             with patch.object(main, "generate_with_provider", side_effect=AssertionError("Supplied keys need no AI")):
-                response = TestClient(main.app).post("/api/generate", data={"format": "flashcards", "input_mode": "questionnaire"}, files=[("files", ("first.txt", b"1. First?\nAnswer: Alpha")), ("files", ("second.txt", b"1. Second?\nAnswer: Beta"))])
+                response = TestClient(main.app).post("/api/generate", data={"format": "flashcards", "input_mode": "questionnaire", "questionnaire_type_confirmed": "true"}, files=[("files", ("first.txt", b"1. First?\nAnswer: Alpha")), ("files", ("second.txt", b"1. Second?\nAnswer: Beta"))])
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual([item["answer"] for item in response.json()["items"]], ["Alpha", "Beta"])
         finally:

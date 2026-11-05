@@ -4,6 +4,7 @@ import { type FormEvent, useEffect, useRef, useState } from "react";
 import { importedAnswerMatches, importedOptionIsCorrect } from "./imported-answers";
 import { normalizedAnswer, resolveChoiceAnswers as choiceAnswerOptions, quizKind, quizAnswerIsCorrect } from "./quiz-answers";
 import Avatar from "./components/Avatar";
+import StudyFigures from "./components/StudyFigures";
 import ThemePicker from "./components/ThemePicker";
 import { applyTheme, DEFAULT_THEME, GUEST_THEME_STORAGE_KEY, getTheme, normalizeTheme, readInitialTheme, THEME_STORAGE_KEY } from "./community/themes";
 import { useCommunity } from "./community/useCommunity";
@@ -26,7 +27,7 @@ import {
 } from "lucide-react";
 
 type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification" | "same_as_source";
-type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; correct_answers?: string[]; explanation?: string; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred"; images?: string[]; image_captions?: string[]; questionnaire_index?: number; quiz_type?: "multiple_choice" | "checkbox" | "identification" | "matching"; questionnaire_type_confirmed?: boolean; questionnaire_type_policy?: "convert" | "mixed"; matching_prompts?: string[]; matching_options?: string[]; matching_pairs?: { prompt: string; answer: string }[] };
+type Card = { card_id?: string; question: string; answer: string; options?: string[]; correct_answer?: string; correct_answers?: string[]; explanation?: string; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred"; images?: string[]; image_labels?: string[]; image_captions?: string[]; questionnaire_index?: number; quiz_type?: "multiple_choice" | "checkbox" | "identification" | "matching"; questionnaire_type_confirmed?: boolean; questionnaire_type_policy?: "convert" | "mixed"; matching_prompts?: string[]; matching_options?: string[]; matching_pairs?: { prompt: string; answer: string }[] };
 type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; source_url?: string; include_images?: boolean; created_at: string; material_fingerprint?: string; page_ranges?: Record<string, string>; focus_topic?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; questionnaire_type_confirmed?: boolean; questionnaire_type_policy?: "convert" | "mixed" | null; notices?: string[]; usage?: { remaining: number | null; limit: number | null; resets_at: string | null; unlimited?: boolean } };
 type ActiveShare = { set_id: string; title: string; token: string; created_at: string };
 type ReviewItem = { study_set_id: string; study_set_title: string; type: Kind; card: Card; retried?: boolean; intervals: { again: string; hard: string; good: string; easy: string } };
@@ -1362,7 +1363,7 @@ export default function Home() {
     ["bad_source", "Source reference is wrong"], ["other", "Other issue"],
   ];
   function renderQuestionImages(card: Card) {
-    return card.images?.length ? <div className="study-figure-list">{card.images.map((image, index) => <img key={`${card.card_id || card.question}-figure-${index}`} src={image} alt={card.image_captions?.[index] || `Figure ${index + 1} from your study material`} loading="lazy"/>)}</div> : null;
+    return <StudyFigures card={card}/>;
   }
 
   function renderMatchingQuiz(card: Card, isReview = false, practiceAt?: number) {

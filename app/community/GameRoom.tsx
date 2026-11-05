@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Copy, Flag, Gamepad2, Trophy, Volume2, VolumeX } from "lucide-react";
 import Avatar from "../components/Avatar";
+import StudyFigures from "../components/StudyFigures";
 import { communityApi } from "./api";
 import type { Community } from "./useCommunity";
 import type { Game } from "./types";
@@ -539,7 +540,7 @@ export default function GameRoom({
                 />
               </div>
               <h3>{game.question?.question}</h3>
-              {game.question?.images?.length ? <div className="study-figure-list">{game.question.images.map((image, index) => <img key={index} src={image} alt={`Question figure ${index + 1}`}/>)}</div> : null}
+              {game.question && <StudyFigures card={game.question}/>}
               {questionKind === "matching" ? <div className="matching-rows">{(game.question?.matching_prompts || []).map((prompt, index) => <label className="matching-row" key={`${index}-${prompt}`}><span>{prompt}</span><select value={matchingAnswers[prompt] || ""} disabled={game.answered || game.phase !== "question" || busy} onChange={(event) => setAnswer({ ...matchingAnswers, [prompt]: event.target.value })}><option value="">Choose a match</option>{(game.question?.matching_options || []).map((option, optionIndex) => <option key={`${optionIndex}-${option}`} value={option} disabled={Object.entries(matchingAnswers).some(([other, value]) => other !== prompt && value === option)}>{String.fromCharCode(65 + optionIndex)}. {option}</option>)}</select></label>)}</div> : game.question?.options?.length ? (
                 <div className="game-options">
                   {game.question.options.map((option, i) => (
