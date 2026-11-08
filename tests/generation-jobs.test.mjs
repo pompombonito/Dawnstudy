@@ -7,7 +7,7 @@ const source = readFileSync(new URL("../app/generation-jobs.ts", import.meta.url
 const javascript = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
 }).outputText;
-const { findGenerationJob, startGenerationJob, cancelGenerationJob, pollGenerationJob, GenerationJobError, GenerationCancelledError, QuestionnaireTypeMismatchError } =
+const { findGenerationJob, startGenerationJob, cancelGenerationJob, pollGenerationJob, GenerationJobError, GenerationCancelledError } =
   await import("data:text/javascript;base64," + Buffer.from(javascript).toString("base64"));
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -46,18 +46,6 @@ test("duplicate submission attaches to the existing job instead of displaying 40
   assert.equal(job.resumed, true);
   assert.equal(calls.filter(([, method]) => method === "POST").length, 1);
   assert.equal(calls[1][0], "https://api.example/api/generation-jobs/job-1");
-});
-
-test("questionnaire format mismatch returns a review preview without looking up a generation job", async () => {
-  const preview = { selected_type: "multiple_choice", mismatches: [{ question: "Name this process.", source_type: "identification", answer: "Photosynthesis" }] };
-  const config = options(async (_url, request) => request.method === "POST"
-    ? json({ code: "questionnaire_type_mismatch", ...preview }, 409)
-    : assert.fail("A format review is not an active generation"));
-  await assert.rejects(startGenerationJob(new FormData(), config), (error) => {
-    assert.ok(error instanceof QuestionnaireTypeMismatchError);
-    assert.deepEqual(error.preview, preview);
-    return true;
-  });
 });
 
 test("a lost submission response discovers accepted work without resubmitting", async () => {

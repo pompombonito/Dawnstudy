@@ -20,12 +20,8 @@ def normalize(value):
 
 
 def card_kind(card, kind):
-    if card.get("quiz_type"):
-        return card["quiz_type"]
     if kind == "same_as_source":
-        if card.get("matching_prompts"):
-            return "matching"
-        return "multiple_choice" if card.get("options") else "identification"
+        return card.get("quiz_type") or ("multiple_choice" if card.get("options") else "identification")
     return kind
 
 
