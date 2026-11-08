@@ -403,6 +403,8 @@ def validate_completion(records, payload, choice_mode):
         by_number[str(entry.get("number"))] = entry
     completed = {}
     for record in records:
+        record_mode = (choice_mode.get(str(record["number"]), "identification")
+                       if isinstance(choice_mode, dict) else choice_mode)
         entry = by_number.get(record["number"], {})
         answer = entry.get("answer")
         if entry.get("question") != record["question"] or not isinstance(answer, str) or not answer.strip() or entry.get("uncertain") is not False:
@@ -438,7 +440,7 @@ def validate_completion(records, payload, choice_mode):
             raise QuestionnaireError("The model changed a supplied answer.")
         correct_answers = None
         if record["options"]:
-            multi_allowed = choice_mode == "checkbox" or (choice_mode == "same_as_source" and record.get("quiz_type") == "checkbox")
+            multi_allowed = record_mode == "checkbox" or (record_mode == "same_as_source" and record.get("quiz_type") == "checkbox")
             if answer in record["options"]:
                 correct_answers = [answer]
             elif multi_allowed:
@@ -447,7 +449,7 @@ def validate_completion(records, payload, choice_mode):
             else:
                 raise QuestionnaireError("The inferred answer is not one of the original options.")
         distractors = entry.get("distractors", [])
-        if (choice_mode is True or choice_mode in {"multiple_choice", "checkbox"}) and not record["options"]:
+        if (record_mode is True or record_mode in {"multiple_choice", "checkbox"}) and not record["options"]:
             if not isinstance(distractors, list) or len(distractors) != 3 or any(not isinstance(value, str) or not value.strip() for value in distractors):
                 raise QuestionnaireError("The model did not supply three usable distractors.")
             if len({_normalized(value) for value in [answer, *distractors]}) != 4:
@@ -540,8 +542,9 @@ def match_existing_questionnaire_items(records, existing_items):
     return matched
 
 
-def convert_questionnaire(records, study_format, completions, existing_items=None, allow_incomplete=False):
+def convert_questionnaire(records, study_format, completions, existing_items=None, allow_incomplete=False, preserve_types=None):
     items = []
+    preserve_types = {str(value) for value in (preserve_types or ())}
     existing_by_index = match_existing_questionnaire_items(records, existing_items)
     for record in records:
         questionnaire_index = int(record["number"])
@@ -567,14 +570,16 @@ def convert_questionnaire(records, study_format, completions, existing_items=Non
         if record.get("images"):
             item["images"] = record["images"]
         correct_answers = record.get("correct_answers") or completion.get("correct_answers")
-        if study_format == "multiple_choice" and correct_answers and len(correct_answers) > 1:
+        preserve_source_type = str(record["number"]) in preserve_types
+        record_format = questionnaire_record_type(record) if preserve_source_type else study_format
+        if record_format == "multiple_choice" and correct_answers and len(correct_answers) > 1:
             raise QuestionnaireError(f"Question {record.get('source_number', record['number'])} has multiple correct answers. Choose Select all that apply or Same type as the questionnaire to preserve its answer key.")
-        if correct_answers and study_format in {"multiple_choice", "checkbox", "same_as_source"}:
+        if correct_answers and record_format in {"multiple_choice", "checkbox", "same_as_source"}:
             item["correct_answers"] = correct_answers
         notices = []
         if inferred:
             notices.append("AI-inferred answer: no answer key was supplied. Review it for accuracy.")
-        if study_format == "same_as_source":
+        if study_format == "same_as_source" or preserve_source_type:
             if record.get("matching_prompts"):
                 matching_pairs = record.get("matching_pairs") or completion.get("matching_pairs", [])
                 if matching_pairs:
@@ -586,7 +591,7 @@ def convert_questionnaire(records, study_format, completions, existing_items=Non
                     matching_pairs=matching_pairs,
                 )
             elif record["options"]:
-                quiz_type = "checkbox" if record.get("quiz_type") == "checkbox" or len(correct_answers or [answer]) > 1 else "multiple_choice"
+                quiz_type = "checkbox" if record_format == "checkbox" or record.get("quiz_type") == "checkbox" or len(correct_answers or [answer]) > 1 else "multiple_choice"
                 item.update(quiz_type=quiz_type, options=record["options"], correct_answer=answer)
             else:
                 item["quiz_type"] = "identification"
@@ -608,3 +613,40 @@ def convert_questionnaire(records, study_format, completions, existing_items=Non
         item["explanation"] = " ".join(notices)
         items.append(item)
     return items
+
+
+def questionnaire_record_type(record):
+    """Infer the item's source quiz format from its parsed structure."""
+    if record.get("matching_prompts"):
+        return "matching"
+    if record.get("quiz_type") == "checkbox":
+        return "checkbox"
+    if record.get("options"):
+        return "multiple_choice"
+    return "identification"
+
+
+def questionnaire_type_mismatches(records, target):
+    """Return source questions whose structure differs from the requested format."""
+    if target == "same_as_source":
+        return []
+    mismatches = []
+    for record in records:
+        source_type = questionnaire_record_type(record)
+        if source_type == target:
+            continue
+        must_preserve = target == "multiple_choice" and source_type in {"matching", "checkbox"}
+        mismatches.append({
+            "number": str(record.get("source_number", record["number"])),
+            "questionnaire_index": int(record["number"]),
+            "question": record["question"],
+            "source_type": source_type,
+            "answer": record.get("answer") or None,
+            "options": list(record.get("options") or []),
+            "matching_prompts": list(record.get("matching_prompts") or []),
+            "matching_pairs": list(record.get("matching_pairs") or []),
+            "source_refs": list(record.get("source_refs") or []),
+            "image_count": len(record.get("images") or []),
+            "must_preserve": must_preserve,
+        })
+    return mismatches

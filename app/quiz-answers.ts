@@ -10,8 +10,10 @@ export function normalizedAnswer(value: unknown): string {
 }
 
 export function quizKind(card: QuizCard, setType: string): QuizKind {
+  // Imported mixed-format sets carry the chosen interaction on each card.
+  // Honor it in private, shared, review, and practice sessions alike.
+  if (card.quiz_type) return card.quiz_type;
   if (setType === "same_as_source") {
-    if (card.quiz_type) return card.quiz_type;
     if (card.matching_prompts?.length) return "matching";
     return card.options?.length ? "multiple_choice" : "identification";
   }

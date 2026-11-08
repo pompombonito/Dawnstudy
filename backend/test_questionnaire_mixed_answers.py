@@ -65,6 +65,17 @@ class QuestionnaireMixedAnswerTests(unittest.TestCase):
                     {"prompt": "Second term", "answer": "First description"},
                 ])
 
+    def test_select_all_source_is_never_silently_reduced_to_single_answer(self):
+        source = ("1. Select all correct values.\nA. Alpha\nB. Beta\nC. Gamma\n"
+                  "Answer: A | C")
+        items, _models, incomplete, _requested, _unresolved = main.import_questionnaire(
+            [source], "multiple_choice", "auto", type_policy="convert")
+        self.assertFalse(incomplete)
+        self.assertEqual(items[0]["quiz_type"], "checkbox")
+        self.assertEqual(items[0]["correct_answers"], ["Alpha", "Gamma"])
+        self.assertTrue(live_games.correct_answer(items[0], "multiple_choice", ["Gamma", "Alpha"]))
+        self.assertFalse(live_games.correct_answer(items[0], "multiple_choice", "Alpha"))
+
     def test_incomplete_or_conflicting_matching_keys_are_rejected(self):
         base = "1. Match each term.\n__First term\n__Second term\nA. First description\nB. Second description\nAnswer: "
         for key in ("1-A", "1-A; 2-A", "1-A; 1-B", "1-C; 2-B"):

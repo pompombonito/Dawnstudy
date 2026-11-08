@@ -39,9 +39,17 @@ test("mixed source checkbox questions require all answers exactly once", () => {
 
 test("explicit formats survive stale options and source subtype metadata", () => {
   const card = { quiz_type: "multiple_choice", answer: "Alpha", options: ["Alpha", "Beta"] };
-  assert.equal(quizKind(card, "flashcards"), "flashcards");
-  assert.equal(quizKind(card, "identification"), "identification");
+  assert.equal(quizKind(card, "flashcards"), "multiple_choice");
+  assert.equal(quizKind(card, "identification"), "multiple_choice");
   assert.equal(quizKind(card, "multiple_choice"), "multiple_choice");
+});
+
+test("per-card types stay intact inside a user-selected mixed quiz set", () => {
+  const setType = "multiple_choice";
+  assert.equal(quizKind({ quiz_type: "identification", answer: "Mitochondrion" }, setType), "identification");
+  assert.equal(quizKind({ quiz_type: "matching", answer: "", matching_prompts: ["One"] }, setType), "matching");
+  assert.equal(quizKind({ answer: "Alpha", options: ["Alpha", "Beta"] }, setType), "multiple_choice");
+  assert.equal(quizAnswerIsCorrect({ quiz_type: "identification", imported: true, answer: "Mitochondrion" }, setType, "Mitochondrion"), true);
 });
 
 test("older mixed imports recover interaction from card data when subtype is missing", () => {
@@ -70,5 +78,5 @@ test("imported checkbox keys use structured answers and retain literal pipes ins
   assert.equal(quizAnswerIsCorrect(card, "same_as_source", ["C++", "x | y"]), true);
   assert.equal(quizAnswerIsCorrect(card, "same_as_source", ["x", "y", "C++"]), false);
   assert.equal(quizAnswerIsCorrect(card, "same_as_source", ["x | y", "C#"]), false);
-  assert.equal(quizAnswerIsCorrect(card, "identification", "x | y | C++"), true);
+  assert.equal(quizAnswerIsCorrect(card, "identification", "x | y | C++"), false);
 });

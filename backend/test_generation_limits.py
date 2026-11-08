@@ -99,6 +99,19 @@ class GenerationLimitTests(unittest.TestCase):
         self.assertTrue(row["items_json_2"])
         self.assertEqual(len(json.loads("".join(row[c] for c in accounts.SET_ITEM_COLUMNS))), 200)
 
+    def test_put_retries_missing_study_set_id_as_an_idempotent_upsert(self):
+        payload = {"title": "Recovered PDF", "type": "same_as_source", "items": [
+            {"card_id": "draft-card-1", "question": "What is shown?", "answer": "A diagram.", "images": ["data:image/webp;base64,AA=="]}
+        ]}
+        recovered = self.client.put("/api/study-sets/client-draft-id", json=payload)
+        self.assertEqual(recovered.status_code, 200, recovered.text)
+        self.assertEqual(recovered.json()["id"], "client-draft-id")
+        self.assertEqual(recovered.json()["items"][0]["card_id"], "draft-card-1")
+        updated = self.client.put("/api/study-sets/client-draft-id", json={**payload, "title": "Recovered and updated"})
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertEqual(updated.json()["title"], "Recovered and updated")
+        self.assertEqual(len(self.sets), 1)
+
     def test_background_generation_saves_all_200_and_is_recoverable(self):
         submitted = self.generate(200, "/api/generation-jobs")
         self.assertEqual(submitted.status_code, 202, submitted.text)
