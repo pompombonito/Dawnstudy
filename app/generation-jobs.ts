@@ -5,6 +5,12 @@ export type GenerationStatus = {
 };
 
 export type GenerationJob<Result> = Omit<GenerationStatus, "status"> & { status: GenerationJobState; job_id: string; result?: Result; error_status?: number };
+export type QuestionnaireTypeMismatch = {
+  number: string; questionnaire_index: number; question: string; source_type: string; answer: string | null;
+  options: string[]; matching_prompts: string[]; matching_pairs: { prompt: string; answer: string }[];
+  source_refs: string[]; image_count: number; must_preserve: boolean;
+};
+export type QuestionnaireMismatchPreview = { selected_type: string; mismatches: QuestionnaireTypeMismatch[] };
 type RequestOptions = { baseUrl: string; token: string; signal: AbortSignal; fetcher?: typeof fetch };
 type PollOptions = RequestOptions & { intervalMs?: number; timeoutMs?: number };
 
@@ -22,6 +28,15 @@ export class GenerationCancelledError extends GenerationJobError {
   constructor(message = "Generation cancelled.") {
     super(message, true);
     this.name = "GenerationCancelledError";
+  }
+}
+
+export class QuestionnaireTypeMismatchError extends GenerationJobError {
+  readonly preview: QuestionnaireMismatchPreview;
+  constructor(preview: QuestionnaireMismatchPreview) {
+    super("Some questionnaire items use a different question type.", true);
+    this.name = "QuestionnaireTypeMismatchError";
+    this.preview = preview;
   }
 }
 
@@ -59,6 +74,14 @@ export async function startGenerationJob<Result>(form: FormData, options: Reques
   }
   if (response.status === 409) {
     const body = await response.json();
+    if (body.code === "questionnaire_type_mismatch" && typeof body.selected_type === "string" && Array.isArray(body.mismatches)) {
+      throw new QuestionnaireTypeMismatchError({
+        selected_type: body.selected_type,
+        mismatches: body.mismatches.filter((item: unknown) => item && typeof item === "object"
+          && typeof (item as QuestionnaireTypeMismatch).question === "string"
+          && typeof (item as QuestionnaireTypeMismatch).source_type === "string"),
+      });
+    }
     if (body.job_id || /generation is already running/i.test(String(body.detail))) {
       const existing = await findGenerationJob<Result>(options, body.job_id);
       if (existing) return { ...existing, resumed: true };
