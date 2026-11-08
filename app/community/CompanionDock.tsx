@@ -1,11 +1,14 @@
 "use client";
 import { useEffect, useId, useRef, useState } from "react";
 import {
+  BookOpen,
   LifeBuoy,
   MessageCircle,
+  Menu,
   Send,
   Settings2,
   Sparkles,
+  Users,
   X,
 } from "lucide-react";
 import Avatar from "../components/Avatar";
@@ -36,14 +39,30 @@ const lines = [
   "A study friend can make a hard chapter feel a little lighter.",
 ];
 
+type GenerationNotice = {
+  title: string;
+  detail: string;
+  progress: number | null;
+  reconnect: boolean;
+  reconnectDisabled: boolean;
+  cancel: boolean;
+  cancelDisabled: boolean;
+  cancelTitle?: string;
+  error?: string;
+  onReconnect: () => void;
+  onCancel: () => void;
+};
+
 export default function CompanionDock({
   community,
   friends,
   signIn,
+  generation,
 }: {
   community: Community;
   friends: () => void;
   signIn: () => void;
+  generation: GenerationNotice | null;
 }) {
   const p = community.data?.profile;
   const [id, setId] = useState("cat"),
@@ -51,6 +70,8 @@ export default function CompanionDock({
     [draftId, setDraftId] = useState("cat"),
     [draftName, setDraftName] = useState("Miso"),
     [open, setOpen] = useState(false),
+    [quickActionsOpen, setQuickActionsOpen] = useState(false),
+    [generationVisible, setGenerationVisible] = useState(false),
     [settings, setSettings] = useState(false),
     [bubble, setBubble] = useState(""),
     [bubbleSource, setBubbleSource] = useState(""),
@@ -71,6 +92,16 @@ export default function CompanionDock({
   const lastLineAt = useRef<number | null>(null);
   const lineId = useId();
   const [showHelp, setShowHelp] = useState(false);
+  const generationPresent = Boolean(generation);
+  useEffect(() => {
+    if (generationPresent) {
+      setGenerationVisible(true);
+      setBubble("");
+      setBubbleSource("");
+    } else {
+      setGenerationVisible(false);
+    }
+  }, [generationPresent]);
   useEffect(
     () => () => {
       request.current?.abort();
@@ -87,8 +118,10 @@ export default function CompanionDock({
     } catch {
       /* Use defaults. */
     }
-    const chosenId = p?.companion_id || local?.id || "cat",
-      chosenName = p?.companion_name || local?.name || findAnimeCharacter(chosenId)?.name || "Miso";
+    const storedId = p?.companion_id || local?.id || "cat",
+      chosenId = findAnimeCharacter(storedId)?.id || storedId,
+      storedName = p?.companion_name || local?.name || "",
+      chosenName = companionNameAfterSelection(storedName, storedId, chosenId) || findAnimeCharacter(chosenId)?.name || "Miso";
     setId(chosenId);
     setName(chosenName);
     setDraftId(chosenId);
@@ -144,7 +177,7 @@ export default function CompanionDock({
     lastLineAt.current = null;
   }, [id]);
   useEffect(() => {
-    if (open || quiet) {
+    if (open || quiet || generationPresent) {
       if (open) lastHoverAt.current = null;
       setBubble("");
       setBubbleSource("");
@@ -183,7 +216,7 @@ export default function CompanionDock({
       clearTimer();
       document.removeEventListener("visibilitychange", visibilityChanged);
     };
-  }, [open, quiet, id]);
+  }, [open, quiet, id, generationPresent]);
   useEffect(() => {
     if (!bubble) return;
     const dismiss = () => {
@@ -205,15 +238,22 @@ export default function CompanionDock({
       document.removeEventListener("visibilitychange", hideWhenBackgrounded);
     };
   }, [bubble]);
-  function showSignatureLine() {
-    if (open || document.hidden) return;
+  function showSignatureLine(force = false) {
+    if (open || document.hidden || generationPresent) return;
     const now = Date.now();
-    if (lastHoverAt.current !== null && now - lastHoverAt.current < 15000) return;
+    if (!force && lastHoverAt.current !== null && now - lastHoverAt.current < 15000) return;
     lastHoverAt.current = now;
     lastLineAt.current = now;
     const line = animeCompanionBubble(id, 1);
     setBubble(line?.text || lines[Math.floor(Math.random() * lines.length)]);
     setBubbleSource(line?.quoteSource || "");
+  }
+  function openCompanionPanel(section: "chat" | "settings" | "help") {
+    setQuickActionsOpen(false);
+    setOpen(true);
+    setError("");
+    setSettings(section === "settings");
+    setShowHelp(section === "help");
   }
   async function save() {
     if (!draftName.trim()) {
@@ -319,10 +359,28 @@ export default function CompanionDock({
   }
   return (
     <aside
-      className={`buddy-dock ${open ? "open" : ""}`}
+      className={`buddy-dock ${open ? "open" : ""} ${quickActionsOpen ? "quick-actions-open" : ""} ${generationPresent ? "has-generation" : ""}`}
       aria-label="Your AI study companion"
     >
-      {bubble && !open && (
+      {generation && generationVisible && !open && (
+        <button
+          className="buddy-bubble buddy-generation-bubble"
+          type="button"
+          onClick={() => setGenerationVisible(false)}
+          aria-label={`${generation.title}. ${generation.detail}. Tap to hide status.`}
+          aria-live="polite"
+          aria-atomic="true"
+          title="Tap to hide status"
+        >
+          <span className="generation-bubble-heading"><i className="generation-status-pulse"/><strong>{generation.title}</strong></span>
+          <span className="generation-bubble-detail">{generation.detail}</span>
+          {generation.progress !== null && <span className="generation-progress-track" aria-label={`${Math.round(generation.progress)} percent complete`}><i style={{ width: `${generation.progress}%` }}/></span>}
+          {generation.error && <span className="generation-bubble-error" role="alert">{generation.error}</span>}
+          <small>Tap to hide · tap your buddy to reopen ✧</small>
+          <i className="bubble-star">✦</i>
+        </button>
+      )}
+      {bubble && !open && !generationPresent && (
         <div className="buddy-bubble-stack" role="status" aria-live="polite" aria-atomic="true">
           <button
             id={lineId}
@@ -551,26 +609,53 @@ export default function CompanionDock({
           )}
         </section>
       )}
-      <button
-        className="buddy-launcher"
-        aria-expanded={open}
-        aria-label={`${name}, ${open ? "close" : "open"} companion chat`}
-        aria-describedby={bubble && !open ? lineId : undefined}
-        onPointerEnter={(event) => {
-          if (event.pointerType === "mouse") showSignatureLine();
-        }}
-        onFocus={(event) => {
-          if (event.currentTarget.matches(":focus-visible")) showSignatureLine();
-        }}
-        onClick={() => {
-          setOpen((v) => !v);
-          setBubble("");
-          setBubbleSource("");
-        }}
-      >
-        <Avatar id={id} hoverLine={false} />
-        <span>✧</span>
-      </button>
+      {quickActionsOpen && !open && (
+        <nav className="buddy-quick-actions" aria-label="Companion shortcuts">
+          {generation?.reconnect && <button className="buddy-quick-action" type="button" onClick={generation.onReconnect} disabled={generation.reconnectDisabled} aria-label="Reconnect and restore generation" title="Reconnect and restore generation"><BookOpen size={18}/><span className="buddy-action-label">Reconnect</span></button>}
+          {generation?.cancel && <button className="buddy-quick-action danger" type="button" onClick={generation.onCancel} disabled={generation.cancelDisabled} aria-label={generation.cancelTitle || "Cancel generation"} title={generation.cancelTitle || "Cancel generation"}><X size={18}/><span className="buddy-action-label">Cancel generation</span></button>}
+          <button className="buddy-quick-action" type="button" onClick={() => openCompanionPanel("chat")} aria-label="Open companion chat" title="Chat"><MessageCircle size={18}/><span className="buddy-action-label">Chat</span></button>
+          <button className="buddy-quick-action" type="button" onClick={() => openCompanionPanel("settings")} aria-label="Customize companion" title="Customize companion"><Settings2 size={18}/><span className="buddy-action-label">Customize</span></button>
+          <button className="buddy-quick-action" type="button" onClick={() => { setQuickActionsOpen(false); friends(); }} aria-label="Find study friends" title="Study friends"><Users size={18}/><span className="buddy-action-label">Friends</span></button>
+          <button className="buddy-quick-action" type="button" onClick={() => openCompanionPanel("help")} aria-label="Show help contacts" title="Help contacts"><LifeBuoy size={18}/><span className="buddy-action-label">Help contacts</span></button>
+        </nav>
+      )}
+      <div className="buddy-launcher-wrap">
+        <button
+          className="buddy-launcher"
+          type="button"
+          aria-expanded={generationPresent ? generationVisible : Boolean(bubble)}
+          aria-label={`${name}, ${generationPresent ? "show generation status" : "show a companion line"}`}
+          aria-describedby={bubble && !open && !generationPresent ? lineId : undefined}
+          onPointerEnter={(event) => {
+            if (event.pointerType === "mouse") showSignatureLine();
+          }}
+          onFocus={(event) => {
+            if (event.currentTarget.matches(":focus-visible")) showSignatureLine();
+          }}
+          onClick={() => {
+            if (generationPresent) {
+              setGenerationVisible(true);
+              setBubble("");
+              setBubbleSource("");
+            } else {
+              showSignatureLine(true);
+            }
+          }}
+        >
+          <Avatar id={id} hoverLine={false} />
+        </button>
+        <button
+          className="buddy-menu-toggle"
+          type="button"
+          aria-label={quickActionsOpen ? "Close companion shortcuts" : "Open companion shortcuts"}
+          aria-expanded={quickActionsOpen}
+          onClick={(event) => {
+            event.stopPropagation();
+            setQuickActionsOpen((value) => !value);
+          }}
+          title="Companion shortcuts"
+        >{quickActionsOpen ? <X size={15}/> : <Menu size={15}/>}</button>
+      </div>
     </aside>
   );
 }

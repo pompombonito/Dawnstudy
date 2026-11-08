@@ -2,6 +2,7 @@
 import StudyMascot from "./StudyMascot";
 import { characterMotionStyle } from "./character-motion";
 import AnimeAvatar from "./AnimeAvatar";
+import ScreenAvatar from "./ScreenAvatar";
 import { findAnimeCharacter } from "../community/anime-companions";
 
 export default function Avatar({
@@ -16,6 +17,7 @@ export default function Avatar({
   hoverLine?: boolean;
 }) {
   const animeCharacter = findAnimeCharacter(id);
+  if (animeCharacter?.id.startsWith("screen-")) return <ScreenAvatar character={animeCharacter} className={className} label={label} hoverLine={hoverLine}/>;
   if (animeCharacter) return <AnimeAvatar character={animeCharacter} className={className} label={label} hoverLine={hoverLine}/>;
   if (["cat", "fox", "bunny", "bear"].includes(id))
     return (

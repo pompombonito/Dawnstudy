@@ -4,6 +4,7 @@ import { useId } from "react";
 import { characterMotionStyle } from "./character-motion";
 import { animeCompanionBubble, type AnimeCharacter } from "../community/anime-companions";
 import AnimeFace, { AnimeMouth, faceDesign, faceOutline } from "./AnimeFace";
+import KpopAvatar from "./KpopAvatar";
 
 type Visual = AnimeCharacter;
 const ink = "#342d3d";
@@ -260,6 +261,7 @@ function Chopper({ c }: { c: Visual }) {
 /** Original, compact vector portraits: shared proportions, individual hair, costume and signature details. */
 export default function AnimeAvatar({ character: c, className = "", label, hoverLine = true }: { character: Visual; className?: string; label?: string; hoverLine?: boolean }) {
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
+  if (c.id.startsWith("kpop-")) return <KpopAvatar character={c} className={className} label={label} hoverLine={hoverLine}/>;
   const clip = `anime-clip-${uid}`;
   const face = faceDesign((c as unknown as { face?: unknown }).face);
   const frontScale = ["anime-megumi", "anime-bakugo"].includes(c.id) ? 1.06 : 1.14;

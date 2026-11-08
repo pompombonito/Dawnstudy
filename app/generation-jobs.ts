@@ -4,6 +4,16 @@ export type GenerationStatus = {
   status: GenerationJobState | "paused" | "reconnecting"; stage: string; message: string; completed: number; requested: number; model?: string | null; can_cancel?: boolean;
 };
 
+/** Older jobs may report the notes default before discovering a PDF's real total. */
+export function generationReadyText(completed: number, requested: number): string {
+  if (!Number.isFinite(completed) || completed < 0) return "";
+  const count = Math.floor(completed);
+  if (Number.isFinite(requested) && requested > 0 && requested >= count) {
+    return `${count} of ${Math.floor(requested)} questions ready`;
+  }
+  return count ? `${count} ${count === 1 ? "question" : "questions"} ready` : "";
+}
+
 export type GenerationJob<Result> = Omit<GenerationStatus, "status"> & { status: GenerationJobState; job_id: string; result?: Result; error_status?: number };
 export type QuestionnaireTypeMismatch = {
   number: string; questionnaire_index: number; question: string; source_type: string; answer: string | null;
@@ -130,7 +140,7 @@ function pause(milliseconds: number, signal: AbortSignal) {
 export async function pollGenerationJob<Result>(
   jobId: string, options: PollOptions, onStatus: (job: GenerationStatus) => void, initial?: GenerationJob<Result>,
 ): Promise<Result> {
-  const deadline = Date.now() + (options.timeoutMs ?? 12 * 60 * 1000);
+  const deadline = Date.now() + (options.timeoutMs ?? 40 * 60 * 1000);
   let current = initial;
   let failures = 0;
   let cancellationPending = false;

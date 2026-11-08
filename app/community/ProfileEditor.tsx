@@ -2,7 +2,7 @@
 import { useState } from "react";
 import Avatar from "../components/Avatar";
 import { animals, portraits } from "./catalog";
-import { animeCharacters, animeSeries, animeCompanionBubble, filterAnimeCharacters, findAnimeCharacter } from "./anime-companions";
+import { allCompanionCharacters, animeSeries, kpopGroups, screenSeries, animeCompanionBubble, companionCategory, filterAnimeCharacters, filterKpopCharacters, filterScreenCharacters, findAnimeCharacter } from "./anime-companions";
 import ThemePicker from "../components/ThemePicker";
 import { DEFAULT_THEME } from "./themes";
 import type { ProfileInput, Theme } from "./types";
@@ -34,18 +34,22 @@ export function AvatarPicker({
   onChange: (id: string) => void;
   companions?: boolean;
 }) {
-  const [filter, setFilter] = useState(findAnimeCharacter(value) ? "anime" : "animals");
+  const [filter, setFilter] = useState<string>(companionCategory(value) || "animals");
   const [outfit, setOutfit] = useState("all");
   const [series, setSeries] = useState("all");
   const [search, setSearch] = useState("");
   const [limit, setLimit] = useState(24);
+  const selectedId = findAnimeCharacter(value)?.id || value;
+  const characterFilter = ["anime", "kpop", "screen"].includes(filter);
+  const seriesLabel = filter === "kpop" ? "K-pop group" : filter === "screen" ? "Movie or TV series" : "Anime series";
+  const searchLabel = filter === "kpop" ? "Search artists" : filter === "screen" ? "Search movie and TV characters" : "Search anime characters";
   const choices =
     filter === "animals"
       ? animals.slice(0, 10).map(([id, label]) => ({ id, label }))
       : filter === "characters"
         ? animals.slice(10).map(([id, label]) => ({ id, label }))
-        : filter === "anime"
-          ? filterAnimeCharacters(series, search).map((character) => ({
+        : characterFilter
+          ? (filter === "kpop" ? filterKpopCharacters(series, search) : filter === "screen" ? filterScreenCharacters(series, search) : filterAnimeCharacters(series, search)).map((character) => ({
               id: character.id,
               label: character.name,
               series: character.series,
@@ -63,6 +67,8 @@ export function AvatarPicker({
             ["animals", "Animals"],
             ["characters", "Characters"],
             ["anime", "Anime"],
+            ["kpop", "K-pop"],
+            ["screen", "Movies & TV"],
           ],
           ...(!companions
             ? [
@@ -77,6 +83,8 @@ export function AvatarPicker({
             aria-pressed={filter === id}
             onClick={() => {
               setFilter(id);
+              setSeries("all");
+              setSearch("");
               setLimit(24);
             }}
           >
@@ -84,36 +92,36 @@ export function AvatarPicker({
           </button>
         ))}
       </div>
-      {filter === "anime" && (
+      {characterFilter && (
         <div className="anime-filters">
           <label className="outfit-filter">
-            Anime series
+            {seriesLabel}
             <select
-              aria-label="Anime series"
+              aria-label={seriesLabel}
               value={series}
               onChange={(event) => {
                 setSeries(event.target.value);
                 setLimit(24);
               }}
             >
-              <option value="all">All series</option>
-              {animeSeries.map((title) => <option key={title} value={title}>{title}</option>)}
+              <option value="all">{filter === "kpop" ? "All groups" : filter === "screen" ? "All movies & series" : "All series"}</option>
+              {(filter === "kpop" ? kpopGroups : filter === "screen" ? screenSeries : animeSeries).map((title) => <option key={title} value={title}>{title}</option>)}
             </select>
           </label>
           <label className="outfit-filter">
-            Search anime characters
+            {searchLabel}
             <input
-              aria-label="Search anime characters"
+              aria-label={searchLabel}
               type="search"
               value={search}
               onChange={(event) => {
                 setSearch(event.target.value);
                 setLimit(24);
               }}
-              placeholder="Character or series"
+              placeholder={filter === "kpop" ? "Artist or group" : filter === "screen" ? "Character, movie or series" : "Character or series"}
             />
           </label>
-          <small className="subtle" role="status">{choices.length} {choices.length === 1 ? "character" : "characters"}</small>
+          <small className="subtle" role="status">{choices.length} {filter === "kpop" ? choices.length === 1 ? "artist" : "artists" : choices.length === 1 ? "character" : "characters"}</small>
         </div>
       )}
       {!companions && ["male", "female"].includes(filter) && (
@@ -141,10 +149,10 @@ export function AvatarPicker({
           <button
             type="button"
             key={choice.id}
-            className={value === choice.id ? "chosen" : ""}
+            className={selectedId === choice.id ? "chosen" : ""}
             title={"series" in choice ? `${choice.label} · ${choice.series}\n${animeCompanionBubble(choice.id, 1)?.text || ""}` : choice.label}
             aria-label={"series" in choice ? `${choice.label} · ${choice.series}` : choice.label}
-            aria-pressed={value === choice.id}
+            aria-pressed={selectedId === choice.id}
             onClick={() => onChange(choice.id)}
           >
             <Avatar id={choice.id} />
@@ -155,7 +163,7 @@ export function AvatarPicker({
           </button>
         ))}
       </div>
-      {choices.length === 0 && <p className="subtle">No characters match. Try another name or series.</p>}
+      {choices.length === 0 && <p className="subtle">{filter === "kpop" ? "No artists match. Try another name or group." : "No characters match. Try another name or series."}</p>}
       {limit < choices.length && (
         <button
           className="social-button"
@@ -234,7 +242,7 @@ export default function ProfileEditor({
         </span>
       </label>
       <h3>
-        Find your look <span className="subtle">{animals.length + portraits.length + animeCharacters.length} icons</span>
+        Find your look <span className="subtle">{animals.length + portraits.length + allCompanionCharacters.length} icons</span>
       </h3>
       <AvatarPicker
         value={value.avatar_id}

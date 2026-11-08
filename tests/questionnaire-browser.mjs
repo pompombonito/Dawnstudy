@@ -4,10 +4,14 @@ const { chromium } = await import(pathToFileURL(process.env.DAWNSTUDY_PLAYWRIGHT
 const browser = await chromium.launch({ executablePath: "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", headless: true });
 const base = process.env.DAWNSTUDY_TEST_URL || "http://127.0.0.1:3044";
 const profile = { user_id: "import-student", nickname: "Student", avatar_id: "cat", theme: "kuromi-dark", gender: "prefer-not-to-say", companion_id: "cat", companion_name: "Miso", onboarded: true, terms_version: "2026-10-30", public_key: null, key_fingerprint: "" };
+const sourceImage = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aKtwAAAAASUVORK5CYII=";
 const importedSet = { id: "import-set", title: "Original questionnaire", type: "multiple_choice", created_at: new Date().toISOString(), incomplete: false, requested_count: 2, items: [
   { card_id: "q1", imported: true, answer_origin: "provided", question: "Which language uses std::cout?", answer: "C++", correct_answer: "C++", options: ["C#", "C++", "Java", "Python"], explanation: "" },
   { card_id: "q2", imported: true, answer_origin: "inferred", question: "Identify the organelle that releases usable energy.", answer: "Mitochondrion", correct_answer: "Mitochondrion", options: ["Nucleus", "Mitochondrion", "Ribosome", "Chloroplast"], explanation: "AI-inferred answer: no answer key was supplied. Review it for accuracy. Choices added by AI." },
 ] };
+importedSet.items[0].images = [sourceImage];
+importedSet.items[0].image_labels = ["Figure 1-4"];
+importedSet.items[0].image_captions = ["The image description must not reveal C++ before answering."];
 try {
   for (const width of [1280, 390]) {
     const context = await browser.newContext({ viewport: { width, height: 900 } });
@@ -43,12 +47,15 @@ try {
     assert.equal(await page.getByRole("button", { name: "Public website", exact: true }).isDisabled(), true);
     await page.locator('input[type="file"]').first().setInputFiles({ name: "quiz.txt", mimeType: "text/plain", buffer: Buffer.from("1. Which language uses std::cout?\nA. C#\nB. C++\nC. Java\nD. Python\nAnswer: B") });
     await page.getByRole("button", { name: "Choose practice" }).click();
-    await page.locator(".type-card").filter({ hasText: "Multiple choice" }).click();
+    await page.getByRole("button", { name: /^Multiple choice / }).click();
     assert.equal(await page.locator("#question-count").count(), 0);
     await page.getByRole("button", { name: "Review & create" }).click();
     assert.equal(await page.getByRole("button", { name: /Enrich with the web/ }).count(), 0);
     await page.getByRole("button", { name: "Create study set" }).click();
     await page.locator(".choice-option").first().waitFor();
+    assert.deepEqual(await page.locator(".study-figure-list figcaption").allTextContents(), ["Figure 1-4"]);
+    assert.equal(await page.locator(".study-figure-list img").getAttribute("src"), sourceImage);
+    assert.doesNotMatch(await page.locator(".study-figures").textContent(), /reveal C\+\+/);
     assert.match(form, /name="input_mode"\r\n\r\nquestionnaire/);
     assert.match(form, /name="use_web"\r\n\r\nfalse/);
     assert.deepEqual(await page.locator(".choice-option > span").allTextContents(), importedSet.items[0].options);
@@ -62,9 +69,11 @@ try {
     assert.deepEqual(await page.locator(".choice-option > span").allTextContents(), importedSet.items[0].options);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
     await page.goto(base + "/shared/test-token"); await page.waitForLoadState("networkidle");
+    assert.deepEqual(await page.locator(".study-figure-list figcaption").allTextContents(), ["Figure 1-4"]);
     await page.locator(".shared-option").first().click();
     assert.deepEqual(await page.locator(".shared-option.is-correct > span").allTextContents(), ["C++"]);
     await page.getByRole("button", { name: "Next question" }).click();
+    assert.equal(await page.locator(".study-figure-list img").count(), 0);
     await page.locator(".shared-option").nth(1).click();
     await page.getByText(/AI-inferred answer: no answer key/).waitFor();
     assert.deepEqual(errors, []);
