@@ -74,9 +74,9 @@ class QuestionnaireResilienceTests(unittest.TestCase):
         self.assertEqual(requested_count, 50)
         self.assertFalse(incomplete)
         self.assertEqual(used_models, ["openrouter:test-0"])
-        self.assertEqual(len(calls), 21)  # 3 distinct providers per 8-question batch, not every model alias.
-        self.assertEqual([provider for provider, _model in calls].count("groq"), 7)
-        self.assertEqual([provider for provider, _model in calls].count("gemini"), 7)
+        self.assertEqual(len(calls), 9)  # Two quota failures once each, then seven successful batches.
+        self.assertEqual([provider for provider, _model in calls].count("groq"), 1)
+        self.assertEqual([provider for provider, _model in calls].count("gemini"), 1)
         self.assertEqual([provider for provider, _model in calls].count("openrouter"), 7)
         self.assertEqual([provider for provider, _model in calls].count("mistral"), 0)
 

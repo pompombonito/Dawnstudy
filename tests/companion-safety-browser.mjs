@@ -23,6 +23,10 @@ let requests = 0,
 const delayedStarted = new Promise((resolve) => {
   markStarted = resolve;
 });
+async function openChat(page) {
+  await page.locator(".buddy-menu-toggle").click();
+  await page.getByRole("button", { name: "Open companion chat", exact: true }).click();
+}
 const profile = {
   user_id: "safety-test",
   nickname: "Study tester",
@@ -132,13 +136,8 @@ async function open(signedIn, legacy = false) {
   const page = await context.newPage();
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("http://localhost:3033");
-  await page
-    .getByRole("button", {
-      name: signedIn
-        ? "Akito, open companion chat"
-        : "Miso, open companion chat",
-    })
-    .click();
+  await page.waitForLoadState("networkidle");
+  await openChat(page);
   return { context, page };
 }
 async function send(page, text) {
@@ -180,9 +179,7 @@ try {
   assert.equal(requests, 0);
   await page.getByRole("button", { name: "Meet a study friend ↗" }).click();
   await page.getByRole("heading", { name: "Your people." }).waitFor();
-  await page
-    .getByRole("button", { name: "Akito, open companion chat" })
-    .click();
+  await openChat(page);
   console.log(
     "PASS ordinary loneliness offers friends with no counselling disclaimer or crisis contacts",
   );
@@ -265,9 +262,8 @@ try {
     });
   }
   await page.reload();
-  await page
-    .getByRole("button", { name: "Akito, open companion chat" })
-    .click();
+  await page.waitForLoadState("networkidle");
+  await openChat(page);
   await page
     .getByText("I can't engage with that kind of conversation.", {
       exact: true,

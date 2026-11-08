@@ -20,6 +20,7 @@ import requests
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2 import id_token, service_account
 from review_store import BatchedReviewStore, ReviewStoreError
+from figure_repairs import repair_legacy_questionnaire_figures
 
 
 SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
@@ -597,6 +598,7 @@ def list_study_sets(user_id: str) -> list[dict[str, Any]]:
                      for item in stored_items if isinstance(item, dict)]
         if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
             continue
+        items = repair_legacy_questionnaire_figures(items)
         try:
             page_ranges = json.loads(row.get("page_ranges_json") or "{}")
             if not isinstance(page_ranges, dict):

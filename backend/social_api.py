@@ -19,8 +19,38 @@ LIMITS = defaultdict(deque)
 RATE_LOCK = threading.Lock()
 ANIMALS = {"cat", "fox", "bunny", "bear", "dog", "owl", "panda", "capybara", "penguin", "duck", "pompompurin", "cinnamoroll", "kuromi", "hello-kitty", "my-melody", "keroppi", "pochacco", "tuxedosam", "badtz-maru"}
 with Path(__file__).with_name("anime-characters.json").open(encoding="utf-8") as catalog_file:
-    ANIME = frozenset(character["id"] for character in json.load(catalog_file))
+    CHARACTER_NAMES = {character["id"]: character["name"] for character in json.load(catalog_file)}
+ANIME = frozenset(CHARACTER_NAMES)
 COMPANIONS = ANIMALS | ANIME
+LEGACY_KPOP_SELECTIONS = {
+    "kpop-sooya": ("kpop-jisoo", "SOOYA"),
+    "kpop-gomdeuki": ("kpop-jennie", "GOMDEUKI"),
+    "kpop-rosie": ("kpop-rose", "ROSIE"),
+    "kpop-ppeu": ("kpop-lisa", "PPEU"),
+    "kpop-koya": ("kpop-rm", "KOYA"),
+    "kpop-rj": ("kpop-jin", "RJ"),
+    "kpop-shooky": ("kpop-suga", "SHOOKY"),
+    "kpop-mang": ("kpop-jhope", "MANG"),
+    "kpop-chimmy": ("kpop-jimin", "CHIMMY"),
+    "kpop-tata": ("kpop-v", "TATA"),
+    "kpop-cooky": ("kpop-jungkook", "COOKY"),
+    "kpop-van": ("kpop-rm", "VAN"),
+}
+
+
+def normalize_legacy_character_choices(value):
+    """Keep saved mascot selections usable while migrating to the actual artist."""
+    if not value:
+        return value
+    result = dict(value)
+    if result.get("avatar_id") in LEGACY_KPOP_SELECTIONS:
+        result["avatar_id"] = LEGACY_KPOP_SELECTIONS[result["avatar_id"]][0]
+    legacy = LEGACY_KPOP_SELECTIONS.get(result.get("companion_id"))
+    if legacy:
+        result["companion_id"] = legacy[0]
+        if result.get("companion_name", "").strip() in {"", "Miso", legacy[1]}:
+            result["companion_name"] = CHARACTER_NAMES.get(legacy[0], result.get("companion_name", "Miso"))
+    return result
 
 
 def limited(user, action, count=20, seconds=60):
@@ -144,7 +174,7 @@ def create_router(authenticated_user, reply):
     @router.get("/bootstrap")
     def bootstrap(user=Depends(authenticated_user)):
         uid = user["user_id"]
-        value = store.profile(uid)
+        value = normalize_legacy_character_choices(store.profile(uid))
         if not value or not store.ready(uid):
             return {"profile": store.own_profile(value), "friends": [], "incoming": [], "outgoing": [], "invitations": [], "blocked": [], "terms_version": store.TERMS_VERSION}
         friends, incoming, outgoing = friend_profiles(uid)
@@ -161,15 +191,15 @@ def create_router(authenticated_user, reply):
     def update_profile(body: ProfileInput, user=Depends(authenticated_user)):
         uid = user["user_id"]
         limited(uid, "profile", 10)
+        changes = normalize_legacy_character_choices(body.model_dump(exclude={"accept_terms", "terms_version"}))
         nickname = body.nickname.strip()
-        name = body.companion_name.strip()
+        name = changes["companion_name"].strip()
         if len(nickname) < 2 or not name or any(ord(c) < 32 for c in nickname + name):
             raise HTTPException(422, "Use a nickname of 2–24 characters and a companion name without control characters.")
-        if body.avatar_id not in COMPANIONS and not re.fullmatch(r"portrait-(?:male|female)-(?:daily|clinical|lab|scrubs|sport|formal)-[0-7]", body.avatar_id):
+        if changes["avatar_id"] not in COMPANIONS and not re.fullmatch(r"portrait-(?:male|female)-(?:daily|clinical|lab|scrubs|sport|formal)-[0-7]", changes["avatar_id"]):
             raise HTTPException(422, "Choose an available profile icon.")
-        if body.companion_id not in COMPANIONS:
+        if changes["companion_id"] not in COMPANIONS:
             raise HTTPException(422, "Choose an available companion.")
-        changes = body.model_dump(exclude={"accept_terms", "terms_version"})
         changes.update(nickname=nickname, companion_name=name, discoverable=str(body.discoverable).lower())
         if not store.ready(uid):
             if not body.accept_terms or body.terms_version != store.TERMS_VERSION:
@@ -312,7 +342,7 @@ def create_router(authenticated_user, reply):
         # Emergency contacts/refusals above never depend on provider quotas or
         # the conversational rate limit. They are not forwarded to an AI.
         limited(uid, "companion", 10)
-        text, model = reply(body.message, history, store.profile(uid)["companion_name"])
+        text, model = reply(body.message, history, normalize_legacy_character_choices(store.profile(uid))["companion_name"])
         result = resolve_model_reply(text, model)
         if result is None:
             raise HTTPException(503, "Your companion couldn't respond safely. Try a study question, or open Philippine help contacts in the chat header.")

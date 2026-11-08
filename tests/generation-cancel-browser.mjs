@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 const { chromium } = await import(process.env.DAWNSTUDY_PLAYWRIGHT_PATH ? pathToFileURL(process.env.DAWNSTUDY_PLAYWRIGHT_PATH).href : "playwright-core");
 const browser = await chromium.launch({ executablePath: process.env.DAWNSTUDY_BROWSER || "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", headless: true });
 const base = process.env.DAWNSTUDY_TEST_URL || "http://127.0.0.1:3044";
@@ -42,8 +44,14 @@ try {
   await page.getByRole("button", { name: "Review & create" }).click();
   await page.getByRole("button", { name: "Create study set" }).click();
   await submitted;
+  await page.locator(".buddy-menu-toggle").click();
+  await page.screenshot({ path: join(tmpdir(), "dawnstudy-generation-bubble.png"), animations: "disabled" });
   await page.getByRole("button", { name: "Cancel generation", exact: true }).click();
-  await page.getByRole("button", { name: "Stopping…", exact: true }).waitFor();
+  await page.locator(".buddy-generation-bubble").filter({ hasText: "Stopping…" }).waitFor();
+  await page.locator(".buddy-generation-bubble").click();
+  assert.equal(await page.locator(".buddy-generation-bubble").count(), 0, "Tapping status dismisses it");
+  await page.locator(".buddy-launcher").click();
+  await page.locator(".buddy-generation-bubble").waitFor();
   assert.equal(cancellations, 0, "An early click waits for the accepted job ID");
   releaseSubmit();
   await page.getByText("Generation cancelled. Your materials are ready if you want to try again.", { exact: true }).waitFor();
@@ -57,6 +65,7 @@ try {
   job = { job_id: "restored-job", status: "running", stage: "generating", message: "Generating…", completed: 4, requested: 10, can_cancel: true };
   failCancel = true;
   await page.reload(); await page.waitForLoadState("networkidle");
+  await page.locator(".buddy-menu-toggle").click();
   await page.getByRole("button", { name: "Cancel generation", exact: true }).click();
   await page.getByText(/Could not confirm cancellation/).waitFor();
   assert.equal(job.status, "running");
@@ -69,7 +78,8 @@ try {
 
   job = { job_id: "saving-job", status: "running", stage: "saving", message: "Saving your study set…", completed: 10, requested: 10, can_cancel: false };
   await page.reload(); await page.waitForLoadState("networkidle");
-  assert.ok(await page.getByRole("button", { name: "Cancel generation", exact: true }).isDisabled());
+  await page.locator(".buddy-menu-toggle").click();
+  assert.ok(await page.getByRole("button", { name: "Questions are being saved", exact: true }).isDisabled());
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
   assert.ok(acknowledgements >= 2);
   assert.deepEqual(errors, []);
