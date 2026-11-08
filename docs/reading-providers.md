@@ -12,9 +12,9 @@ SMRY is a reading service, not an additional quiz-generation model. Its [API con
 
 SMRY [Free access](https://smry.ai/pricing) includes personal API access; actual account quotas are available through `GET /v1/me`. The key has not been live-tested until it is configured on Render.
 
-## Enabled additional providers
+## Optional additional providers
 
-Cloudflare Workers AI, Vercel AI Gateway, and Typhoon are wired into the generation fallback pool alongside Groq, Gemini, Z.ai, Mistral, and OpenRouter. Each remains disabled until its server-side credentials are configured. No key is sent to the browser. Extra keys belonging to one account do not create extra quota.
+Cloudflare Workers AI, Vercel AI Gateway, and Typhoon are wired into generation alongside Groq, Gemini, Z.ai, Mistral, and OpenRouter. Their models join selection and fallback only when the corresponding server-side credentials are configured and their model IDs are added to `AI_MODEL_ORDER`. No key is sent to the browser. Extra keys belonging to one account do not create extra quota.
 
 Set these in **Render → Dawnstudy API service → Environment**:
 
@@ -26,7 +26,7 @@ Set these in **Render → Dawnstudy API service → Environment**:
 | `VERCEL_AI_GATEWAY_API_KEY` | Vercel AI Gateway key; existing `AI_GATEWAY_API_KEY` is accepted when the primary name is blank |
 | `TYPHOON_API_KEY` | Typhoon key for text generation and OCR recovery; existing `TYPHOON_OCR_API_KEY` is accepted when the primary name is blank |
 
-`AI_MODEL_ORDER` is a preference order, not an allowlist. Defaults for newly supported providers append automatically when credentials are configured, even if Render has an older explicit order. No model-catalog requests occur during startup or health checks. Removing a provider key disables its models; Cloudflare requires both a valid Account ID and token.
+`AI_MODEL_ORDER` is an allowlist and preference order. Only listed models with configured credentials are available for automatic selection, manual selection, or fallback. Add a model ID to the variable to opt it in; newly supported models do not silently join an existing order. An unset or blank value uses the established 18-model baseline, filtered to providers with credentials. No model-catalog requests occur during startup or health checks. Removing a provider key disables its models; Cloudflare requires both a valid Account ID and token.
 
 ### Generation models
 

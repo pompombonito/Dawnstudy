@@ -163,7 +163,26 @@ AI_MODELS = {
     "vercel:openai/gpt-oss-120b": ("vercel", "openai/gpt-oss-120b", "GPT-OSS 120B (Vercel, credits)"),
     "typhoon:typhoon-v2.5-30b-a3b-instruct": ("typhoon", "typhoon-v2.5-30b-a3b-instruct", "Typhoon 2.5 30B"),
 }
-DEFAULT_MODEL_ORDER = ",".join(AI_MODELS)
+DEFAULT_MODEL_ORDER = ",".join((
+    "groq:openai/gpt-oss-120b",
+    "groq:openai/gpt-oss-20b",
+    "groq:qwen/qwen3.8-27b",
+    "gemini:gemini-3.8-flash",
+    "gemini:gemini-3.7-flash",
+    "gemini:gemini-3.6-flash",
+    "gemini:gemini-3.5-flash-lite",
+    "gemini:gemini-3.1-flash-lite",
+    "zai:glm-4.7-flash",
+    "zai:glm-4.5-flash",
+    "zai:glm-4.6v-flash",
+    "mistral:mistral-small-latest",
+    "mistral:ministral-8b-latest",
+    "mistral:mistral-medium-latest",
+    "openrouter:qwen/qwen3.8-27b:free",
+    "openrouter:google/gemma-4-26b-a4b-it:free",
+    "openrouter:google/gemma-4-31b-it:free",
+    "openrouter:openrouter/free",
+))
 
 
 class Health(BaseModel):
@@ -1197,7 +1216,7 @@ def search_learning_materials(body: MaterialSearchRequest, user: dict[str, str] 
 
 
 def configured_ai_models() -> list[tuple[str, str, str, str, str]]:
-    """Return available model choices in preference order, omitting unconfigured providers."""
+    """Return configured models explicitly allowed by AI_MODEL_ORDER."""
     provider_keys = {
         "groq": os.getenv("GROQ_API_KEY", "").strip(),
         "gemini": os.getenv("GEMINI_API_KEY", "").strip(),
@@ -1208,13 +1227,10 @@ def configured_ai_models() -> list[tuple[str, str, str, str, str]]:
         "vercel": (os.getenv("VERCEL_AI_GATEWAY_API_KEY", "").strip() or os.getenv("AI_GATEWAY_API_KEY", "").strip()),
         "typhoon": (os.getenv("TYPHOON_API_KEY", "").strip() or os.getenv("TYPHOON_OCR_API_KEY", "").strip()),
     }
-    requested_order = os.getenv("AI_MODEL_ORDER", DEFAULT_MODEL_ORDER)
+    requested_order = os.getenv("AI_MODEL_ORDER", "").strip() or DEFAULT_MODEL_ORDER
     configured = []
     seen = set()
     requested_model_ids = [item.strip() for item in requested_order.split(",")]
-    # AI_MODEL_ORDER historically controlled ordering. Append newly supported
-    # models as well, so an older Render environment value does not hide them.
-    requested_model_ids.extend(model_id for model_id in AI_MODELS if model_id not in requested_model_ids)
     for model_id in requested_model_ids:
         model_info = AI_MODELS.get(model_id)
         if not model_info or model_id in seen:
@@ -1224,8 +1240,6 @@ def configured_ai_models() -> list[tuple[str, str, str, str, str]]:
         if api_key:
             configured.append((model_id, provider, default_model, api_key, label))
             seen.add(model_id)
-    # AI_MODEL_ORDER is a preference order, not an allowlist. Newly supported
-    # models append when their server-side provider credentials are configured.
     return configured
 
 
