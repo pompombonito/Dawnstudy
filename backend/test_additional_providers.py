@@ -14,17 +14,37 @@ class AdditionalProviderTests(unittest.TestCase):
         })}}]} if status == 200 else {"error": {"code": "rate_limit", "message": "private prompt omitted"}})
         return response
 
-    def test_keys_opt_in_providers_and_append_after_older_model_order(self):
+    def test_model_order_is_an_allowlist_and_provider_keys_only_enable_listed_models(self):
         environment = {"GROQ_API_KEY": "groq-test", "CLOUDFLARE_API_TOKEN": "cf-test",
                        "CLOUDFLARE_ACCOUNT_ID": "a" * 32, "VERCEL_AI_GATEWAY_API_KEY": "vercel-test",
                        "TYPHOON_API_KEY": "typhoon-test", "AI_MODEL_ORDER": "groq:openai/gpt-oss-120b"}
         with patch.dict(main.os.environ, environment, clear=True), patch.object(main.requests, "get", side_effect=AssertionError("No startup requests")):
             models = main.configured_ai_models()
-        self.assertEqual(models[0][0], "groq:openai/gpt-oss-120b")
+        self.assertEqual([model[0] for model in models], ["groq:openai/gpt-oss-120b"])
+        environment["AI_MODEL_ORDER"] += ",cloudflare:@cf/google/gemma-4-26b-a4b-it,vercel:nvidia/nemotron-3.5-lightning-free,typhoon:typhoon-v2.5-30b-a3b-instruct"
+        with patch.dict(main.os.environ, environment, clear=True):
+            models = main.configured_ai_models()
         keys = {provider: key for _id, provider, _model, key, _label in models}
         self.assertEqual(keys, {"groq": "groq-test", "cloudflare": "cf-test", "vercel": "vercel-test", "typhoon": "typhoon-test"})
         with patch.dict(main.os.environ, {}, clear=True):
             self.assertEqual(main.configured_ai_models(), [])
+
+    def test_blank_model_order_uses_default_catalog_but_unknown_ids_are_ignored(self):
+        environment = {
+            "GROQ_API_KEY": "groq-test",
+            "CLOUDFLARE_API_TOKEN": "cf-test",
+            "CLOUDFLARE_ACCOUNT_ID": "a" * 32,
+            "VERCEL_AI_GATEWAY_API_KEY": "vercel-test",
+            "TYPHOON_API_KEY": "typhoon-test",
+            "AI_MODEL_ORDER": " ",
+        }
+        with patch.dict(main.os.environ, environment, clear=True):
+            models = main.configured_ai_models()
+        self.assertTrue(models)
+        self.assertTrue(all(model[1] not in {"cloudflare", "vercel", "typhoon"} for model in models))
+        environment["AI_MODEL_ORDER"] = "unknown:model,groq:openai/gpt-oss-120b,groq:openai/gpt-oss-120b"
+        with patch.dict(main.os.environ, environment, clear=True):
+            self.assertEqual([model[0] for model in main.configured_ai_models()], ["groq:openai/gpt-oss-120b"])
 
     def test_cloudflare_needs_valid_account_id_in_addition_to_token(self):
         for value in ("", "../other-account", "x" * 32, "https://attacker.example"):
@@ -34,7 +54,12 @@ class AdditionalProviderTests(unittest.TestCase):
                     main.compatible_chat_endpoint("cloudflare", "test")
 
     def test_existing_environment_aliases_are_server_side(self):
-        with patch.dict(main.os.environ, {"AI_GATEWAY_API_KEY": "gateway-alias", "TYPHOON_OCR_API_KEY": "typhoon-alias"}, clear=True):
+        environment = {
+            "AI_GATEWAY_API_KEY": "gateway-alias",
+            "TYPHOON_OCR_API_KEY": "typhoon-alias",
+            "AI_MODEL_ORDER": "vercel:nvidia/nemotron-3.5-lightning-free,typhoon:typhoon-v2.5-30b-a3b-instruct",
+        }
+        with patch.dict(main.os.environ, environment, clear=True):
             models = main.configured_ai_models()
         keys = {provider: key for _id, provider, _model, key, _label in models}
         self.assertEqual(keys, {"vercel": "gateway-alias", "typhoon": "typhoon-alias"})
