@@ -46,6 +46,15 @@ class AdditionalProviderTests(unittest.TestCase):
         with patch.dict(main.os.environ, environment, clear=True):
             self.assertEqual([model[0] for model in main.configured_ai_models()], ["groq:openai/gpt-oss-120b"])
 
+    def test_retired_openrouter_qwen_route_is_not_configured(self):
+        environment = {
+            "OPENROUTER_API_KEY": "openrouter-test",
+            "AI_MODEL_ORDER": "openrouter:qwen/qwen3.8-27b:free,openrouter:google/gemma-4-26b-a4b-it:free",
+        }
+        with patch.dict(main.os.environ, environment, clear=True):
+            models = main.configured_ai_models()
+        self.assertEqual([model[0] for model in models], ["openrouter:google/gemma-4-26b-a4b-it:free"])
+
     def test_cloudflare_needs_valid_account_id_in_addition_to_token(self):
         for value in ("", "../other-account", "x" * 32, "https://attacker.example"):
             with self.subTest(account_id=value), patch.dict(main.os.environ, {"CLOUDFLARE_API_TOKEN": "cf-test", "CLOUDFLARE_ACCOUNT_ID": value}, clear=True):

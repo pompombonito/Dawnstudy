@@ -152,7 +152,6 @@ AI_MODELS = {
     "mistral:mistral-small-latest": ("mistral", "mistral-small-latest", "Mistral Small"),
     "mistral:ministral-8b-latest": ("mistral", "ministral-8b-latest", "Ministral 3 8B"),
     "mistral:mistral-medium-latest": ("mistral", "mistral-medium-latest", "Mistral Medium 3.5"),
-    "openrouter:qwen/qwen3.8-27b:free": ("openrouter", "qwen/qwen3.8-27b:free", "Qwen 3.8 27B (Free)"),
     "openrouter:google/gemma-4-26b-a4b-it:free": ("openrouter", "google/gemma-4-26b-a4b-it:free", "Gemma 4 26B (Free)"),
     "openrouter:google/gemma-4-31b-it:free": ("openrouter", "google/gemma-4-31b-it:free", "Gemma 4 31B (Free)"),
     "openrouter:openrouter/free": ("openrouter", "openrouter/free", "OpenRouter Free Model Router"),
@@ -178,7 +177,6 @@ DEFAULT_MODEL_ORDER = ",".join((
     "mistral:mistral-small-latest",
     "mistral:ministral-8b-latest",
     "mistral:mistral-medium-latest",
-    "openrouter:qwen/qwen3.8-27b:free",
     "openrouter:google/gemma-4-26b-a4b-it:free",
     "openrouter:google/gemma-4-31b-it:free",
     "openrouter:openrouter/free",
@@ -1263,7 +1261,6 @@ def choose_auto_model(
             "gemini:gemini-3.8-flash",
             "zai:glm-4.7-flash",
             "zai:glm-4.5-flash",
-            "openrouter:qwen/qwen3.8-27b:free",
             "openrouter:google/gemma-4-26b-a4b-it:free",
             "openrouter:google/gemma-4-31b-it:free",
             "openrouter:openrouter/free",
@@ -1284,7 +1281,6 @@ def choose_auto_model(
             "gemini:gemini-3.1-flash-lite",
             "zai:glm-4.7-flash",
             "zai:glm-4.5-flash",
-            "openrouter:qwen/qwen3.8-27b:free",
             "openrouter:google/gemma-4-31b-it:free",
             "openrouter:google/gemma-4-26b-a4b-it:free",
             "openrouter:openrouter/free",
@@ -1305,7 +1301,6 @@ def choose_auto_model(
             "gemini:gemini-3.8-flash",
             "zai:glm-4.7-flash",
             "zai:glm-4.5-flash",
-            "openrouter:qwen/qwen3.8-27b:free",
             "openrouter:google/gemma-4-26b-a4b-it:free",
             "openrouter:google/gemma-4-31b-it:free",
             "openrouter:openrouter/free",
@@ -1632,7 +1627,6 @@ def generate_with_provider(provider: str, model: str, api_key: str, prompt: str,
     model_id = f"{provider}:{model}"
     strict_json_models = {
         ("groq", "qwen/qwen3.8-27b"),
-        ("openrouter", "qwen/qwen3.8-27b:free"),
     }
     strict_json = (provider, model) in strict_json_models
     groq_gpt_oss = provider == "groq" and model in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"}
@@ -2038,8 +2032,6 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
     attempt_policy = ProviderAttemptPolicy()
     source_window_cycles = 0
     while queue and attempts < attempt_limit and time.monotonic() < deadline:
-        if time.monotonic() - last_progress > 180:
-            break
         model_id, provider, model, api_key, label = queue.popleft()
         check_generation_cancelled()
         if not attempt_policy.can_attempt(provider, model):

@@ -26,7 +26,7 @@ Set these in **Render → Dawnstudy API service → Environment**:
 | `VERCEL_AI_GATEWAY_API_KEY` | Vercel AI Gateway key; existing `AI_GATEWAY_API_KEY` is accepted when the primary name is blank |
 | `TYPHOON_API_KEY` | Typhoon key for text generation and OCR recovery; existing `TYPHOON_OCR_API_KEY` is accepted when the primary name is blank |
 
-`AI_MODEL_ORDER` is an allowlist and preference order. Only listed models with configured credentials are available for automatic selection, manual selection, or fallback. Add a model ID to the variable to opt it in; newly supported models do not silently join an existing order. An unset or blank value uses the established 18-model baseline, filtered to providers with credentials. No model-catalog requests occur during startup or health checks. Removing a provider key disables its models; Cloudflare requires both a valid Account ID and token.
+`AI_MODEL_ORDER` is an allowlist and preference order. Only listed models with configured credentials are available for automatic selection, manual selection, or fallback. Add a model ID to the variable to opt it in; newly supported models do not silently join an existing order. An unset or blank value uses the established 17-model baseline, filtered to providers with credentials. No model-catalog requests occur during startup or health checks. Removing a provider key disables its models; Cloudflare requires both a valid Account ID and token.
 
 ### Generation models
 

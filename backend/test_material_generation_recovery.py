@@ -78,6 +78,29 @@ class RecoveryTests(unittest.TestCase):
         self.assertGreaterEqual(clock[0], 90)
         self.assertTrue(all(item["answer"] == item["correct_answer"] == "Alpha" for item in result["items"]))
 
+    def test_generation_keeps_failing_over_after_three_minutes_without_progress(self):
+        primary = ("groq:openai/gpt-oss-120b", "groq", "openai/gpt-oss-120b", "groq-key", "GPT-OSS")
+        fallback = ("gemini:gemini-3.8-flash", "gemini", "gemini-3.8-flash", "gemini-key", "Gemini")
+        clock = [0.0]
+
+        def provider(provider_name, model_name, _key, _prompt, _schema, _budget):
+            if provider_name == "groq":
+                clock[0] = 181
+                raise main.ProviderError(provider_name, model_name, 503, "temporarily unavailable")
+            return {"title": "Set", "items": [{"question": "What is supported?", "answer": "A verified fact"}]}
+
+        schema = {"properties": {"items": {"items": {"properties": {}}}}}
+        with patch.object(main, "configured_ai_models", return_value=[primary, fallback]), \
+             patch.object(main, "generate_with_provider", side_effect=provider), \
+             patch.object(main.time, "monotonic", side_effect=lambda: clock[0]):
+            result, used, _fallback, incomplete = main.generate_with_fallback(
+                lambda _count, _done: "Use the supplied source", schema, primary[0], 1,
+                study_format="identification")
+
+        self.assertEqual(len(result["items"]), 1)
+        self.assertEqual(used, [fallback[0]])
+        self.assertFalse(incomplete)
+
     def test_groq_rejected_json_recovers_only_items_with_real_evidence(self):
         good = {"question": "What absorbs light?", "answer": "Chlorophyll", "source_evidence": "Chlorophyll absorbs light"}
         bad = {**good, "source_evidence": "Chlorophyll exists in the liver"}
