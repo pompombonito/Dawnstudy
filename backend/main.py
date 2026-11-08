@@ -109,6 +109,9 @@ _provider_request_timeout: ContextVar[int] = ContextVar("provider_request_timeou
 _material_figures: ContextVar[dict[str, dict]] = ContextVar("material_figures", default={})
 _generation_grounding_text: ContextVar[str] = ContextVar("generation_grounding_text", default="")
 _generation_grounding_normalized: ContextVar[str] = ContextVar("generation_grounding_normalized", default="")
+GENERATION_DEADLINE_SECONDS = 30 * 60
+QUESTIONNAIRE_COMPLETION_DEADLINE_SECONDS = 20 * 60
+GENERATION_RECOVERY_ROUNDS = 2
 
 try:
     _ollama_max_concurrent_requests = int(os.getenv("OLLAMA_MAX_CONCURRENT_REQUESTS", "1"))
@@ -1886,9 +1889,9 @@ def generate_with_provider(provider: str, model: str, api_key: str, prompt: str,
                     request_payload["response_format"] = {"type": "json_object"}
                     response = post_provider_json(base_url, headers=headers, payload=request_payload)
     except requests.Timeout as exc:
-        raise ProviderError(provider, model_id, None, "request timed out") from exc
+        raise ProviderError(provider, model_id, None, "request timed out", error_code="timeout") from exc
     except requests.RequestException as exc:
-        raise ProviderError(provider, model_id, None, "network request failed") from exc
+        raise ProviderError(provider, model_id, None, "network request failed", error_code="network_error") from exc
 
     if not response.ok:
         error_code, error_field = provider_error_diagnostics(response)
@@ -2222,13 +2225,15 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
     ordered = fallback_order(primary, [choice for choice in models if choice != primary])
     completed, used_models, failures = [], [], []
     title, fallback, pending = "", None, None
-    deadline, attempts = time.monotonic() + 600, 0
+    deadline, attempts = time.monotonic() + GENERATION_DEADLINE_SECONDS, 0
     last_progress = time.monotonic()
     attempt_limit = max(48, question_count * 2 + len(ordered) * 3)
     queue = deque(ordered)
     cooldowns, rate_retries = {}, defaultdict(int)
+    transient_retries = defaultdict(int)
     attempt_policy = ProviderAttemptPolicy()
     source_window_cycles = 0
+    recovery_rounds = 0
     while queue and attempts < attempt_limit and time.monotonic() < deadline:
         model_id, provider, model, api_key, label = queue.popleft()
         check_generation_cancelled()
@@ -2265,6 +2270,7 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
                 model_schema["properties"]["items"]["maxItems"] = batch
             failed = None
             retry_smaller_batch = False
+            retry_transient = False
             try:
                 try:
                     max_tokens = generation_max_tokens(provider, model, batch)
@@ -2298,6 +2304,16 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
                     exc.status == 200
                     or (exc.status in {400, 422} and exc.error_code == "json_validate_failed")
                 )
+                transient_failure = (
+                    exc.status is not None and exc.status >= 500
+                    and exc.error_code != "local_capacity"
+                ) or (
+                    exc.status is None and exc.error_code in {"timeout", "network_error"}
+                )
+                retry_identity = (provider, model)
+                retry_transient = (
+                    transient_failure and transient_retries[retry_identity] < 1
+                )
                 if output_validation_failure and adaptive_batch_size > 1 and batch_reductions < 3:
                     adaptive_batch_size = max(1, adaptive_batch_size // 2)
                     batch_reductions += 1
@@ -2314,7 +2330,9 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
                     )
                     if exc.error_code == "local_capacity":
                         attempt_policy.skip_model(provider, model)
-                    elif not model_specific_gemini_denial:
+                    elif model_specific_gemini_denial:
+                        attempt_policy.skip_model(provider, model)
+                    elif not retry_transient:
                         attempt_policy.record_failure(provider, model, exc.status)
                     failed = exc
                     print(f"AI provider {provider} ({model}) failed: {describe_provider_failure(exc)}")
@@ -2348,6 +2366,10 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
             if empty_attempts >= 2:
                 pending = pending or (model_id, "incomplete")
                 break
+        if retry_transient and failed is not None:
+            transient_retries[(provider, model)] += 1
+            cooldowns[provider] = time.monotonic() + 5
+            queue.append((model_id, provider, model, api_key, label))
         if len(completed) == question_count:
             return {"title": title, "items": completed}, used_models, fallback, False
         pending = pending or (model_id, "incomplete")
@@ -2369,6 +2391,20 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
                 queue = deque(choice for choice in ordered
                               if attempt_policy.can_attempt(choice[1], choice[2]))
                 if queue:
+                    continue
+            if recovery_rounds < GENERATION_RECOVERY_ROUNDS:
+                retryable_models = [
+                    choice for choice in ordered
+                    if attempt_policy.can_attempt(choice[1], choice[2])
+                ]
+                if retryable_models:
+                    recovery_rounds += 1
+                    generation_progress(
+                        "finishing",
+                        f"Retrying remaining questions with available models · {len(completed)} of {question_count} ready",
+                        len(completed),
+                    )
+                    queue = deque(retryable_models)
                     continue
     if completed:
         # Keep usable work even if every provider stops before reaching the
@@ -2652,7 +2688,7 @@ def import_questionnaire(documents, study_format, selected_model, existing_items
                 }, "required": ["number", "question", "answer", "uncertain", "distractors", "matching_pairs"],
             }},
         }, "required": ["title", "items"]}
-        deadline = time.monotonic() + 300
+        deadline = time.monotonic() + QUESTIONNAIRE_COMPLETION_DEADLINE_SECONDS
         last_error = "AI providers are temporarily unavailable. Try again shortly."
         last_error_status = 503
         attempt_policy = ProviderAttemptPolicy()

@@ -101,6 +101,84 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(used, [fallback[0]])
         self.assertFalse(incomplete)
 
+    def test_generation_continues_fallback_after_ten_minutes(self):
+        primary = ("groq:primary", "groq", "test", "groq-key", "Primary")
+        fallback = ("gemini:fallback", "gemini", "test", "gemini-key", "Fallback")
+        clock = [0.0]
+        calls = []
+
+        def provider(provider_name, model_name, _key, _prompt, _schema, _budget):
+            calls.append(provider_name)
+            if provider_name == "groq":
+                clock[0] = 601
+                raise main.ProviderError(provider_name, model_name, 503, "temporarily unavailable")
+            return {"title": "Set", "items": [{"question": "What is supported?", "answer": "A verified fact"}]}
+
+        schema = {"properties": {"items": {"items": {"properties": {}}}}}
+        with patch.object(main, "configured_ai_models", return_value=[primary, fallback]), \
+             patch.object(main, "generate_with_provider", side_effect=provider), \
+             patch.object(main.time, "monotonic", side_effect=lambda: clock[0]):
+            result, used, _fallback, incomplete = main.generate_with_fallback(
+                lambda _count, _done: "Use the supplied source", schema, primary[0], 1,
+                study_format="identification")
+
+        self.assertEqual(calls, ["groq", "gemini"])
+        self.assertEqual(len(result["items"]), 1)
+        self.assertEqual(used, [fallback[0]])
+        self.assertFalse(incomplete)
+
+    def test_transient_provider_timeout_is_retried_once_before_partial_result(self):
+        ollama = ("ollama:qwen3:4b", "ollama", "qwen3:4b", "ollama-key", "Ollama")
+        clock = [0.0]
+        calls = []
+
+        def provider(provider_name, model_name, _key, _prompt, _schema, _budget):
+            calls.append(provider_name)
+            if len(calls) == 1:
+                raise main.ProviderError(provider_name, model_name, None, "request timed out", error_code="timeout")
+            return {"title": "Set", "items": [{"question": "What is supported?", "answer": "A verified fact"}]}
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        schema = {"properties": {"items": {"items": {"properties": {}}}}}
+        with patch.object(main, "configured_ai_models", return_value=[ollama]), \
+             patch.object(main, "generate_with_provider", side_effect=provider), \
+             patch.object(main.time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(main.time, "sleep", side_effect=sleep):
+            result, used, _fallback, incomplete = main.generate_with_fallback(
+                lambda _count, _done: "Use the supplied source", schema, ollama[0], 1,
+                study_format="identification")
+
+        self.assertEqual(calls, ["ollama", "ollama"])
+        self.assertEqual(len(result["items"]), 1)
+        self.assertEqual(used, [ollama[0]])
+        self.assertFalse(incomplete)
+
+    def test_empty_model_responses_get_two_bounded_recovery_rounds(self):
+        model = ("groq:qwen/qwen3.8-27b", "groq", "qwen/qwen3.8-27b", "groq-key", "Qwen")
+        calls = []
+
+        def provider(*_args):
+            calls.append(len(calls) + 1)
+            if len(calls) < 5:
+                return {"title": "Set", "items": []}
+            return {"title": "Set", "items": [
+                {"question": "What is supported?", "answer": "A verified fact"},
+            ]}
+
+        schema = {"properties": {"items": {"items": {"properties": {}}}}}
+        with patch.object(main, "configured_ai_models", return_value=[model]), \
+             patch.object(main, "generate_with_provider", side_effect=provider):
+            result, used, _fallback, incomplete = main.generate_with_fallback(
+                lambda _count, _done: "Use the supplied source", schema, model[0], 1,
+                study_format="identification")
+
+        self.assertEqual(len(calls), 5)
+        self.assertEqual(len(result["items"]), 1)
+        self.assertEqual(used, [model[0]])
+        self.assertFalse(incomplete)
+
     def test_groq_rejected_json_recovers_only_items_with_real_evidence(self):
         good = {"question": "What absorbs light?", "answer": "Chlorophyll", "source_evidence": "Chlorophyll absorbs light"}
         bad = {**good, "source_evidence": "Chlorophyll exists in the liver"}
