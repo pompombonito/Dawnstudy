@@ -20,7 +20,7 @@ from urllib.parse import unquote, urljoin, urlparse
 from uuid import uuid4
 from material_scope import selected_pages, focus_excerpt
 from study_quality import QUESTION_QUALITY_INSTRUCTIONS, is_source_lookup_question
-from questionnaire import QuestionnaireError, parse_questionnaire, validate_completion, validate_completion_partial, convert_questionnaire, docx_questionnaire_text, match_existing_questionnaire_items, questionnaire_record_type, questionnaire_type_mismatches
+from questionnaire import QuestionnaireError, parse_questionnaire, validate_completion, validate_completion_partial, convert_questionnaire, docx_questionnaire_text, match_existing_questionnaire_items
 from questionnaire_ocr import prepare_questionnaire_image, questionnaire_text_from_tsv, ocr_questionnaire_image, ocr_learning_image
 from material_figures import extract_embedded_figures
 from pdf_questionnaire import extract_pdf_questionnaire, extract_pdf_figures, extract_pdf_learning_material
@@ -173,8 +173,6 @@ class SavedStudySet(BaseModel):
     incomplete: bool = False
     requested_count: int | None = Field(default=None, ge=1, le=MAX_QUESTIONS_PER_GENERATION)
     include_images: bool = False
-    questionnaire_type_confirmed: bool = False
-    questionnaire_type_policy: Literal["convert", "mixed"] | None = None
 
     @field_validator("items")
     @classmethod
@@ -508,8 +506,6 @@ def add_study_set(body: SavedStudySet, user: dict[str, str] = Depends(onboarded_
         "incomplete": body.incomplete,
         "requested_count": body.requested_count or len(body.items),
         "include_images": body.include_images,
-        "questionnaire_type_confirmed": body.questionnaire_type_confirmed,
-        "questionnaire_type_policy": body.questionnaire_type_policy,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
@@ -536,20 +532,10 @@ def extend_study_set(set_id: str, body: SavedStudySet, user: dict[str, str] = De
         "incomplete": body.incomplete,
         "requested_count": body.requested_count or len(body.items),
         "include_images": body.include_images,
-        "questionnaire_type_confirmed": body.questionnaire_type_confirmed,
-        "questionnaire_type_policy": body.questionnaire_type_policy,
     }
     try:
         if not update_study_set(user["user_id"], set_id, study_set):
-            # Generation can finish even when its original Sheets write fails.
-            # Accept a stable client ID so a browser-held draft can safely retry
-            # after a refresh or a server restart without creating duplicates.
-            study_set.update({
-                "id": set_id,
-                "user_id": user["user_id"],
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            })
-            save_study_set(study_set)
+            raise HTTPException(status_code=404, detail="Study set not found.")
         updated = next((item for item in list_study_sets(user["user_id"]) if item["id"] == set_id), None)
         if not updated:
             raise HTTPException(status_code=404, detail="Study set not found.")
@@ -2166,31 +2152,19 @@ def voice_reply_with_fallback(request: VoiceChatRequest) -> tuple[str, str, dict
     raise HTTPException(status_code=503, detail="Voice Review models are temporarily unavailable. Try again shortly.")
 
 
-def import_questionnaire(documents, study_format, selected_model, existing_items=None, type_policy="convert", type_confirmed=False):
+def import_questionnaire(documents, study_format, selected_model, existing_items=None):
     try:
         text_size = sum(len(re.sub(r"(?m)^\[PDF_IMAGE:.*\]$", "", document)) for document in documents)
         if text_size > 120_000:
             raise QuestionnaireError("This questionnaire is too long to import safely. Select fewer pages or split it into smaller files.")
         records = parse_questionnaire(documents, MAX_QUESTIONS_PER_GENERATION)
         existing_by_index = match_existing_questionnaire_items(records, existing_items or [])
-        mismatches = questionnaire_type_mismatches(records, study_format)
-        preserve_types = {
-            str(item["questionnaire_index"]) for item in mismatches
-            if type_policy == "mixed" or item["must_preserve"]
-        }
-        mode_by_number = {}
-        for record in records:
-            number = str(record["number"])
-            source_type = questionnaire_record_type(record)
-            mode_by_number[number] = (
-                source_type if number in preserve_types or source_type == "checkbox"
-                else "same_as_source" if study_format == "same_as_source"
-                else study_format
-            )
+        if any(record.get("matching_prompts") for record in records) and study_format != "same_as_source":
+            raise QuestionnaireError("This questionnaire includes matching questions. Choose “Same type as the questionnaire” to keep its mixed question formats.")
+        choice_mode = study_format in {"multiple_choice", "checkbox"}
         pending = [record for record in records
                    if int(record["number"]) not in existing_by_index
-                   and ((record.get("matching_prompts") and not record.get("matching_pairs")) or not record["answer"]
-                        or (mode_by_number[str(record["number"])] in {"multiple_choice", "checkbox"} and not record["options"]))]
+                   and ((record.get("matching_prompts") and not record.get("matching_pairs")) or not record["answer"] or (choice_mode and not record["options"]))]
         completions, used_models = {}, []
         models = configured_ai_models() if pending else []
         primary = next((choice for choice in models if choice[0] == selected_model), None)
@@ -2232,7 +2206,6 @@ def import_questionnaire(documents, study_format, selected_model, existing_items
                 # out of this text-only request and retry only unanswered rows.
                 prompt_batch = [
                     {**{key: value for key, value in record.items() if key != "images"},
-                     "requested_quiz_type": mode_by_number[str(record["number"])],
                      **({"image_count": len(record["images"])} if record.get("images") else {})}
                     for record in unresolved
                 ]
@@ -2243,7 +2216,7 @@ def import_questionnaire(documents, study_format, selected_model, existing_items
                     "If the answer is missing, solve the question; single-answer questions must use one exact option. For explicitly select-all-that-apply questions, join all correct option texts with ' | '. "
                     "If the question lacks enough context or has multiple defensible answers, set uncertain=true. Never guess. "
                     "For existing choices return distractors=[]; do not edit or add any choices. "
-                    + "Use each record's requested_quiz_type: only records requested as multiple_choice or checkbox and lacking source options need exactly three relevant, distinct, plausible but incorrect distractors. For every other record, return distractors=[]. Avoid synonyms, overlapping correct choices, all/none of the above, and clues from wording or length. "
+                    + ("For questions without choices, supply exactly three relevant, distinct, plausible but incorrect distractors from the same topic and category as the answer. Avoid synonyms of the answer, overlapping correct choices, all/none of the above, or clues from wording/length. " if choice_mode else "Return distractors=[] for every question. ")
                     + "For matching records, return one matching_pairs entry per matching_prompts item, copy each prompt exactly, and set match to its exact corresponding option text. Use each match at most once. Return matching_pairs=[] when no matching_prompts were supplied. "
                     + ("Labeled images for these questions are attached to this request. Inspect them when answering; if details are illegible or ambiguous, set uncertain=true instead of guessing. " if provider_supports_images(provider, provider_model) else "Some records may include image_count. The image is attached to the saved study card but is not visible in this text request; if the answer depends on that visual evidence, set uncertain=true instead of guessing. ")
                     + "Preserve the source language. Return exactly one item for each input, with no additions.\n"
@@ -2254,7 +2227,7 @@ def import_questionnaire(documents, study_format, selected_model, existing_items
                 try:
                     payload = generate_with_provider(provider, provider_model, key, prompt, schema, 6500)
                     check_generation_cancelled()
-                    verified, invalid = validate_completion_partial(unresolved, payload, mode_by_number)
+                    verified, invalid = validate_completion_partial(unresolved, payload, study_format)
                     if verified:
                         completions.update(verified)
                         unresolved = [record for record in unresolved if record["number"] not in verified]
@@ -2267,7 +2240,7 @@ def import_questionnaire(documents, study_format, selected_model, existing_items
                 except ProviderError as exc:
                     check_generation_cancelled()
                     if exc.partial_items:
-                        verified, _invalid = validate_completion_partial(unresolved, {"items": exc.partial_items}, mode_by_number)
+                        verified, _invalid = validate_completion_partial(unresolved, {"items": exc.partial_items}, study_format)
                         completions.update(verified)
                         unresolved = [record for record in unresolved if record["number"] not in verified]
                         if verified and model_id not in used_models:
@@ -2280,11 +2253,7 @@ def import_questionnaire(documents, study_format, selected_model, existing_items
                 finally:
                     _provider_images.reset(image_token)
         check_generation_cancelled()
-        items = convert_questionnaire(records, study_format, completions, existing_items=existing_items,
-                                      allow_incomplete=True, preserve_types=preserve_types)
-        for item in items:
-            item["questionnaire_type_confirmed"] = bool(type_confirmed)
-            item["questionnaire_type_policy"] = type_policy
+        items = convert_questionnaire(records, study_format, completions, existing_items=existing_items, allow_incomplete=True)
         if not items:
             raise HTTPException(last_error_status, last_error + " No answerable questions were available to save yet.")
         incomplete = len(items) < len(records)
@@ -2307,21 +2276,6 @@ def import_questionnaire(documents, study_format, selected_model, existing_items
         return items, used_models, incomplete, len(records), unresolved
     except QuestionnaireError as exc:
         raise HTTPException(422, str(exc)) from exc
-
-
-def questionnaire_format_preview(raw_files, page_ranges, target, existing_items=None):
-    """Parse uploaded pages without starting a generation job or contacting storage/models."""
-    documents = []
-    for index, (filename, raw) in enumerate(raw_files):
-        excerpt, _labels, _skipped = extract_material(
-            filename or f"Material {index + 1}.pdf", raw, page_ranges.get(str(index), ""),
-            questionnaire=True, include_skipped=True,
-        )
-        documents.append(excerpt)
-    records = parse_questionnaire(documents, MAX_QUESTIONS_PER_GENERATION)
-    existing = match_existing_questionnaire_items(records, existing_items or [])
-    return [item for item in questionnaire_type_mismatches(records, target)
-            if item["questionnaire_index"] not in existing]
 
 
 def persist_generation_result(result, user):
@@ -2353,8 +2307,6 @@ def generate(
     include_images: bool = Form(False),
     user: dict[str, str] = Depends(onboarded_user),
     input_mode: Literal["notes", "questionnaire"] = Form("notes"),
-    questionnaire_type_confirmed: bool = Form(False),
-    questionnaire_type_policy: Literal["convert", "mixed"] = Form("convert"),
 ):
     # Direct internal callers predate this optional multipart field.
     if not isinstance(input_mode, str):
@@ -2385,29 +2337,6 @@ def generate(
             raise ValueError()
     except (ValueError, TypeError):
         raise HTTPException(status_code=422, detail="Page selections must map each file number to a page range.")
-    if input_mode == "questionnaire" and format != "same_as_source" and not questionnaire_type_confirmed:
-        preview_files, preview_total = [], 0
-        for index, upload in enumerate(uploads):
-            position = upload.file.tell()
-            raw = upload.file.read(MAX_BYTES + 1)
-            upload.file.seek(position)
-            preview_total += len(raw)
-            if not raw or len(raw) > MAX_BYTES or preview_total > 30 * 1024 * 1024:
-                raise HTTPException(status_code=413, detail="Use nonempty files up to 15 MB each, with a 30 MB combined limit.")
-            preview_files.append((upload.filename or f"Material {index + 1}.txt", raw))
-        try:
-            mismatches = questionnaire_format_preview(preview_files, ranges, format)
-        except QuestionnaireError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        if mismatches:
-            return JSONResponse(status_code=409, content={
-                "code": "questionnaire_type_mismatch",
-                "selected_type": format,
-                "mismatches": mismatches,
-            })
-        questionnaire_type_confirmed = True
-    elif format == "same_as_source":
-        questionnaire_type_confirmed = True
     page_title, final_source_url, all_text, source_labels, skipped_pages, hashes, total_bytes = "", "", [], [], [], [], 0
     figures = []
     if uploads:
@@ -2463,8 +2392,7 @@ def generate(
             raise HTTPException(status_code=422, detail="Upload the same original questionnaire to continue this set.")
         try:
             items, used_models, incomplete, requested_count, unresolved_questions = import_questionnaire(
-                all_text, format, model, existing_items=_questionnaire_existing_items.get(),
-                type_policy=questionnaire_type_policy, type_confirmed=questionnaire_type_confirmed or format == "same_as_source",
+                all_text, format, model, existing_items=_questionnaire_existing_items.get()
             )
         except HTTPException as exc:
             if skipped_pages:
@@ -2472,8 +2400,6 @@ def generate(
             raise
         result = {
             "title": filename.rsplit(".", 1)[0][:100], "type": format, "items": items,
-            "questionnaire_type_confirmed": bool(questionnaire_type_confirmed or format == "same_as_source"),
-            "questionnaire_type_policy": questionnaire_type_policy,
             "sources": [], "model": used_models[-1] if used_models else "Questionnaire import",
             "models_used": used_models, "incomplete": incomplete, "requested_count": requested_count,
             "material_fingerprint": material_fingerprint, "page_ranges": ranges,
@@ -2662,8 +2588,6 @@ async def start_generation_job(
     include_images: bool = Form(False),
     user: dict[str, str] = Depends(onboarded_user),
     input_mode: Literal["notes", "questionnaire"] = Form("notes"),
-    questionnaire_type_confirmed: bool = Form(False),
-    questionnaire_type_policy: Literal["convert", "mixed"] = Form("convert"),
 ):
     if not isinstance(input_mode, str):
         input_mode = "notes"
@@ -2675,12 +2599,6 @@ async def start_generation_job(
         raise HTTPException(status_code=422, detail="Choose up to five files or one website link.")
     if format not in FORMATS or not 1 <= question_count <= MAX_QUESTIONS_PER_GENERATION:
         raise HTTPException(status_code=422, detail=f"Choose a supported format and 1–{MAX_QUESTIONS_PER_GENERATION} questions.")
-    active_job = generation_jobs.recover(user["user_id"])
-    if active_job and active_job.get("status") in GenerationJobs.ACTIVE:
-        return JSONResponse(status_code=409, content={
-            "detail": "A generation is already running for your account. Reconnecting to it.",
-            "job_id": active_job["job_id"],
-        })
     raw_files, total = [], 0
     try:
         for upload in files:
@@ -2712,37 +2630,6 @@ async def start_generation_job(
             existing_questions = json.dumps([item["question"] for item in base_set["items"]], ensure_ascii=False)
         expected_material_fingerprint = base_set.get("material_fingerprint", "")
         include_images = bool(base_set.get("include_images", False))
-        if input_mode == "questionnaire":
-            saved_type_policy = next((item.get("questionnaire_type_policy") for item in base_set.get("items", [])
-                                      if item.get("questionnaire_type_confirmed") and item.get("questionnaire_type_policy") in {"convert", "mixed"}), None)
-            if saved_type_policy:
-                questionnaire_type_confirmed = True
-                questionnaire_type_policy = saved_type_policy
-    if input_mode == "questionnaire":
-        try:
-            ranges = json.loads(page_ranges)
-            if not isinstance(ranges, dict) or any(not isinstance(value, str) for value in ranges.values()):
-                raise ValueError()
-        except (ValueError, TypeError):
-            raise HTTPException(status_code=422, detail="Page selections must map each file number to a page range.")
-        if not questionnaire_type_confirmed and format != "same_as_source":
-            from starlette.concurrency import run_in_threadpool
-            try:
-                mismatches = await run_in_threadpool(
-                    questionnaire_format_preview, raw_files, ranges, format,
-                    base_set.get("items", []) if base_set else None,
-                )
-            except QuestionnaireError as exc:
-                raise HTTPException(status_code=422, detail=str(exc)) from exc
-            if mismatches:
-                return JSONResponse(status_code=409, content={
-                    "code": "questionnaire_type_mismatch",
-                    "selected_type": format,
-                    "mismatches": mismatches,
-                })
-            questionnaire_type_confirmed = True
-        elif format == "same_as_source":
-            questionnaire_type_confirmed = True
     target_count = (base_set.get("requested_count") or len(base_set["items"])) if base_set else question_count
     try:
         job_id = generation_jobs.start(user["user_id"], target_count)
@@ -2780,7 +2667,7 @@ async def start_generation_job(
                 uploads = [UploadFile(filename=name, file=BytesIO(raw)) for name, raw in captured]
                 captured.clear()
             check_generation_cancelled()
-            result = generate(file=None, files=uploads, source_url=source_url, page_ranges=page_ranges, focus_topic=focus_topic, format=format, use_web=use_web, model=model, question_count=question_count, difficulty=difficulty, existing_questions=existing_questions, expected_material_fingerprint=expected_material_fingerprint, include_images=include_images, user=user, input_mode=input_mode, questionnaire_type_confirmed=questionnaire_type_confirmed, questionnaire_type_policy=questionnaire_type_policy)
+            result = generate(file=None, files=uploads, source_url=source_url, page_ranges=page_ranges, focus_topic=focus_topic, format=format, use_web=use_web, model=model, question_count=question_count, difficulty=difficulty, existing_questions=existing_questions, expected_material_fingerprint=expected_material_fingerprint, include_images=include_images, user=user, input_mode=input_mode)
             if base_set:
                 result = merge_continued_generation(base_set, result)
                 begin_generation_commit()
