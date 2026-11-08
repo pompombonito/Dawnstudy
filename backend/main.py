@@ -2090,9 +2090,10 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
                 candidates = safe_model_items(payload.get("items"))
             except ProviderError as exc:
                 check_generation_cancelled()
-                reset_after = exc.retry_after if exc.retry_after is not None else 60
+                reset_after = exc.retry_after
                 zai_overloaded = provider == "zai" and exc.error_code == "1305"
-                if (exc.status == 429 and not zai_overloaded and 0 <= reset_after <= 60
+                if (exc.status == 429 and not zai_overloaded and reset_after is not None
+                        and 0 <= reset_after <= 60
                         and rate_retries[provider] < 2):
                     failures.append(exc)
                     rate_retries[provider] += 1

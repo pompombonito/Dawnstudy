@@ -165,6 +165,32 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse(incomplete)
         self.assertEqual(main.provider_failure_reason(main.ProviderError("zai", zai[0], 429, "overloaded", error_code="1305")), "busy")
 
+    def test_quota_without_retry_after_skips_provider_siblings_and_fails_over(self):
+        groq_primary = ("groq:primary", "groq", "primary", "groq-key", "Groq primary")
+        zai = ("zai:fallback", "zai", "fallback", "zai-key", "Z.ai fallback")
+        groq_sibling = ("groq:sibling", "groq", "sibling", "groq-key", "Groq sibling")
+        calls = []
+
+        def provider(provider_name, model_name, _key, _prompt, _schema, _budget):
+            calls.append((provider_name, model_name))
+            if provider_name == "groq":
+                raise main.ProviderError(provider_name, model_name, 429, "quota exhausted")
+            return {"title": "Set", "items": [{"question": "What is supported?", "answer": "A verified fact"}]}
+
+        schema = {"properties": {"items": {"type": "array", "items": {"properties": {}}}}}
+        with patch.object(main, "configured_ai_models", return_value=[groq_primary, zai, groq_sibling]), \
+             patch.object(main, "generate_with_provider", side_effect=provider), \
+             patch.object(main.time, "sleep", side_effect=AssertionError("A quota without Retry-After must not wait")):
+            result, used, fallback, incomplete = main.generate_with_fallback(
+                lambda _count, _done: "Use the supplied source", schema, groq_primary[0], 1,
+                study_format="identification")
+
+        self.assertEqual(calls, [("groq", "primary"), ("zai", "fallback")])
+        self.assertEqual(len(result["items"]), 1)
+        self.assertEqual(used, [zai[0]])
+        self.assertEqual(fallback["reason"], "limit")
+        self.assertFalse(incomplete)
+
 
 if __name__ == "__main__":
     unittest.main()
