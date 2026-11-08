@@ -86,7 +86,7 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
             method="POST",
         )
         try:
-            with urlopen(upstream_request, timeout=180) as response:
+            with urlopen(upstream_request, timeout=240) as response:
                 body = response.read(MAX_RESPONSE_BYTES + 1)
                 status = response.status
                 content_type = response.headers.get("Content-Type", "application/json")

@@ -205,6 +205,19 @@ class AdditionalProviderTests(unittest.TestCase):
                 main.post_chat_completion("ollama", "http://localhost:11434/v1/chat/completions", {}, {})
         self.assertEqual(error.exception.error_code, "local_capacity")
 
+    def test_ollama_requests_get_longer_timeout_than_hosted_providers(self):
+        import threading
+
+        timeout_token = main._provider_request_timeout.set(45)
+        try:
+            with patch.object(main, "_ollama_request_slots", threading.BoundedSemaphore(1)), \
+                 patch.object(main, "post_provider_json", return_value=self.response()) as post:
+                main.post_chat_completion(
+                    "ollama", "https://example.trycloudflare.com/v1/chat/completions", {}, {"model": "qwen3:4b"})
+        finally:
+            main._provider_request_timeout.reset(timeout_token)
+        self.assertEqual(post.call_args.kwargs["timeout"], 180)
+
     def test_retired_openrouter_qwen_route_is_not_configured(self):
         environment = {
             "OPENROUTER_API_KEY": "openrouter-test",

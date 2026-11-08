@@ -1450,7 +1450,12 @@ def post_chat_completion(provider: str, url: str, headers: dict[str, str],
         raise ProviderError(provider, f"{provider}:{payload.get('model', '')}", 503,
                             "local Ollama capacity is busy", error_code="local_capacity")
     try:
-        return post_provider_json(url, headers=headers, payload=payload)
+        # Local models on laptop hardware need longer than hosted-provider
+        # calls, especially when they are loading or processing long material.
+        return post_provider_json(
+            url, headers=headers, payload=payload,
+            timeout=max(180, _provider_request_timeout.get()),
+        )
     finally:
         _ollama_request_slots.release()
 

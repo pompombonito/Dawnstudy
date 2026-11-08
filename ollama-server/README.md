@@ -6,7 +6,7 @@ Use the laptop's Ollama as Dawnstudy's first model, with the configured Gemini m
 
 Start with Ollama's `qwen3:4b` model. Its quantized 4B size is a practical starting point for an RTX 3050 Ti laptop with 16 GB system RAM; larger models may spill to system memory and become too slow. Confirm actual GPU placement with `ollama ps` and available VRAM with `nvidia-smi`.
 
-Dawnstudy defaults to one Ollama request at a time and uses a short source window for each batch. The API accepts up to six active generation jobs and runs two generation workers; a job that encounters a busy Ollama slot immediately proceeds to its next configured provider instead of queueing another GPU inference. Do not raise `OLLAMA_MAX_CONCURRENT_REQUESTS` above `1` on this laptop unless measured GPU/RAM headroom supports it. The setting is capped at 10.
+Dawnstudy defaults to one Ollama request at a time and uses a short source window for each batch. Ollama calls have a 180-second network timeout to allow the laptop model to load and generate; hosted providers keep their shorter timeout. The API accepts up to six active generation jobs and runs two generation workers; a job that encounters a busy Ollama slot immediately proceeds to its next configured provider instead of queueing another GPU inference. Do not raise `OLLAMA_MAX_CONCURRENT_REQUESTS` above `1` on this laptop unless measured GPU/RAM headroom supports it. The setting is capped at 10.
 
 ## Install and prepare Ollama
 
