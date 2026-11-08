@@ -221,7 +221,7 @@ class ReviewStoreTests(unittest.TestCase):
         pending = threading.Thread(target=save, name="paused-save")
         pending.start()
         self.assertTrue(save_loaded.wait(3))
-        store._loaded_at = 0
+        store._loaded_at = time.monotonic() - store._refresh_seconds - 1
         pause_refresh.set()
         with ThreadPoolExecutor(max_workers=1) as pool:
             refreshing = pool.submit(store.data, "student")
