@@ -41,7 +41,7 @@ class RecoveryTests(unittest.TestCase):
                 lambda count, _done: f"Create {count}", schema, model[0], 6, study_format="multiple_choice")
         self.assertEqual(len(result["items"]), 6)
         self.assertFalse(incomplete)
-        self.assertEqual(calls, [4, 2, 2, 2])
+        self.assertEqual(calls, [2, 1, 1, 1, 1, 1, 1])
         self.assertTrue(all(item["answer"] == item["correct_answer"] == "Alpha" for item in result["items"]))
 
     def test_exact_source_evidence_accepts_pdf_line_wrap_hyphenation_only(self):
@@ -130,6 +130,16 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(windows[0][0], source)
         self.assertEqual(windows[0][1], [f"PDF page {n}" for n in range(1, 9)])
 
+    def test_generation_windows_fit_small_provider_contexts_without_skipping_pages(self):
+        source = "\n\n".join(f"[SOURCE: PDF page {n}]\n" + f"Concept {n} is supported. " * 120 for n in range(1, 20))
+        windows = source_windows(source, maximum=5_000, full_context_maximum=5_000)
+        self.assertGreater(len(windows), 1)
+        self.assertTrue(all(len(window) <= 5_000 for window, _labels in windows))
+        self.assertEqual(
+            {label for _window, labels in windows for label in labels},
+            {f"PDF page {n}" for n in range(1, 20)},
+        )
+
     def test_generation_advances_source_after_all_models_stall_on_one_window(self):
         model = ("groq:test", "groq", "test", "test", "Test")
         source_window = [0]
@@ -165,7 +175,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(len(result["items"]), 2)
         self.assertFalse(incomplete)
         self.assertEqual(source_window[0], 1)
-        self.assertEqual(calls, [0, 0, 0, 0, 0, 1])
+        self.assertEqual(calls, [0, 0, 0, 1])
 
     def test_zai_1305_overload_fails_over_without_quota_cooldown(self):
         zai = ("zai:glm-4.7-flash", "zai", "glm-4.7-flash", "zai-key", "GLM Flash")
@@ -187,6 +197,54 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(fallback["reason"], "busy")
         self.assertFalse(incomplete)
         self.assertEqual(main.provider_failure_reason(main.ProviderError("zai", zai[0], 429, "overloaded", error_code="1305")), "busy")
+
+    def test_busy_ollama_fails_over_immediately_without_blocking_gemini(self):
+        ollama = ("ollama:qwen3:4b", "ollama", "qwen3:4b", "ollama", "Ollama Qwen3 4B")
+        gemini = ("gemini:gemini-2.5-flash-lite", "gemini", "gemini-2.5-flash-lite", "gemini-key", "Gemini")
+        calls = []
+
+        def provider(provider_name, model_name, _key, _prompt, _schema, _budget):
+            calls.append(provider_name)
+            if provider_name == "ollama":
+                raise main.ProviderError(provider_name, model_name, 503, "local capacity busy",
+                                         error_code="local_capacity")
+            return {"title": "Set", "items": [{"question": "What is supported?", "answer": "A verified fact"}]}
+
+        schema = {"properties": {"items": {"type": "array", "items": {"properties": {}}}}}
+        with patch.object(main, "configured_ai_models", return_value=[ollama, gemini]), \
+             patch.object(main, "generate_with_provider", side_effect=provider):
+            result, used, fallback, incomplete = main.generate_with_fallback(
+                lambda _count, _done: "Use the supplied source", schema, ollama[0], 1,
+                study_format="identification")
+        self.assertEqual(len(result["items"]), 1)
+        self.assertEqual(calls, ["ollama", "gemini"])
+        self.assertEqual(used, [gemini[0]])
+        self.assertEqual(fallback, {"from": ollama[0], "to": gemini[0], "reason": "busy"})
+        self.assertFalse(incomplete)
+
+    def test_restricted_gemini_25_model_does_not_block_later_gemini_fallbacks(self):
+        restricted = ("gemini:gemini-2.5-flash-lite", "gemini", "gemini-2.5-flash-lite", "gemini-key", "Gemini 2.5")
+        fallback = ("gemini:gemini-3.1-flash-lite", "gemini", "gemini-3.1-flash-lite", "gemini-key", "Gemini 3.1")
+        schema = {"properties": {"items": {"type": "array", "items": {"properties": {}}}}}
+        for status in (403, 404):
+            calls = []
+
+            def provider(_provider, model_name, _key, _prompt, _schema, _budget):
+                calls.append(model_name)
+                if model_name == restricted[2]:
+                    raise main.ProviderError("gemini", model_name, status, "model unavailable")
+                return {"title": "Set", "items": [{"question": "What is supported?", "answer": "A verified fact"}]}
+
+            with self.subTest(status=status), \
+                 patch.object(main, "configured_ai_models", return_value=[restricted, fallback]), \
+                 patch.object(main, "generate_with_provider", side_effect=provider):
+                result, used, _fallback, incomplete = main.generate_with_fallback(
+                    lambda _count, _done: "Use the supplied source", schema, restricted[0], 1,
+                    study_format="identification")
+            self.assertEqual(len(result["items"]), 1)
+            self.assertEqual(calls, [restricted[2], fallback[2]])
+            self.assertEqual(used, [fallback[0]])
+            self.assertFalse(incomplete)
 
     def test_quota_without_retry_after_skips_provider_siblings_and_fails_over(self):
         groq_primary = ("groq:primary", "groq", "primary", "groq-key", "Groq primary")

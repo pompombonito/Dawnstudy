@@ -100,6 +100,14 @@ class ProviderFailureBudgetTests(unittest.TestCase):
         self.assertEqual(policy.provider_failures["first"], 1)
         self.assertTrue(policy.can_attempt("first", "model-b"))
 
+    def test_skipped_busy_model_does_not_consume_provider_failure_budget(self):
+        policy = ProviderAttemptPolicy()
+        policy.skip_model("ollama", "qwen3:4b")
+        self.assertFalse(policy.can_attempt("ollama", "qwen3:4b"))
+        self.assertTrue(policy.can_attempt("ollama", "other"))
+        self.assertNotIn("ollama", policy.blocked_providers)
+        self.assertEqual(policy.provider_failures.get("ollama", 0), 0)
+
     def test_healthy_model_can_finish_many_batches_and_new_job_starts_fresh(self):
         policy = ProviderAttemptPolicy()
         for _ in range(30):

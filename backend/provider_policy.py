@@ -115,6 +115,10 @@ class ProviderAttemptPolicy:
                 and (provider, model) not in self.failed_models
                 and self.provider_failures.get(provider, 0) < self.max_failures_per_provider)
 
+    def skip_model(self, provider, model):
+        """Skip a temporarily unsuitable model without charging its provider budget."""
+        self.failed_models.add((provider, model))
+
     def record_failure(self, provider, model, status=None):
         """Record a final failed call, after any supported JSON/size retry."""
         identity = (provider, model)

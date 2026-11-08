@@ -73,7 +73,7 @@ class GenerationLimitTests(unittest.TestCase):
         data = generated.json()
         self.assertEqual(len(data["items"]), 200)
         self.assertFalse(data["incomplete"])
-        self.assertEqual(self.provider.call_count, 50)
+        self.assertEqual(self.provider.call_count, 100)
         self.assertEqual(data["usage"], {"remaining": None, "limit": None, "resets_at": None, "unlimited": True})
         saved = self.client.post("/api/study-sets", json=data)
         self.assertEqual(saved.status_code, 200, saved.text)
@@ -82,6 +82,16 @@ class GenerationLimitTests(unittest.TestCase):
         self.assertEqual(updated.status_code, 200, updated.text)
         self.assertEqual(len(updated.json()["items"]), 200)
         self.storage_api.assert_not_called()
+
+    def test_long_upload_sends_a_bounded_source_window_to_the_provider(self):
+        self.material = ("A complete source paragraph explains a measurable concept and its supporting evidence. " * 300).encode()
+        generated = self.generate(2)
+        self.assertEqual(generated.status_code, 200, generated.text)
+        prompt = self.provider.call_args.args[3]
+        start = prompt.index("<course_material>") + len("<course_material>")
+        end = prompt.index("</course_material>")
+        self.assertLessEqual(len(prompt[start:end].strip()), 5_000)
+        self.assertLess(len(prompt[start:end]), len(self.material.decode()))
 
     def test_more_than_five_generations_are_allowed_for_an_ordinary_account(self):
         for _ in range(7):

@@ -1,0 +1,7 @@
+tunnel: 5f476349-ac81-49c3-a24b-85d78d8e6f4d
+credentials-file: C:\Users\daqui\.cloudflared\5f476349-ac81-49c3-a24b-85d78d8e6f4d.json
+
+ingress:
+  - hostname: ollama.dawnstudy.com
+    service: http://127.0.0.1:11434
+  - service: http_status:404

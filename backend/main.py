@@ -17,7 +17,7 @@ from html.parser import HTMLParser
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
-from urllib.parse import unquote, urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse, urlsplit
 from uuid import uuid4
 from material_scope import selected_pages, focus_excerpt
 from material_batches import source_windows, advance_source_window_index
@@ -109,6 +109,15 @@ _provider_request_timeout: ContextVar[int] = ContextVar("provider_request_timeou
 _material_figures: ContextVar[dict[str, dict]] = ContextVar("material_figures", default={})
 _generation_grounding_text: ContextVar[str] = ContextVar("generation_grounding_text", default="")
 _generation_grounding_normalized: ContextVar[str] = ContextVar("generation_grounding_normalized", default="")
+
+try:
+    _ollama_max_concurrent_requests = int(os.getenv("OLLAMA_MAX_CONCURRENT_REQUESTS", "1"))
+except ValueError as exc:
+    raise RuntimeError("OLLAMA_MAX_CONCURRENT_REQUESTS must be an integer from 1 to 10.") from exc
+if not 1 <= _ollama_max_concurrent_requests <= 10:
+    raise RuntimeError("OLLAMA_MAX_CONCURRENT_REQUESTS must be an integer from 1 to 10.")
+_ollama_request_slots = threading.BoundedSemaphore(_ollama_max_concurrent_requests)
+
 generation_jobs = GenerationJobs()
 _generation_workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="study-generation")
 _generation_inputs: dict[str, list] = {}
@@ -141,11 +150,15 @@ AI_MODELS = {
     "groq:openai/gpt-oss-120b": ("groq", "openai/gpt-oss-120b", "GPT-OSS 120B"),
     "groq:openai/gpt-oss-20b": ("groq", "openai/gpt-oss-20b", "GPT-OSS 20B"),
     "groq:qwen/qwen3.8-27b": ("groq", "qwen/qwen3.8-27b", "Qwen 3.8 27B"),
-    "gemini:gemini-3.8-flash": ("gemini", "gemini-3.8-flash", "Gemini 3.8 Flash"),
-    "gemini:gemini-3.7-flash": ("gemini", "gemini-3.7-flash", "Gemini 3.7 Flash"),
-    "gemini:gemini-3.6-flash": ("gemini", "gemini-3.6-flash", "Gemini 3.6 Flash"),
-    "gemini:gemini-3.5-flash-lite": ("gemini", "gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite"),
+    "gemini:gemini-2.5-flash-lite": ("gemini", "gemini-2.5-flash-lite", "Gemini 2.5 Flash-Lite"),
+    "gemini:gemini-2.5-flash": ("gemini", "gemini-2.5-flash", "Gemini 2.5 Flash (deprecated)"),
     "gemini:gemini-3.1-flash-lite": ("gemini", "gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite"),
+    "gemini:gemini-3.5-flash-lite": ("gemini", "gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite"),
+    "gemini:gemini-3.6-flash": ("gemini", "gemini-3.6-flash", "Gemini 3.6 Flash"),
+    "gemini:gemini-3.8-flash": ("gemini", "gemini-3.8-flash", "Gemini 3.8 Flash"),
+    "antigravity:antigravity-preview-09-2026": (
+        "antigravity", "antigravity-preview-09-2026", "Antigravity Agent (Preview)"
+    ),
     "zai:glm-4.7-flash": ("zai", "glm-4.7-flash", "GLM 4.7 Flash (Free)"),
     "zai:glm-4.5-flash": ("zai", "glm-4.5-flash", "GLM 4.5 Flash (Free)"),
     "zai:glm-4.6v-flash": ("zai", "glm-4.6v-flash", "GLM 4.6V Flash (Free, vision)"),
@@ -163,14 +176,16 @@ AI_MODELS = {
     "typhoon:typhoon-v2.5-30b-a3b-instruct": ("typhoon", "typhoon-v2.5-30b-a3b-instruct", "Typhoon 2.5 30B"),
 }
 DEFAULT_MODEL_ORDER = ",".join((
-    "groq:openai/gpt-oss-120b",
-    "groq:openai/gpt-oss-20b",
-    "groq:qwen/qwen3.8-27b",
-    "gemini:gemini-3.8-flash",
-    "gemini:gemini-3.7-flash",
-    "gemini:gemini-3.6-flash",
-    "gemini:gemini-3.5-flash-lite",
+    "gemini:gemini-2.5-flash-lite",
+    "gemini:gemini-2.5-flash",
     "gemini:gemini-3.1-flash-lite",
+    "gemini:gemini-3.5-flash-lite",
+    "gemini:gemini-3.6-flash",
+    "gemini:gemini-3.8-flash",
+    "antigravity:antigravity-preview-09-2026",
+    "groq:openai/gpt-oss-120b",
+    "groq:qwen/qwen3.8-27b",
+    "groq:openai/gpt-oss-20b",
     "zai:glm-4.7-flash",
     "zai:glm-4.5-flash",
     "zai:glm-4.6v-flash",
@@ -181,6 +196,15 @@ DEFAULT_MODEL_ORDER = ",".join((
     "openrouter:google/gemma-4-31b-it:free",
     "openrouter:openrouter/free",
 ))
+GEMINI_FALLBACK_ORDER = (
+    "gemini:gemini-2.5-flash-lite",
+    "gemini:gemini-2.5-flash",
+    "gemini:gemini-3.1-flash-lite",
+    "gemini:gemini-3.5-flash-lite",
+    "gemini:gemini-3.6-flash",
+    "gemini:gemini-3.8-flash",
+)
+ANTIGRAVITY_MODEL_ID = "antigravity:antigravity-preview-09-2026"
 
 
 class Health(BaseModel):
@@ -1214,23 +1238,52 @@ def search_learning_materials(body: MaterialSearchRequest, user: dict[str, str] 
 
 
 def configured_ai_models() -> list[tuple[str, str, str, str, str]]:
-    """Return configured models explicitly allowed by AI_MODEL_ORDER."""
+    """Return configured models from the allowlist, with local Ollama prepended when set."""
     provider_keys = {
         "groq": os.getenv("GROQ_API_KEY", "").strip(),
         "gemini": os.getenv("GEMINI_API_KEY", "").strip(),
+        "antigravity": os.getenv("GEMINI_API_KEY", "").strip(),
         "zai": os.getenv("ZAI_API_KEY", "").strip(),
         "mistral": os.getenv("MISTRAL_API_KEY", "").strip(),
         "openrouter": os.getenv("OPENROUTER_API_KEY", "").strip(),
         "cloudflare": os.getenv("CLOUDFLARE_API_TOKEN", "").strip() if re.fullmatch(r"[a-fA-F0-9]{32}", os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()) else "",
         "vercel": (os.getenv("VERCEL_AI_GATEWAY_API_KEY", "").strip() or os.getenv("AI_GATEWAY_API_KEY", "").strip()),
         "typhoon": (os.getenv("TYPHOON_API_KEY", "").strip() or os.getenv("TYPHOON_OCR_API_KEY", "").strip()),
+        "ollama": (
+            os.getenv("OLLAMA_API_KEY", "").strip()
+            or (
+                "ollama"
+                if os.getenv("OLLAMA_BASE_URL", "").strip()
+                and (ollama_endpoint_is_local(os.getenv("OLLAMA_BASE_URL", ""))
+                     or (os.getenv("OLLAMA_ACCESS_CLIENT_ID", "").strip()
+                         and os.getenv("OLLAMA_ACCESS_CLIENT_SECRET", "").strip()))
+                else ""
+            )
+        ),
     }
-    requested_order = os.getenv("AI_MODEL_ORDER", "").strip() or DEFAULT_MODEL_ORDER
+    ollama_model = os.getenv("OLLAMA_MODEL", "qwen3:4b").strip()
+    if not re.fullmatch(r"[A-Za-z0-9._:/-]+", ollama_model):
+        raise ValueError("OLLAMA_MODEL must be a valid Ollama model name.")
+    ollama_model_id = f"ollama:{ollama_model}"
+    requested_order = os.getenv("AI_MODEL_ORDER", "").strip()
+    if not requested_order:
+        default_order = [DEFAULT_MODEL_ORDER]
+        if provider_keys["ollama"]:
+            default_order.insert(0, ollama_model_id)
+        requested_order = ",".join(default_order)
+    requested_model_ids = [item.strip() for item in requested_order.split(",")]
+    if provider_keys["ollama"]:
+        requested_model_ids = [
+            ollama_model_id,
+            *(model_id for model_id in GEMINI_FALLBACK_ORDER if model_id in requested_model_ids),
+            *(model_id for model_id in requested_model_ids
+              if model_id != ollama_model_id and model_id not in GEMINI_FALLBACK_ORDER),
+        ]
     configured = []
     seen = set()
-    requested_model_ids = [item.strip() for item in requested_order.split(",")]
     for model_id in requested_model_ids:
-        model_info = AI_MODELS.get(model_id)
+        model_info = (("ollama", ollama_model, f"Ollama {ollama_model}")
+                      if model_id == ollama_model_id else AI_MODELS.get(model_id))
         if not model_info or model_id in seen:
             continue
         provider, default_model, label = model_info
@@ -1257,7 +1310,6 @@ def choose_auto_model(
             "gemini:gemini-3.1-flash-lite",
             "gemini:gemini-3.5-flash-lite",
             "gemini:gemini-3.6-flash",
-            "gemini:gemini-3.7-flash",
             "gemini:gemini-3.8-flash",
             "zai:glm-4.7-flash",
             "zai:glm-4.5-flash",
@@ -1275,7 +1327,6 @@ def choose_auto_model(
             "groq:qwen/qwen3.8-27b",
             "groq:openai/gpt-oss-20b",
             "gemini:gemini-3.8-flash",
-            "gemini:gemini-3.7-flash",
             "gemini:gemini-3.6-flash",
             "gemini:gemini-3.5-flash-lite",
             "gemini:gemini-3.1-flash-lite",
@@ -1297,7 +1348,6 @@ def choose_auto_model(
             "gemini:gemini-3.5-flash-lite",
             "gemini:gemini-3.1-flash-lite",
             "gemini:gemini-3.6-flash",
-            "gemini:gemini-3.7-flash",
             "gemini:gemini-3.8-flash",
             "zai:glm-4.7-flash",
             "zai:glm-4.5-flash",
@@ -1309,8 +1359,13 @@ def choose_auto_model(
             "mistral:mistral-medium-latest",
         ]
 
+    preferred_order = [choice[0] for choice in models if choice[1] == "ollama"]
+    preferred_order.extend(GEMINI_FALLBACK_ORDER)
+    preferred_order.append(ANTIGRAVITY_MODEL_ID)
+    preferred_order.extend(model_id for model_id in preferences
+                           if model_id not in GEMINI_FALLBACK_ORDER and model_id not in preferred_order)
     configured_ids = {choice[0] for choice in models}
-    selected = next((model_id for model_id in preferences if model_id in configured_ids), None)
+    selected = next((model_id for model_id in preferred_order if model_id in configured_ids), None)
     if not selected and models:
         selected = models[0][0]
     approx_tokens = max(1, (text_chars + 3) // 4)
@@ -1372,7 +1427,8 @@ def provider_error_diagnostics(response: requests.Response) -> tuple[str | None,
     )
 
 
-def post_provider_json(url: str, headers: dict[str, str], payload: dict[str, Any]) -> requests.Response:
+def post_provider_json(url: str, headers: dict[str, str], payload: dict[str, Any],
+                      timeout: int | None = None) -> requests.Response:
     """Send UTF-8 JSON without expanding every non-ASCII character into a unicode escape."""
     request_headers = {**headers, "Content-Type": "application/json; charset=utf-8"}
     check_generation_cancelled()
@@ -1380,21 +1436,80 @@ def post_provider_json(url: str, headers: dict[str, str], payload: dict[str, Any
         url,
         headers=request_headers,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        timeout=_provider_request_timeout.get(),
+        timeout=timeout or _provider_request_timeout.get(),
     )
     check_generation_cancelled()
     return response
 
 
-def compact_provider_prompt(prompt: str) -> str | None:
-    """Keep the start and end of course material when retrying an oversized request."""
+def post_chat_completion(provider: str, url: str, headers: dict[str, str],
+                         payload: dict[str, Any]) -> requests.Response:
+    if provider != "ollama":
+        return post_provider_json(url, headers=headers, payload=payload)
+    if not _ollama_request_slots.acquire(blocking=False):
+        raise ProviderError(provider, f"{provider}:{payload.get('model', '')}", 503,
+                            "local Ollama capacity is busy", error_code="local_capacity")
+    try:
+        return post_provider_json(url, headers=headers, payload=payload)
+    finally:
+        _ollama_request_slots.release()
+
+
+def antigravity_interaction_text(body: Any) -> str:
+    """Extract final text from the Gemini Interactions API response."""
+    if not isinstance(body, dict):
+        return ""
+    direct_text = body.get("output_text")
+    if isinstance(direct_text, str):
+        return direct_text
+
+    def text_from_content(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(
+                str(part.get("text") or "")
+                for part in content
+                if isinstance(part, dict) and part.get("type") in {"text", "output_text"}
+            )
+        if isinstance(content, dict):
+            return str(content.get("text") or "")
+        return ""
+
+    outputs = body.get("outputs")
+    if isinstance(outputs, list):
+        output = "".join(text_from_content(item) for item in outputs)
+        if output:
+            return output
+    steps = body.get("steps")
+    if isinstance(steps, list):
+        for step in reversed(steps):
+            if isinstance(step, dict) and step.get("type") == "model_output":
+                output = text_from_content(step.get("content"))
+                if output:
+                    return output
+    return ""
+
+
+def post_antigravity_interaction(api_key: str, interaction_input: str | list[dict[str, str]]) -> requests.Response:
+    return post_provider_json(
+        compatible_chat_endpoint("antigravity", "antigravity-preview-09-2026"),
+        headers={"x-goog-api-key": api_key},
+        payload={"agent": "antigravity-preview-09-2026", "input": interaction_input, "tools": []},
+        timeout=max(120, _provider_request_timeout.get()),
+    )
+
+
+def compact_provider_prompt(prompt: str, max_material_chars: int = 8_000,
+                            max_history_items: int = 10) -> str | None:
+    """Keep bounded source context and history when a provider has a small token budget."""
     compacted_prompt = prompt
     match = re.search(r"(<course_material>\s*)(.*?)(\s*</course_material>)", prompt, re.DOTALL)
     if match:
         material = match.group(2)
-        if len(material) > 4_000:
+        if len(material) > max_material_chars:
             marker = "\n[Middle of course material omitted after provider rejected the request size.]\n"
-            target_length = min(8_000, len(material) // 2)
+            target_length = max_material_chars
             content_length = max(0, target_length - len(marker))
             keep_start = (content_length * 2) // 3
             keep_end = content_length - keep_start
@@ -1412,8 +1527,8 @@ def compact_provider_prompt(prompt: str) -> str | None:
             history = json.loads(encoded_history)
         except ValueError:
             continue
-        if isinstance(history, list) and len(history) > 10:
-            compacted_prompt = before + separator + json.dumps(history[-10:], ensure_ascii=False)
+        if isinstance(history, list) and len(history) > max_history_items:
+            compacted_prompt = before + separator + json.dumps(history[-max_history_items:], ensure_ascii=False)
 
     return compacted_prompt if compacted_prompt != prompt else None
 
@@ -1505,7 +1620,7 @@ def parse_study_set_json(content: Any) -> dict[str, Any]:
 
 
 def provider_supports_images(provider, model):
-    return (provider == "gemini" or (provider == "zai" and "4.6v" in model.lower())
+    return (provider in {"gemini", "antigravity"} or (provider == "zai" and "4.6v" in model.lower())
             or (provider == "groq" and "qwen3.8" in model.lower())
             or (provider == "openrouter" and any(name in model.lower() for name in ("qwen3.8", "gemma-4")))
             or (provider == "cloudflare" and model == "@cf/google/gemma-4-26b-a4b-it")
@@ -1601,13 +1716,42 @@ def has_source_evidence(item):
     return normalize(evidence) in source
 
 
+def ollama_endpoint_is_local(base_url: str) -> bool:
+    try:
+        host = (urlsplit(base_url).hostname or "").lower()
+        return host in {"localhost", "127.0.0.1", "::1"} or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def compatible_chat_endpoint(provider: str, model: str) -> str:
-    """Use documented fixed hosts; a Cloudflare account ID is a path ID only."""
+    """Use documented fixed hosts or a TLS-protected, explicitly configured Ollama."""
     if provider == "cloudflare":
         account_id = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
         if not re.fullmatch(r"[a-fA-F0-9]{32}", account_id):
             raise ProviderError(provider, f"{provider}:{model}", None, "Cloudflare account ID is missing or invalid")
         return f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1/chat/completions"
+    if provider == "antigravity":
+        return "https://generativelanguage.googleapis.com/v1beta/interactions"
+    if provider == "ollama":
+        base_url = os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/")
+        try:
+            parsed = urlsplit(base_url)
+        except ValueError:
+            parsed = urlsplit("")
+        loopback = ollama_endpoint_is_local(base_url)
+        if (parsed.scheme != "https" and not (parsed.scheme == "http" and loopback)
+                or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment
+                or not parsed.path.rstrip("/").endswith("/v1")):
+            raise ProviderError(provider, f"{provider}:{model}", None,
+                                "Ollama must use an HTTPS /v1 endpoint; HTTP is allowed only for localhost")
+        has_access_token = (os.getenv("OLLAMA_ACCESS_CLIENT_ID", "").strip()
+                            and os.getenv("OLLAMA_ACCESS_CLIENT_SECRET", "").strip())
+        has_proxy_key = bool(os.getenv("OLLAMA_API_KEY", "").strip())
+        if not loopback and not (has_access_token or has_proxy_key):
+            raise ProviderError(provider, f"{provider}:{model}", None,
+                                "Remote Ollama requires Cloudflare Access credentials or a proxy API key")
+        return f"{base_url}/chat/completions"
     endpoints = {
         "groq": "https://api.groq.com/openai/v1/chat/completions",
         "mistral": "https://api.mistral.ai/v1/chat/completions",
@@ -1645,14 +1789,25 @@ def generate_with_provider(provider: str, model: str, api_key: str, prompt: str,
             "and source_evidence. For multiple choice, answer and correct_answer must be the exact same option text; "
             "include exactly four distinct options. Include other requested fields when useful. No markdown."
         )
-    if provider in {"typhoon", "cloudflare", "vercel"}:
+    if provider in {"typhoon", "cloudflare", "vercel", "antigravity"}:
         # Give compatible providers the complete field contract even when using
         # JSON object mode. Typhoon does not document response_format, so its
         # output is constrained by this prompt and our usual JSON validation.
         provider_prompt += "\n\nReturn only one JSON object, with no markdown, matching this JSON Schema:\n" + json.dumps(schema, ensure_ascii=False)
     try:
         visuals = _provider_images.get() if provider_supports_images(provider, model) else ()
-        if provider == "gemini":
+        if provider == "antigravity":
+            interaction_input: str | list[dict[str, str]] = provider_prompt
+            if visuals:
+                interaction_input = [{"type": "text", "text": provider_prompt}]
+                for image_id, data_url in visuals:
+                    mime, encoded = data_url.split(";base64,", 1)
+                    interaction_input.extend([
+                        {"type": "text", "text": image_id},
+                        {"type": "image", "mime_type": mime.removeprefix("data:"), "data": encoded},
+                    ])
+            response = post_antigravity_interaction(api_key, interaction_input)
+        elif provider == "gemini":
             parts = [{"text": provider_prompt}]
             for image_id, data_url in visuals:
                 mime, encoded = data_url.split(";base64,", 1)
@@ -1674,6 +1829,12 @@ def generate_with_provider(provider: str, model: str, api_key: str, prompt: str,
             if provider == "openrouter":
                 headers["HTTP-Referer"] = "https://dawnstudy.vercel.app"
                 headers["X-Title"] = "Dawnstudy"
+            if provider == "ollama" and not ollama_endpoint_is_local(os.getenv("OLLAMA_BASE_URL", "")):
+                access_id = os.getenv("OLLAMA_ACCESS_CLIENT_ID", "").strip()
+                access_secret = os.getenv("OLLAMA_ACCESS_CLIENT_SECRET", "").strip()
+                if access_id and access_secret:
+                    headers["CF-Access-Client-Id"] = access_id
+                    headers["CF-Access-Client-Secret"] = access_secret
             response_format = {"type": "json_object"}
             if strict_json:
                 response_format = {
@@ -1710,11 +1871,7 @@ def generate_with_provider(provider: str, model: str, api_key: str, prompt: str,
                 # Require each endpoint to honor JSON mode/schema instead of
                 # silently selecting one that ignores response_format.
                 request_payload["provider"] = {"require_parameters": True}
-            response = post_provider_json(
-                base_url,
-                headers=headers,
-                payload=request_payload,
-            )
+            response = post_chat_completion(provider, base_url, headers=headers, payload=request_payload)
             if not response.ok and strict_json:
                 error_code, _error_field = provider_error_diagnostics(response)
                 if error_code == "json_validate_failed":
@@ -1756,7 +1913,10 @@ def generate_with_provider(provider: str, model: str, api_key: str, prompt: str,
     content = ""
     try:
         body = response.json()
-        if provider == "gemini":
+        if provider == "antigravity":
+            body = response.json()
+            content = antigravity_interaction_text(body)
+        elif provider == "gemini":
             content = "".join(
                 str(part.get("text") or "")
                 for candidate in body.get("candidates", [])[:1]
@@ -1990,6 +2150,8 @@ def provider_failure_reason(error: ProviderError) -> str:
     # the whole generation on a misleading quota signal.
     if error.provider == "zai" and error.error_code == "1305":
         return "busy"
+    if error.provider == "ollama" and error.error_code == "local_capacity":
+        return "busy"
     if error.status == 429:
         return "limit"
     if error.status is None or error.status >= 500:
@@ -1999,18 +2161,49 @@ def provider_failure_reason(error: ProviderError) -> str:
 
 def generation_batch_size(provider: str, model: str, question_count: int = 1) -> int:
     """Choose a conservative first batch; rejected output can be split smaller."""
-    return 4 if provider == "groq" and model in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"} else 8
+    if provider == "ollama":
+        return 2
+    if provider != "groq":
+        return 8
+    if model == "qwen/qwen3.8-27b":
+        return 1
+    return 2
 
 
 def generation_max_tokens(provider: str, model: str, batch: int) -> int:
+    if provider == "ollama":
+        return 1_200
+    if provider == "groq":
+        # Leave headroom below the observed free-tier 8k TPM and 1k Qwen OTPM limits.
+        if model == "qwen/qwen3.8-27b":
+            return 850
+        if model in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"}:
+            return 1_800
+        return 1_200
     budget = max(3500, 1000 + batch * 550)
-    if provider == "groq" and model in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"}:
-        return min(budget, 3000)
     return budget
 
 
 def fallback_order(primary, candidates):
     """Keep the chosen model first, then try independent providers before siblings."""
+    if primary and primary[1] in {"ollama", "gemini"}:
+        if primary[1] == "ollama":
+            gemini_order = GEMINI_FALLBACK_ORDER
+        elif primary[0] in GEMINI_FALLBACK_ORDER:
+            gemini_order = GEMINI_FALLBACK_ORDER[GEMINI_FALLBACK_ORDER.index(primary[0]) + 1:]
+        else:
+            gemini_order = ()
+        gemini_candidates = [
+            candidate for model_id in gemini_order
+            for candidate in candidates if candidate[0] == model_id
+        ]
+        gemini_candidates.extend(
+            candidate for candidate in candidates
+            if candidate[1] == "gemini" and candidate not in gemini_candidates
+            and candidate[0] not in GEMINI_FALLBACK_ORDER
+        )
+        other_candidates = [candidate for candidate in candidates if candidate[1] != "gemini"]
+        return [primary, *gemini_candidates, *other_candidates]
     return interleave_order(primary, candidates)
 
 
@@ -2058,7 +2251,8 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
             prompt = prompt_builder(batch, completed)
             prompt += "\n" + QUESTION_QUALITY_INSTRUCTIONS
             if excluded_questions:
-                prompt += "\nDo not repeat or closely paraphrase these earlier questions: " + json.dumps(excluded_questions[-30:], ensure_ascii=False)
+                history_limit = 10 if provider == "groq" else 30
+                prompt += "\nDo not repeat or closely paraphrase these earlier questions: " + json.dumps(excluded_questions[-history_limit:], ensure_ascii=False)
             if empty_attempts:
                 prompt += "\nReturn new, complete, self-contained concept questions. Do not repeat rejected source-location trivia. Ensure answers match options exactly, with all four options concise and similar in length."
             model_schema = json.loads(json.dumps(schema))
@@ -2072,7 +2266,7 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
                     payload = generate_with_provider(provider, model, api_key, prompt, model_schema, max_tokens)
                 except ProviderError as exc:
                     check_generation_cancelled()
-                    compacted = compact_provider_prompt(prompt) if exc.status == 413 else None
+                    compacted = compact_provider_prompt(prompt, max_material_chars=3_000) if exc.status == 413 else None
                     if not compacted:
                         raise
                     max_tokens = generation_max_tokens(provider, model, batch)
@@ -2108,7 +2302,15 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
                     print(f"AI provider {provider} ({model}) returned unusable output; retrying with a batch of {adaptive_batch_size}")
                 else:
                     failures.append(exc)
-                    attempt_policy.record_failure(provider, model, exc.status)
+                    model_specific_gemini_denial = (
+                        provider == "gemini"
+                        and model in {"gemini-2.5-flash-lite", "gemini-2.5-flash"}
+                        and exc.status in {403, 404}
+                    )
+                    if exc.error_code == "local_capacity":
+                        attempt_policy.skip_model(provider, model)
+                    elif not model_specific_gemini_denial:
+                        attempt_policy.record_failure(provider, model, exc.status)
                     failed = exc
                     print(f"AI provider {provider} ({model}) failed: {describe_provider_failure(exc)}")
             candidates = [item for item in candidates if not is_source_lookup_question(item["question"])]
@@ -2185,7 +2387,14 @@ def generate_voice_reply(
 ) -> str:
     model_id = f"{provider}:{model}"
     try:
-        if provider == "gemini":
+        if provider == "antigravity":
+            transcript = "\n".join(
+                f"{'Assistant' if item.get('role') == 'assistant' else 'Student'}: {item.get('content', '')}"
+                for item in history
+            )
+            agent_input = f"{system_prompt}\n\n{transcript}\nStudent: {message}".strip()
+            response = post_antigravity_interaction(api_key, agent_input)
+        elif provider == "gemini":
             contents = [
                 {"role": "model" if item["role"] == "assistant" else "user", "parts": [{"text": item["content"]}]}
                 for item in history
@@ -2205,9 +2414,14 @@ def generate_voice_reply(
             headers = {"Authorization": f"Bearer {api_key}"}
             if provider == "openrouter":
                 headers.update({"HTTP-Referer": "https://dawnstudy.vercel.app", "X-Title": "Dawnstudy"})
-            response = post_provider_json(
-                base_url,
-                headers=headers,
+            if provider == "ollama" and not ollama_endpoint_is_local(os.getenv("OLLAMA_BASE_URL", "")):
+                access_id = os.getenv("OLLAMA_ACCESS_CLIENT_ID", "").strip()
+                access_secret = os.getenv("OLLAMA_ACCESS_CLIENT_SECRET", "").strip()
+                if access_id and access_secret:
+                    headers["CF-Access-Client-Id"] = access_id
+                    headers["CF-Access-Client-Secret"] = access_secret
+            response = post_chat_completion(
+                provider, base_url, headers=headers,
                 payload={
                     "model": model,
                     "messages": [
@@ -2227,7 +2441,9 @@ def generate_voice_reply(
         raise ProviderError(provider, model_id, response.status_code, "provider returned an error")
     try:
         body = response.json()
-        if provider == "gemini":
+        if provider == "antigravity":
+            answer = antigravity_interaction_text(body)
+        elif provider == "gemini":
             answer = "".join(
                 part.get("text", "")
                 for candidate in body.get("candidates", [])[:1]
@@ -2821,8 +3037,12 @@ def generate(
     else:
         prompt_template += "\nThere are no verified figures available for these questions. Do not ask questions that require an unseen image, chart, diagram, or external document."
 
-    windows = source_windows(text + "\n\n" + "\n\n".join(
-        f"[SOURCE: {figure['source_ref']}]\n{figure['description']}" for figure in described_figures.values()))
+    windows = source_windows(
+        text + "\n\n" + "\n\n".join(
+            f"[SOURCE: {figure['source_ref']}]\n{figure['description']}" for figure in described_figures.values()),
+        maximum=4_000,
+        full_context_maximum=4_000,
+    )
     expected_batches = max(1, (question_count + 3) // 4)
     if len(windows) > expected_batches:
         chosen = ([round(i * (len(windows) - 1) / (expected_batches - 1)) for i in range(expected_batches)]
@@ -2837,15 +3057,17 @@ def generate(
         window_completed_count = len(completed)
         batch_text, batch_labels = windows[window_index % len(windows)]
         batch_prompt = prompt_template.replace(text, batch_text, 1).replace(allowed_sources, ", ".join(batch_labels), 1)
-        batch_visuals = [{"id": figure_id, "source_ref": figure["source_ref"], "description": figure["description"]}
-                        for figure_id, figure in described_figures.items() if figure["source_ref"] in batch_labels]
+        batch_visuals = [{"id": figure_id, "source_ref": figure["source_ref"],
+                          "description": figure["description"][:600]}
+                        for figure_id, figure in described_figures.items()
+                        if figure["source_ref"] in batch_labels and figure["description"] in batch_text]
         batch_prompt = re.sub(r"<verified_figures>.*?</verified_figures>",
                               lambda _match: "<verified_figures>" + json.dumps(batch_visuals, ensure_ascii=False) + "</verified_figures>",
                               batch_prompt, flags=re.DOTALL)
         continuation = ""
         if completed:
             related = [item for item in completed if set(item.get("source_refs", [])) & set(batch_labels)]
-            previous_questions = json.dumps([item["question"] for item in (related or completed)[-30:]], ensure_ascii=False)
+            previous_questions = json.dumps([item["question"] for item in (related or completed)[-10:]], ensure_ascii=False)
             continuation = f"\n\nContinue the same study set. Create exactly {remaining} ADDITIONAL items. Do not repeat or closely paraphrase these already completed questions: {previous_questions}."
         return batch_prompt.replace("{count}", str(remaining)) + continuation
 

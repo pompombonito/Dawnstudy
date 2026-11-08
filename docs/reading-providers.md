@@ -2,6 +2,27 @@
 
 Reviewed on November 5, 2026 against the linked official documentation. The community [Free-LLM directory](https://github.com/nejib1/Free-LLM#provider-directory) is a discovery list; it mixes renewable free allowances, evaluation access, promotions, and one-time credits.
 
+## Local-first generation and Gemini fallback
+
+When `OLLAMA_BASE_URL` is configured, that local Ollama model is added as the first choice even if it is not in `AI_MODEL_ORDER`. The following Gemini IDs are then ordered before other configured providers:
+
+| Model selection ID | Availability notes |
+| --- | --- |
+| `gemini:gemini-2.5-flash-lite` | Listed by Google; access is restricted for some accounts |
+| `gemini:gemini-2.5-flash` | Listed but deprecated/restricted; existing-user access only |
+| `gemini:gemini-3.1-flash-lite` | Listed by Google |
+| `gemini:gemini-3.5-flash-lite` | Listed by Google |
+| `gemini:gemini-3.6-flash` | Listed by Google |
+| `gemini:gemini-3.8-flash` | Listed by Google |
+
+These are real catalog IDs in the [Gemini API model catalog](https://ai.google.dev/gemini-api/docs/models), but listing an ID in code does not grant API access. Dawnstudy skips a model-specific 403 from either Gemini 2.5 model and continues to later Gemini models. Google may change account/region availability or deprecation timelines; verify the models exposed for the production API key before relying on them.
+
+The Antigravity entry is separate from the text-model IDs above. It uses Google's official [Antigravity managed-agent API](https://ai.google.dev/gemini-api/docs/antigravity-agent) via `antigravity:antigravity-preview-09-2026` and the existing `GEMINI_API_KEY`. The quota dashboard you shared reports 60 RPM, 100,000 TPM, and 100 RPD for this agent; the daily cap means it should be a fallback, not the primary engine for every request. This preview agent uses the Interactions API rather than OpenAI-compatible chat completions. Dawnstudy passes no `environment` and an empty tool list, so it is only asked to return the requested question JSON and isn't given web, code-execution, or filesystem tools. It has a longer per-call timeout (120 seconds).
+
+`qwen3:4b` is the documented Dawnstudy default for Ollama. A 4B quantized model is a starting point for the RTX 3050 Ti / 16 GB laptop, not a guarantee of inference speed; keep local concurrency at one and monitor `ollama ps`/VRAM before changing it. Render cannot reach a laptop's loopback interface. Without a domain, the Windows guide describes a temporary Cloudflare Quick Tunnel through a shared-secret, loopback-only proxy (`OLLAMA_API_KEY`); its hostname rotates and it is for testing, not reliable production. A stable named Tunnel requires a domain you control and should use Cloudflare Access Service Auth. Credentials are sent only in server-side request headers, never model URLs or client code. See the [Windows setup guide](../ollama-server/README.md).
+
+The API currently accepts six active generation jobs and runs two generation workers. The local semaphore defaults to one request; another worker that finds Ollama busy falls through to its next provider rather than waiting on a GPU queue. The maximum setting is 10 for future hardware but should not be raised on the laptop without measured headroom.
+
 ## SMRY
 
 Create a key in the [SMRY developer console](https://smry.ai/mcp-api-cli?view=keys), then set `SMRY_API_KEY` in **Render → Dawnstudy API service → Environment**. Do not put it in a `NEXT_PUBLIC_` variable, commit it, or paste it into a chat. Locally, set it in the backend process environment.
@@ -26,12 +47,14 @@ Set these in **Render → Dawnstudy API service → Environment**:
 | `VERCEL_AI_GATEWAY_API_KEY` | Vercel AI Gateway key; existing `AI_GATEWAY_API_KEY` is accepted when the primary name is blank |
 | `TYPHOON_API_KEY` | Typhoon key for text generation and OCR recovery; existing `TYPHOON_OCR_API_KEY` is accepted when the primary name is blank |
 
-`AI_MODEL_ORDER` is an allowlist and preference order. Only listed models with configured credentials are available for automatic selection, manual selection, or fallback. Add a model ID to the variable to opt it in; newly supported models do not silently join an existing order. An unset or blank value uses the established 17-model baseline, filtered to providers with credentials. No model-catalog requests occur during startup or health checks. Removing a provider key disables its models; Cloudflare requires both a valid Account ID and token.
+`AI_MODEL_ORDER` is an allowlist and preference order. Only listed models with configured credentials are available for automatic selection, manual selection, or fallback, except that a configured `OLLAMA_BASE_URL` automatically prepends the chosen local model. Add a model ID to the variable to opt it in; newly supported models do not silently join an existing order. An unset or blank value uses the established model baseline, filtered to providers with credentials. No model-catalog requests occur during startup or health checks. Removing a provider key disables its models; Cloudflare requires both a valid Account ID and token.
 
 ### Generation models
 
 | Model selection ID | Task | Access |
 | --- | --- | --- |
+| `ollama:qwen3:4b` | Local text generation | Self-hosted; configure `OLLAMA_BASE_URL` and keep Ollama local-only |
+| `antigravity:antigravity-preview-09-2026` | Managed agent text/image generation | Gemini API key; preview agent with a separate quota bucket |
 | `cloudflare:@cf/google/gemma-4-26b-a4b-it` | Text generation and labeled image inspection | Workers AI allowance; eligible for Workers Free |
 | `cloudflare:@cf/nvidia/nemotron-3-120b-a12b` | Text generation | Workers AI allowance; eligible for Workers Free |
 | `vercel:nvidia/nemotron-3.5-lightning-free` | Text generation | Zero token price in the verified public model catalog; provider limits and promotion availability still apply |
