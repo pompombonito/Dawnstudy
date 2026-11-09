@@ -19,6 +19,13 @@ class GenerationCancelled(Exception):
     """A worker reached a cancellation checkpoint before durable saving began."""
 
 
+class GenerationDeferred(Exception):
+    """Release a worker while retaining a job until upstream capacity returns."""
+
+    def __init__(self, retry_after=30):
+        self.retry_after = max(1, retry_after)
+
+
 class GenerationJobs:
     ACTIVE = {"queued", "running", "cancelling"}
     TERMINAL = {"complete", "error", "cancelled"}
@@ -44,16 +51,21 @@ class GenerationJobs:
                          **{key: value for key, value in job.items()
                             if key not in {"user_id", "updated", "acknowledged", "_cancel_event", "_committing"}}})
 
-    def start(self, user_id, requested):
+    def start(self, user_id, requested, job_id=None):
         with self.lock:
             self._prune()
+            if job_id in self.jobs:
+                # Do not disclose another account's client-chosen identifier.
+                if self.jobs[job_id]["user_id"] == user_id:
+                    raise GenerationAlreadyRunning(job_id)
+                raise ValueError("This request identifier is unavailable.")
             active = [(key, job) for key, job in self.jobs.items() if job["status"] in self.ACTIVE]
             existing = next((key for key, job in active if job["user_id"] == user_id), None)
             if existing:
                 raise GenerationAlreadyRunning(existing)
             if len(active) >= self.capacity:
                 raise GenerationQueueFull()
-            job_id = str(uuid4())
+            job_id = job_id or str(uuid4())
             self.jobs[job_id] = {
                 "user_id": user_id, "status": "queued", "stage": "queued",
                 "message": "Waiting for a generation slot…", "completed": 0,
@@ -74,6 +86,13 @@ class GenerationJobs:
                 return False
             job.update(fields, updated=self.clock())
             return True
+
+    def discard_unaccepted(self, job_id):
+        """Roll back admission when upload-memory capacity rejects submission."""
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if job and job["status"] == "queued" and not job.get("checkpoint"):
+                self.jobs.pop(job_id)
 
     def cancel(self, job_id, user_id):
         """Request cancellation of an owned job; repeats and terminal jobs are safe."""
@@ -120,6 +139,18 @@ class GenerationJobs:
             if job["status"] in self.TERMINAL:
                 return False
             job.update(_committing=True, status="running", stage="saving", message="Saving your study set…", updated=self.clock())
+            return True
+
+    def defer(self, job_id, message):
+        """Keep admission and progress while releasing a worker for a retry."""
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if not job or job["_cancel_event"].is_set():
+                return False
+            if job["status"] in self.TERMINAL:
+                return False
+            job.update(status="queued", stage="waiting", message=message,
+                       _committing=False, updated=self.clock())
             return True
 
     def get(self, job_id, user_id):

@@ -14,22 +14,24 @@ export function generationReadyText(completed: number, requested: number): strin
   return count ? `${count} ${count === 1 ? "question" : "questions"} ready` : "";
 }
 
-export type GenerationJob<Result> = Omit<GenerationStatus, "status"> & { status: GenerationJobState; job_id: string; result?: Result; error_status?: number };
+export type GenerationJob<Result> = Omit<GenerationStatus, "status"> & { status: GenerationJobState; job_id: string; result?: Result; checkpoint?: Result; error_status?: number };
 export type QuestionnaireTypeMismatch = {
   number: string; questionnaire_index: number; question: string; source_type: string; answer: string | null;
   options: string[]; matching_prompts: string[]; matching_pairs: { prompt: string; answer: string }[];
   source_refs: string[]; image_count: number; must_preserve: boolean;
 };
 export type QuestionnaireMismatchPreview = { selected_type: string; mismatches: QuestionnaireTypeMismatch[] };
-type RequestOptions = { baseUrl: string; token: string; signal: AbortSignal; fetcher?: typeof fetch };
+type RequestOptions = { baseUrl: string; token: string; signal: AbortSignal; fetcher?: typeof fetch; requestTimeoutMs?: number; submissionTimeoutMs?: number };
 type PollOptions = RequestOptions & { intervalMs?: number; timeoutMs?: number };
 
 export class GenerationJobError extends Error {
   terminal: boolean;
-  constructor(message: string, terminal = false) {
+  responseStatus?: number;
+  constructor(message: string, terminal = false, responseStatus?: number) {
     super(message);
     this.name = "GenerationJobError";
     this.terminal = terminal;
+    this.responseStatus = responseStatus;
   }
 }
 
@@ -38,6 +40,13 @@ export class GenerationCancelledError extends GenerationJobError {
   constructor(message = "Generation cancelled.") {
     super(message, true);
     this.name = "GenerationCancelledError";
+  }
+}
+
+export class GenerationJobMissingError extends GenerationJobError {
+  constructor() {
+    super("The generation service restarted. Recovering the same request from this browser…", true);
+    this.name = "GenerationJobMissingError";
   }
 }
 
@@ -57,75 +66,110 @@ async function errorMessage(response: Response) {
   } catch { return "The generation service could not respond. Please reconnect."; }
 }
 
+async function boundedRequest<T>(options: RequestOptions, request: (signal: AbortSignal) => Promise<T>, milliseconds = options.requestTimeoutMs ?? 90_000): Promise<T> {
+  options.signal.throwIfAborted();
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout>;
+  let onAbort: () => void;
+  const interrupted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => {
+      const error = options.signal.reason || new DOMException("Generation monitoring stopped.", "AbortError");
+      reject(error);
+      controller.abort(error);
+    };
+    options.signal.addEventListener("abort", onAbort, { once: true });
+    timer = setTimeout(() => {
+      const error = new GenerationJobError("The generation service is taking longer to respond. Reconnecting to the same request…");
+      reject(error);
+      controller.abort(error);
+    }, Math.max(1, milliseconds));
+  });
+  try { return await Promise.race([request(controller.signal), interrupted]); }
+  finally {
+    clearTimeout(timer!);
+    options.signal.removeEventListener("abort", onAbort!);
+  }
+}
+
 export async function findGenerationJob<Result>(options: RequestOptions, jobId?: string): Promise<GenerationJob<Result> | null> {
-  const response = await (options.fetcher || fetch)(
-    options.baseUrl + "/api/generation-jobs" + (jobId ? "/" + encodeURIComponent(jobId) : ""),
-    { headers: { Authorization: "Bearer " + options.token }, signal: options.signal, cache: "no-store" },
-  );
-  if (response.status === 404) return null;
-  if (!response.ok) throw new GenerationJobError(await errorMessage(response), response.status < 500 && response.status !== 429);
-  const body = await response.json();
-  return jobId ? body as GenerationJob<Result> : body.job || null;
+  return boundedRequest(options, async (signal) => {
+    const response = await (options.fetcher || fetch)(
+      options.baseUrl + "/api/generation-jobs" + (jobId ? "/" + encodeURIComponent(jobId) : ""),
+      { headers: { Authorization: "Bearer " + options.token }, signal, cache: "no-store" },
+    );
+    if (response.status === 404) return null;
+    if (!response.ok) throw new GenerationJobError(await errorMessage(response), response.status < 500 && response.status !== 429, response.status);
+    const body = await response.json();
+    const job = jobId ? body : body?.job;
+    if (!jobId && job === null) return null;
+    if (!job || typeof job.job_id !== "string" || typeof job.status !== "string" || (jobId && job.job_id !== jobId)) {
+      throw new GenerationJobError("The generation status could not be read. Reconnecting to the same request…");
+    }
+    return job as GenerationJob<Result>;
+  });
 }
 
 export async function startGenerationJob<Result>(form: FormData, options: RequestOptions): Promise<GenerationJob<Result> & { resumed?: boolean }> {
-  let response: Response;
   try {
-    response = await (options.fetcher || fetch)(options.baseUrl + "/api/generation-jobs", {
-      method: "POST", headers: { Authorization: "Bearer " + options.token }, body: form, signal: options.signal,
-    });
+    return await boundedRequest(options, async (signal) => {
+      const response = await (options.fetcher || fetch)(options.baseUrl + "/api/generation-jobs", {
+        method: "POST", headers: { Authorization: "Bearer " + options.token }, body: form, signal,
+      });
+      if (response.status === 409) {
+        const body = await response.json();
+        if (body.code === "questionnaire_type_mismatch" && typeof body.selected_type === "string" && Array.isArray(body.mismatches)) {
+          throw new QuestionnaireTypeMismatchError({
+            selected_type: body.selected_type,
+            mismatches: body.mismatches.filter((item: unknown) => item && typeof item === "object"
+              && typeof (item as QuestionnaireTypeMismatch).question === "string"
+              && typeof (item as QuestionnaireTypeMismatch).source_type === "string"),
+          });
+        }
+        if (body.job_id || /generation is already running/i.test(String(body.detail))) {
+          const existing = await findGenerationJob<Result>(options, body.job_id);
+          if (existing) return { ...existing, resumed: true };
+        }
+        throw new GenerationJobError(typeof body.detail === "string" ? body.detail : "The existing generation could not be found.", true);
+      }
+      if (!response.ok) throw new GenerationJobError(await errorMessage(response), response.status < 500 && response.status !== 429, response.status);
+      const body = await response.json();
+      if (!body.job_id) throw new GenerationJobError("The generation queue did not return a job ID. Please reconnect.");
+      return { status: "queued", stage: "queued", message: "Joining the study queue…", completed: 0,
+        requested: Number(form.get("question_count")) || 0, ...body };
+    }, options.submissionTimeoutMs ?? 10 * 60_000);
   } catch (error) {
-    if (options.signal.aborted) throw error;
-    // A dropped response can follow a successful submission. Discover that job
-    // before the user tries another request and spends a second allowance.
-    const existing = await findGenerationJob<Result>(options);
+    if (options.signal.aborted || (error instanceof GenerationJobError && error.terminal)) throw error;
+    // Proxies can lose a successful submission response, return a gateway
+    // error, or truncate JSON. Reattach to this exact idempotent request.
+    const requestId = form.get("client_request_id");
+    const existing = await findGenerationJob<Result>(options, typeof requestId === "string" && requestId ? requestId : undefined);
     if (existing) return { ...existing, resumed: true };
     throw error;
   }
-  if (response.status === 409) {
-    const body = await response.json();
-    if (body.code === "questionnaire_type_mismatch" && typeof body.selected_type === "string" && Array.isArray(body.mismatches)) {
-      throw new QuestionnaireTypeMismatchError({
-        selected_type: body.selected_type,
-        mismatches: body.mismatches.filter((item: unknown) => item && typeof item === "object"
-          && typeof (item as QuestionnaireTypeMismatch).question === "string"
-          && typeof (item as QuestionnaireTypeMismatch).source_type === "string"),
-      });
-    }
-    if (body.job_id || /generation is already running/i.test(String(body.detail))) {
-      const existing = await findGenerationJob<Result>(options, body.job_id);
-      if (existing) return { ...existing, resumed: true };
-    }
-    throw new GenerationJobError(typeof body.detail === "string" ? body.detail : "The existing generation could not be found.", true);
-  }
-  if (!response.ok) throw new GenerationJobError(await errorMessage(response), true);
-  const body = await response.json();
-  if (!body.job_id) throw new GenerationJobError("The generation queue did not return a job ID. Please reconnect.");
-  return { status: "queued", stage: "queued", message: "Joining the study queue…", completed: 0,
-    requested: Number(form.get("question_count")) || 0, ...body };
 }
 
 export async function cancelGenerationJob<Result>(jobId: string, options: RequestOptions): Promise<GenerationJob<Result>> {
-  options.signal.throwIfAborted();
-  let response: Response;
-  try {
-    response = await (options.fetcher || fetch)(options.baseUrl + "/api/generation-jobs/" + encodeURIComponent(jobId) + "/cancel", {
-      method: "POST", headers: { Authorization: "Bearer " + options.token }, signal: options.signal, cache: "no-store",
-    });
-  } catch (error) {
-    if (options.signal.aborted) throw error;
-    // The cancellation may have reached the API. Poll/reconnect to this job;
-    // never submit a replacement generation to resolve an uncertain response.
-    throw new GenerationJobError("Could not confirm cancellation. Reconnect to check the same generation.");
-  }
-  if (!response.ok) throw new GenerationJobError(await errorMessage(response), response.status < 500 && response.status !== 429);
-  let body: GenerationJob<Result>;
-  try { body = await response.json(); }
-  catch { throw new GenerationJobError("The cancellation response could not be read. Reconnect to check the same generation."); }
-  if (body.job_id !== jobId) throw new GenerationJobError("The cancellation response did not identify this generation. Reconnect to check the same job.");
-  // Saving may already have started, or the job may have finished. Its current
-  // state is authoritative; a successful POST alone does not mean cancelled.
-  return body;
+  return boundedRequest(options, async (signal) => {
+    let response: Response;
+    try {
+      response = await (options.fetcher || fetch)(options.baseUrl + "/api/generation-jobs/" + encodeURIComponent(jobId) + "/cancel", {
+        method: "POST", headers: { Authorization: "Bearer " + options.token }, signal, cache: "no-store",
+      });
+    } catch (error) {
+      if (options.signal.aborted) throw error;
+      // The cancellation may have reached the API. Poll/reconnect to this job;
+      // never submit a replacement generation to resolve an uncertain response.
+      throw new GenerationJobError("Could not confirm cancellation. Reconnect to check the same generation.");
+    }
+    if (!response.ok) throw new GenerationJobError(await errorMessage(response), response.status < 500 && response.status !== 429, response.status);
+    let body: GenerationJob<Result>;
+    try { body = await response.json(); }
+    catch { throw new GenerationJobError("The cancellation response could not be read. Reconnect to check the same generation."); }
+    if (body.job_id !== jobId) throw new GenerationJobError("The cancellation response did not identify this generation. Reconnect to check the same job.");
+    // Saving may already have started, or the job may have finished. Its current
+    // state is authoritative; a successful POST alone does not mean cancelled.
+    return body;
+  });
 }
 
 function pause(milliseconds: number, signal: AbortSignal) {
@@ -138,9 +182,11 @@ function pause(milliseconds: number, signal: AbortSignal) {
 }
 
 export async function pollGenerationJob<Result>(
-  jobId: string, options: PollOptions, onStatus: (job: GenerationStatus) => void, initial?: GenerationJob<Result>,
+  jobId: string, options: PollOptions, onStatus: (job: GenerationStatus & { checkpoint?: Result }) => void | Promise<void>, initial?: GenerationJob<Result>,
 ): Promise<Result> {
-  const deadline = Date.now() + (options.timeoutMs ?? 60 * 60 * 1000);
+  // A quota reset or a temporary outage can take hours. Monitoring stops only
+  // on a terminal response, explicit caller deadline, or logout/unmount.
+  const deadline = options.timeoutMs === undefined ? Infinity : Date.now() + options.timeoutMs;
   let current = initial;
   let failures = 0;
   let cancellationPending = false;
@@ -149,17 +195,17 @@ export async function pollGenerationJob<Result>(
     try {
       const job = current || await findGenerationJob<Result>(options, jobId);
       current = undefined;
-      if (!job) throw new GenerationJobError("This generation is no longer available. Check My Library for its saved questions.", true);
+      if (!job) throw new GenerationJobMissingError();
       failures = 0;
       cancellationPending = job.status === "cancelling";
-      onStatus(job);
+      await onStatus(job);
       if (job.status === "cancelled") throw new GenerationCancelledError(job.message || undefined);
-      if (job.status === "error") throw new GenerationJobError(job.message || "Generation could not finish. Please try again.", true);
+      if (job.status === "error") throw new GenerationJobError(job.message || "Generation could not finish. Please try again.", true, job.error_status);
       if (job.status === "complete" && job.result) return job.result;
     } catch (error) {
       if (options.signal.aborted || (error instanceof GenerationJobError && error.terminal)) throw error;
       failures += 1;
-      onStatus({
+      await onStatus({
         status: cancellationPending ? "cancelling" : "reconnecting",
         stage: cancellationPending ? "cancelling" : "reconnecting",
         message: cancellationPending ? "Reconnecting to confirm cancellation…" : "Reconnecting to your generation. Checking its latest status…",

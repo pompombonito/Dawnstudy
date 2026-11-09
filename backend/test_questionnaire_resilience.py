@@ -85,7 +85,7 @@ class QuestionnaireResilienceTests(unittest.TestCase):
             "GROQ_API_KEY": "", "GEMINI_API_KEY": "", "ZAI_API_KEY": "zai-test-key",
             "OPENROUTER_API_KEY": "", "MISTRAL_API_KEY": "", "AI_MODEL_ORDER": "",
         }
-        with patch.dict(main.os.environ, environment, clear=False):
+        with patch.dict(main.os.environ, environment, clear=True):
             models = main.configured_ai_models()
         self.assertEqual([choice[0] for choice in models], ["zai:glm-4.7-flash", "zai:glm-4.5-flash", "zai:glm-4.6v-flash"])
         self.assertTrue(all(choice[3] == "zai-test-key" for choice in models))

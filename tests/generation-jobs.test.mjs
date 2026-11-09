@@ -134,7 +134,8 @@ test("cancelling sends one authenticated POST to the exact encoded job and retur
   assert.equal(calls[0][0], "https://api.example/api/generation-jobs/job%2F1%3F/cancel");
   assert.equal(calls[0][1].method, "POST");
   assert.deepEqual(calls[0][1].headers, { Authorization: "Bearer own-account-token" });
-  assert.equal(calls[0][1].signal, controller.signal);
+  assert.ok(calls[0][1].signal instanceof AbortSignal);
+  assert.equal(calls[0][1].signal.aborted, false);
   assert.equal(calls[0][1].cache, "no-store");
   assert.equal(calls[0][1].body, undefined);
   assert.equal(controller.signal.aborted, false, "Requesting cancellation must not abort monitoring");
@@ -257,3 +258,109 @@ test("unreadable or mismatched cancel replies require reconnecting to the origin
     await assert.rejects(cancelGenerationJob("job-1", options(async () => response)), error => error instanceof GenerationJobError && !error.terminal && /same (?:generation|job)/.test(error.message));
   }
 });
+
+for (const status of [429, 502, 503, 504]) {
+  test(`submission HTTP ${status} recovers accepted work by exact request ID`, async () => {
+    const calls = [];
+    const form = new FormData();
+    form.set("client_request_id", "request-1");
+    const config = options(async (url, request) => {
+      calls.push([url, request.method]);
+      if (request.method === "POST") return json({ detail: "Gateway unavailable" }, status);
+      assert.equal(url, "https://api.example/api/generation-jobs/request-1");
+      return json({ ...running, job_id: "request-1" });
+    });
+    assert.equal((await startGenerationJob(form, config)).job_id, "request-1");
+    assert.equal(calls.filter(([, method]) => method === "POST").length, 1);
+  });
+}
+
+test("truncated submission JSON discovers the same accepted request", async () => {
+  const form = new FormData();
+  form.set("client_request_id", "request-1");
+  const config = options(async (_url, request) => request.method === "POST"
+    ? new Response('{"job_id":') : json({ ...running, job_id: "request-1" }));
+  assert.equal((await startGenerationJob(form, config)).job_id, "request-1");
+});
+
+test("a hung status request aborts and polling automatically reconnects", async () => {
+  let calls = 0, timedOutSignal;
+  const config = { ...options(async (_url, request) => {
+    if (++calls === 1) { timedOutSignal = request.signal; return new Promise(() => {}); }
+    return json({ ...running, status: "complete", result });
+  }), requestTimeoutMs: 5 };
+  assert.deepEqual(await pollGenerationJob("job-1", config, () => {}), result);
+  assert.equal(calls, 2);
+  assert.equal(timedOutSignal.aborted, true);
+});
+
+test("a stalled response body is bounded as well as the fetch connection", async () => {
+  let calls = 0;
+  const config = { ...options(async () => ++calls === 1
+    ? new Response(new ReadableStream({ start() {} }))
+    : json({ ...running, status: "complete", result })), requestTimeoutMs: 5 };
+  assert.deepEqual(await pollGenerationJob("job-1", config, () => {}), result);
+  assert.equal(calls, 2);
+});
+
+test("default monitoring survives a quota wait longer than one hour", async () => {
+  const originalNow = Date.now;
+  let now = originalNow(), calls = 0;
+  Date.now = () => now;
+  try {
+    const config = { ...options(async () => {
+      if (++calls === 1) { now += 2 * 60 * 60_000; return json(running); }
+      return json({ ...running, status: "complete", result });
+    }), timeoutMs: undefined };
+    assert.deepEqual(await pollGenerationJob("job-1", config, () => {}), result);
+  } finally { Date.now = originalNow; }
+});
+
+test("validated checkpoints reach the recovery store before another status request", async () => {
+  let persisted = false;
+  const config = options(async () => {
+    assert.equal(persisted, true);
+    return json({ ...running, status: "complete", result });
+  });
+  assert.deepEqual(await pollGenerationJob("job-1", config, async status => {
+    if (status.checkpoint) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      persisted = true;
+    }
+  }, { ...running, checkpoint: result }), result);
+});
+
+test("logout aborts an already hung network request promptly", async () => {
+  const controller = new AbortController();
+  let childSignal;
+  const config = options(async (_url, request) => {
+    childSignal = request.signal;
+    queueMicrotask(() => controller.abort());
+    return new Promise(() => {});
+  }, controller);
+  await assert.rejects(findGenerationJob(config, "job-1"), error => error.name === "AbortError");
+  assert.equal(childSignal.aborted, true);
+});
+
+test("malformed or unrelated HTTP 200 status never confirms that a job was lost", async () => {
+  for (const body of [null, {}, { ...running, job_id: "unrelated-job" }]) {
+    await assert.rejects(findGenerationJob(options(async () => json(body)), "job-1"), error => error instanceof GenerationJobError && !error.terminal);
+  }
+});
+
+for (const status of [401, 403]) {
+  test(`HTTP ${status} preserves the authentication status so observers keep recovery data`, async () => {
+    let posts = 0, gets = 0;
+    const config = options(async (_url, request) => {
+      if (request.method === "POST") posts++; else gets++;
+      return json({ detail: "Restore account access" }, status);
+    });
+    const isAuthenticationError = error => error instanceof GenerationJobError && error.terminal
+      && error.responseStatus === status && error.message === "Restore account access";
+    await assert.rejects(pollGenerationJob("job-1", config, () => {}), isAuthenticationError);
+    assert.equal(gets, 1, "An expired session must stop automatic polling");
+    await assert.rejects(startGenerationJob(new FormData(), config), isAuthenticationError);
+    assert.equal(posts, 1);
+    assert.equal(gets, 1, "Authentication errors must not trigger submission recovery requests");
+  });
+}

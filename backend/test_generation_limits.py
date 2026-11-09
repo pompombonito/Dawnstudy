@@ -15,8 +15,23 @@ import accounts
 from generation_jobs import GenerationJobs
 
 if importlib.util.find_spec("tesserocr") is None or importlib.util.find_spec("tessdata") is None:
-    with patch.dict(sys.modules, {name: types.ModuleType(name) for name in ("tesserocr", "tessdata")}):
+    # Restoring all of sys.modules after importing main also removes freshly
+    # imported Pillow plugins while their classes remain in Image's registry.
+    # Restore only our two temporary OCR stubs so later raster tests use the
+    # same plugin modules and classes as the registry.
+    _missing_ocr_module = object()
+    _previous_ocr_modules = {name: sys.modules.get(name, _missing_ocr_module)
+                             for name in ("tesserocr", "tessdata")}
+    for _ocr_name in _previous_ocr_modules:
+        sys.modules[_ocr_name] = types.ModuleType(_ocr_name)
+    try:
         import main
+    finally:
+        for _ocr_name, _ocr_module in _previous_ocr_modules.items():
+            if _ocr_module is _missing_ocr_module:
+                sys.modules.pop(_ocr_name, None)
+            else:
+                sys.modules[_ocr_name] = _ocr_module
 else:
     import main
 

@@ -17,8 +17,9 @@ import GameRoom from "./community/GameRoom";
 import CompanionDock from "./community/CompanionDock";
 import Agreement from "./community/Agreement";
 import { DawnArtwork, DawnMark } from "./components/DawnArtwork";
-import { cancelGenerationJob, findGenerationJob, generationReadyText, GenerationCancelledError, GenerationJobError, pollGenerationJob, startGenerationJob, QuestionnaireTypeMismatchError, type GenerationJob, type GenerationStatus, type QuestionnaireMismatchPreview } from "./generation-jobs";
+import { cancelGenerationJob, findGenerationJob, generationReadyText, GenerationCancelledError, GenerationJobError, GenerationJobMissingError, pollGenerationJob, startGenerationJob, QuestionnaireTypeMismatchError, type GenerationJob, type GenerationStatus, type QuestionnaireMismatchPreview } from "./generation-jobs";
 import { deleteUnsyncedStudyDraft, getUnsyncedStudyDraft, saveUnsyncedStudyDraft } from "./unsynced-study-drafts";
+import { captureGenerationRequest, deletePendingGenerationRequest, getPendingGenerationRequest, restoreGenerationForm, savePendingGenerationRequest, updatePendingGenerationRequest, type PendingGenerationRequest } from "./pending-generation";
 import {
   AlarmClock, ArrowLeftRight, BookOpen, Check, CheckSquare, ChevronLeft, ChevronRight, CircleHelp, Clock3,
   CloudUpload, Copy, Cpu, ExternalLink, FileImage, FileText, Flag, Globe2, GraduationCap, Layers3, LogOut, Menu, Mic,
@@ -285,6 +286,7 @@ export default function Home() {
   const voiceSessionId = useRef(0);
   const generationController = useRef<AbortController | null>(null);
   const generationJobId = useRef<string | null>(null);
+  const generationRequest = useRef<PendingGenerationRequest | null>(null);
   const generationCancelIntent = useRef(false);
   const generationCancelPost = useRef<string | null>(null);
   const questionnaireReviewForm = useRef<FormData | null>(null);
@@ -352,6 +354,16 @@ export default function Home() {
       generationController.current = null;
     };
   }, [authToken, account?.id]);
+
+  useEffect(() => {
+    if (!authToken || !account?.id || !generationNeedsReconnect || generationStatus?.stage === "authentication") return;
+    const reconnect = () => {
+      if (navigator.onLine && !generationController.current) void restoreGeneration(authToken, account.id);
+    };
+    const timer = window.setInterval(reconnect, 5000);
+    window.addEventListener("online", reconnect);
+    return () => { window.clearInterval(timer); window.removeEventListener("online", reconnect); };
+  }, [authToken, account?.id, generationNeedsReconnect, generationStatus?.stage]);
 
   useEffect(() => {
     if (!("speechSynthesis" in window)) return;
@@ -638,6 +650,13 @@ export default function Home() {
     setGenerationCancelError("");
   }
 
+  async function clearGenerationRecovery(userId: string) {
+    const request = generationRequest.current;
+    if (request?.userId !== userId) return;
+    generationRequest.current = null;
+    await deletePendingGenerationRequest(userId, request.requestId).catch(() => undefined);
+  }
+
   function updateGenerationStatus(status: GenerationStatus, controller: AbortController) {
     if (controller.signal.aborted || generationController.current !== controller) return;
     if (status.status === "cancelling" || status.status === "cancelled") {
@@ -681,6 +700,11 @@ export default function Home() {
     generationCancelIntent.current = true;
     setGenerationCancelRequested(true);
     setGenerationCancelError("");
+    const recovery = generationRequest.current;
+    if (recovery?.userId === account.id) {
+      recovery.cancelRequested = true;
+      await updatePendingGenerationRequest(account.id, recovery.requestId, { cancelRequested: true }).catch(() => undefined);
+    }
     const controller = generationController.current;
     if (!controller) {
       await restoreGeneration(authToken, account.id, true);
@@ -693,7 +717,7 @@ export default function Home() {
   async function acknowledgeGeneration(jobId: string, token: string, signal: AbortSignal) {
     try {
       await fetch(API_BASE + "/api/generation-jobs/" + encodeURIComponent(jobId) + "/acknowledge", {
-        method: "POST", headers: { Authorization: "Bearer " + token }, signal,
+        method: "POST", headers: { Authorization: "Bearer " + token }, signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
       });
     } catch { /* The same completed set can be recovered if acknowledgement is interrupted. */ }
   }
@@ -739,15 +763,16 @@ export default function Home() {
           page_ranges: studySet.page_ranges || {}, focus_topic: studySet.focus_topic || "", include_images: Boolean(studySet.include_images) });
         const headers = { "Content-Type": "application/json", Authorization: "Bearer " + token };
         const saved = await fetch(API_BASE + "/api/study-sets/" + encodeURIComponent(studySet.id), {
-          method: "PUT", headers, body, signal,
+          method: "PUT", headers, body, signal: AbortSignal.any([signal, AbortSignal.timeout(90_000)]),
         });
-        if (!saved.ok) throw new Error(await responseError(saved));
+        if (!saved.ok) throw new GenerationJobError(await responseError(saved), saved.status < 500 && saved.status !== 429, saved.status);
         studySet = { ...studySet, ...await saved.json(), persistence_error: undefined };
         await deleteUnsyncedStudyDraft(userId).catch(() => undefined);
         if (signal.aborted) throw new DOMException("Generation monitoring stopped.", "AbortError");
         setResult(studySet);
       } catch (caught) {
         if (signal.aborted) throw caught;
+        if (caught instanceof GenerationJobError && (caught.responseStatus === 401 || caught.responseStatus === 403)) throw caught;
         synced = false;
         studySet = { ...studySet, persistence_error: caught instanceof Error ? caught.message : "Pending account sync" };
         setResult(studySet);
@@ -770,6 +795,18 @@ export default function Home() {
   async function watchGeneration(job: GenerationJob<GenerationResult>, pending: PendingGeneration, token: string, userId: string, controller: AbortController) {
     if (controller.signal.aborted || generationController.current !== controller) return;
     generationJobId.current = job.job_id;
+    let request = generationRequest.current?.userId === userId ? generationRequest.current : null;
+    if (request && job.job_id !== request.requestId && job.job_id !== request.jobId) {
+      // Another tab/device already had active work. These newly selected files
+      // do not belong to that job and must never be replayed as its sources.
+      await clearGenerationRecovery(userId);
+      request = null;
+      pending = { job_id: job.job_id };
+    }
+    if (request) {
+      request.jobId = job.job_id;
+      await updatePendingGenerationRequest(userId, request.requestId, { jobId: job.job_id }).catch(() => undefined);
+    }
     rememberGeneration(userId, pending);
     setGenerationNeedsReconnect(false);
     updateGenerationStatus(job, controller);
@@ -777,9 +814,19 @@ export default function Home() {
     if (generationCancelIntent.current && (job.status === "queued" || job.status === "running") && job.stage !== "saving" && job.can_cancel !== false) {
       initial = await requestGenerationCancellation(job.job_id, token, controller) || job;
     }
-    const data = await pollGenerationJob(job.job_id, generationOptions(token, controller), (status) => updateGenerationStatus(status, controller), initial);
+    let checkpointSize = -1;
+    const data = await pollGenerationJob(job.job_id, generationOptions(token, controller), async (status) => {
+      updateGenerationStatus(status, controller);
+      if (request && !controller.signal.aborted && status.checkpoint && Array.isArray(status.checkpoint.items)
+        && status.checkpoint.items.length > checkpointSize) {
+        checkpointSize = status.checkpoint.items.length;
+        request.checkpoint = status.checkpoint as unknown as Record<string, unknown>;
+        await updatePendingGenerationRequest(userId, request.requestId, { checkpoint: request.checkpoint }).catch(() => undefined);
+      }
+    }, initial);
     const synced = await applyGenerationResult(data, token, userId, controller.signal, pending.base);
     if (synced) {
+      await clearGenerationRecovery(userId);
       rememberGeneration(userId, null);
       await acknowledgeGeneration(job.job_id, token, controller.signal);
     }
@@ -796,6 +843,7 @@ export default function Home() {
   async function generationFailure(caught: unknown, userId: string, token: string, controller: AbortController, jobId?: string) {
     if (controller.signal.aborted) return;
     if (caught instanceof GenerationCancelledError) {
+      await clearGenerationRecovery(userId);
       rememberGeneration(userId, null);
       resetGenerationCancellation();
       setGenerationStatus(null);
@@ -807,7 +855,19 @@ export default function Home() {
     }
     const message = caught instanceof Error ? caught.message : "Could not connect to the generation service.";
     setError(message);
-    if (caught instanceof GenerationJobError && caught.terminal) {
+    if (caught instanceof GenerationJobError && (caught.responseStatus === 401 || caught.responseStatus === 403)) {
+      // Login expiry does not invalidate the source files or verified work.
+      // Keep recovery data and pause retries until access can be restored.
+      setGenerationNeedsReconnect(true);
+      setGenerationStatus((old) => ({ status: "paused", stage: "authentication", can_cancel: false,
+        message: caught.responseStatus === 401 ? "Sign in again to resume your generation. Your materials and completed questions are kept."
+          : "Restore account access, then reconnect to resume. Your materials and completed questions are kept.",
+        completed: old?.completed || 0, requested: old?.requested || 0, model: old?.model }));
+      if (caught.responseStatus === 401) setAuthOpen(true);
+      return;
+    }
+    if (caught instanceof GenerationJobError && caught.terminal && !(caught instanceof GenerationJobMissingError)) {
+      await clearGenerationRecovery(userId);
       resetGenerationCancellation();
       rememberGeneration(userId, null); setGenerationStatus(null); setGenerationNeedsReconnect(false);
       if (jobId) await acknowledgeGeneration(jobId, token, controller.signal);
@@ -876,6 +936,11 @@ export default function Home() {
     setBusy(!base); setContinueBusy(Boolean(base)); setError(""); setNotice(""); setGenerationNeedsReconnect(false);
     let jobId: string | undefined;
     try {
+      const request = captureGenerationRequest(userId, form, base as unknown as Record<string, unknown> | undefined);
+      generationRequest.current = request;
+      rememberGeneration(userId, { job_id: request.requestId, base });
+      await savePendingGenerationRequest(request).catch(() => undefined);
+      controller.signal.throwIfAborted();
       const job = await startGenerationJob<GenerationResult>(form, generationOptions(token, controller));
       jobId = job.job_id;
       const previous = pendingGeneration(userId);
@@ -883,6 +948,8 @@ export default function Home() {
       await watchGeneration(job, pending, token, userId, controller);
     } catch (caught) {
       if (caught instanceof QuestionnaireTypeMismatchError && form.get("input_mode") === "questionnaire") {
+        await clearGenerationRecovery(userId);
+        rememberGeneration(userId, null);
         questionnaireReviewForm.current = form;
         setQuestionnaireMismatch(caught.preview);
         setGenerationStatus(null); setGenerationNeedsReconnect(false);
@@ -905,13 +972,23 @@ export default function Home() {
     setBusy(true); setGenerationNeedsReconnect(false); setError("");
     let jobId: string | undefined;
     try {
+      const recovery = generationRequest.current?.userId === userId ? generationRequest.current
+        : await getPendingGenerationRequest(userId).catch(() => null);
+      controller.signal.throwIfAborted();
+      generationRequest.current = recovery;
+      if (recovery?.cancelRequested) {
+        generationCancelIntent.current = true;
+        setGenerationCancelRequested(true);
+      }
       const localDraft = await getUnsyncedStudyDraft(userId).then((draft) => draft?.studySet as GenerationResult | undefined).catch(() => undefined);
+      controller.signal.throwIfAborted();
       const inMemoryDraft = generationNeedsReconnect && generationStatus?.stage === "saving" ? result : null;
       const unsynced = localDraft || inMemoryDraft;
       if (unsynced) {
         setGenerationStatus({ status: "running", stage: "saving", message: "Retrying account sync for your saved questions…", completed: unsynced.items.length, requested: unsynced.requested_count || unsynced.items.length });
         const synced = await applyGenerationResult(unsynced, token, userId, controller.signal);
         if (synced) {
+          await clearGenerationRecovery(userId);
           rememberGeneration(userId, null);
           setGenerationNeedsReconnect(false);
           setGenerationStatus(null);
@@ -923,8 +1000,23 @@ export default function Home() {
         return;
       }
       const previous = pendingGeneration(userId);
-      let job = await findGenerationJob<GenerationResult>(generationOptions(token, controller));
-      if (!job && previous) job = await findGenerationJob<GenerationResult>(generationOptions(token, controller), previous.job_id);
+      const knownId = recovery?.jobId || previous?.job_id;
+      let job = await findGenerationJob<GenerationResult>(generationOptions(token, controller), knownId);
+      if (!job && recovery) {
+        if (generationCancelIntent.current) {
+          // A confirmed missing job has stopped; never replay a cancelled request.
+          await clearGenerationRecovery(userId);
+          rememberGeneration(userId, null);
+          resetGenerationCancellation();
+          setGenerationStatus(null);
+          setNotice("Generation cancelled. Your materials are ready if you want to try again.");
+          return;
+        }
+        const form = restoreGenerationForm(recovery);
+        controller.signal.throwIfAborted();
+        setGenerationStatus({ status: "reconnecting", stage: "reconnecting", message: "The service restarted. Restoring your materials and completed questions…", completed: Array.isArray(recovery.checkpoint?.items) ? recovery.checkpoint.items.length : 0, requested: Number(form.get("question_count")) || 0 });
+        job = await startGenerationJob<GenerationResult>(form, generationOptions(token, controller));
+      }
       if (!job) {
         resetGenerationCancellation();
         rememberGeneration(userId, null); setGenerationStatus(null);
@@ -936,7 +1028,8 @@ export default function Home() {
       }
       jobId = job.job_id;
       setError("");
-      const pending = previous?.job_id === jobId ? previous : { job_id: jobId };
+      const pending = recovery ? { job_id: jobId, base: recovery.base as unknown as StudySet | undefined }
+        : previous?.job_id === jobId ? previous : { job_id: jobId };
       await watchGeneration(job, pending, token, userId, controller);
     } catch (caught) { await generationFailure(caught, userId, token, controller, jobId); }
     finally { releaseGeneration(controller); }
