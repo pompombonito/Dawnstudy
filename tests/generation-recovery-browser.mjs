@@ -7,9 +7,9 @@ const { chromium } = await import(process.env.DAWNSTUDY_PLAYWRIGHT_PATH ? pathTo
 const browser = await chromium.launch({ executablePath: process.env.DAWNSTUDY_BROWSER || "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", headless: true });
 const base = process.env.DAWNSTUDY_TEST_URL || "http://127.0.0.1:3044";
 const profile = { user_id: "recovery-student", nickname: "Student", avatar_id: "cat", theme: "kuromi-dark", gender: "prefer-not-to-say", companion_id: "cat", companion_name: "Miso", onboarded: true, terms_version: "2026-10-30", public_key: null, key_fingerprint: "" };
-const sourceText = "Original biology source: ATP transports usable cellular energy. Chlorophyll captures light for photosynthesis.";
+const sourceText = "1. What transports cellular energy?\nAnswer: ATP\n\n2. What captures light?\nAnswer: Chlorophyll";
 const errors = [], submissions = [], statusReads = [];
-let job = null, requestedId, saved = null, restarting = false;
+let job = null, requestedId, saved = null, restarting = false, finishFirstExplanation = false;
 const context = await browser.newContext();
 await context.addInitScript(() => localStorage.setItem("dawnstudy_session_v1", "test-token"));
 await context.route("http://localhost:8000/**", async route => {
@@ -33,11 +33,11 @@ await context.route("http://localhost:8000/**", async route => {
     assert.equal(form.get("files").name, "biology.txt");
     if (submissions.length === 1) {
       requestedId = requestId;
-      const checkpoint = { id: requestId, title: "Recovered biology", type: form.get("format"), created_at: new Date().toISOString(), material_fingerprint: "source-fingerprint", requested_count: 10, incomplete: true, sources: [], items: [
-        { card_id: "retained-1", question: "What transports cellular energy?", answer: "ATP" },
-        { card_id: "retained-2", question: "What captures light?", answer: "Chlorophyll" },
+      const checkpoint = { id: requestId, title: "Recovered biology", type: form.get("format"), created_at: new Date().toISOString(), material_fingerprint: "source-fingerprint", requested_count: 2, incomplete: true, sources: [], items: [
+        { card_id: "retained-1", question: "What transports cellular energy?", answer: "ATP", imported: true, explanation: "", explanation_pending: true },
+        { card_id: "retained-2", question: "What captures light?", answer: "Chlorophyll", imported: true, explanation: "", explanation_pending: true },
       ] };
-      job = { job_id: requestId, status: "running", stage: "generating", message: "Generating…", completed: 2, requested: 10, checkpoint };
+      job = { job_id: requestId, status: "running", stage: "generating", message: "Generating…", completed: 0, requested: 2, checkpoint };
       // The proxy loses a response even though the request was accepted.
       status = 502; data = { detail: "Temporary gateway failure" };
     } else {
@@ -45,8 +45,10 @@ await context.route("http://localhost:8000/**", async route => {
       const checkpoint = JSON.parse(form.get("checkpoint_json"));
       assert.equal(checkpoint.items.length, 2);
       assert.equal(checkpoint.items[0].card_id, "retained-1");
-      saved = { ...checkpoint, incomplete: false, items: [...checkpoint.items, ...Array.from({ length: 8 }, (_, i) => ({ card_id: "new-" + i, question: "Biology question " + (i + 3) + "?", answer: "Answer " + i }))] };
-      job = { job_id: requestId, status: "complete", stage: "complete", message: "Ready", completed: 10, requested: 10, result: saved };
+      assert.equal(checkpoint.items[0].explanation, "ATP transfers usable energy between cellular processes.", "Same-count verified explanation progress must survive a host restart");
+      assert.equal(checkpoint.items[1].explanation_pending, true);
+      saved = { ...checkpoint, incomplete: false, items: checkpoint.items.map(item => ({ ...item, explanation: item.explanation || "Chlorophyll absorbs light energy for photosynthesis.", explanation_origin: "ai", explanation_pending: false })) };
+      job = { job_id: requestId, status: "complete", stage: "complete", message: "Ready", completed: 2, requested: 2, result: saved };
       data = job; status = 202;
     }
   } else if (path === "/api/generation-jobs" && method === "GET") {
@@ -56,32 +58,52 @@ await context.route("http://localhost:8000/**", async route => {
   else if (path.startsWith("/api/generation-jobs/")) {
     statusReads.push(path);
     if (!job) { status = 404; data = { detail: "This process restarted" }; }
-    else data = job;
+    else {
+      if (finishFirstExplanation) {
+        job.checkpoint.items[0].explanation = "ATP transfers usable energy between cellular processes.";
+        job.checkpoint.items[0].explanation_origin = "ai";
+        delete job.checkpoint.items[0].explanation_pending;
+        job.completed = 1;
+      }
+      data = job;
+    }
   }
   await route.fulfill({ status, headers, contentType: "application/json", body: JSON.stringify(data) });
 });
 const page = await context.newPage();
 page.on("pageerror", error => errors.push(error.message));
+async function waitForStoredRequest(predicate) {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const stored = await page.evaluate(async () => {
+      const db = await new Promise((resolve, reject) => { const request = indexedDB.open("dawnstudy-generation-recovery-v1", 1); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+      try { return await new Promise(resolve => { const request = db.transaction("requests").objectStore("requests").get("recovery-student"); request.onsuccess = () => resolve(request.result || null); }); }
+      finally { db.close(); }
+    });
+    if (predicate(stored)) return;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  assert.fail("The verified checkpoint was not committed to IndexedDB before restart.");
+}
 try {
   await page.goto(base); await page.waitForLoadState("networkidle");
+  await page.getByRole("button", { name: "Import questionnaire", exact: true }).click();
   await page.locator('input[type="file"]').first().setInputFiles({ name: "biology.txt", mimeType: "text/plain", buffer: Buffer.from(sourceText) });
   await page.getByRole("button", { name: "Choose practice" }).click();
   await page.getByRole("button", { name: "Review & create" }).click();
   await page.getByRole("button", { name: "Create study set" }).click();
-  await page.waitForFunction(async () => {
-    const db = await new Promise((resolve, reject) => { const request = indexedDB.open("dawnstudy-generation-recovery-v1", 1); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
-    try { return await new Promise(resolve => { const request = db.transaction("requests").objectStore("requests").get("recovery-student"); request.onsuccess = () => resolve(request.result?.checkpoint?.items?.length === 2); }); }
-    finally { db.close(); }
-  });
+  await waitForStoredRequest(stored => stored?.checkpoint?.items?.length === 2);
   assert.equal(submissions.length, 1, "A 502 after acceptance must not duplicate work");
   assert.ok(statusReads.includes("/api/generation-jobs/" + requestedId));
+  finishFirstExplanation = true;
+  await waitForStoredRequest(stored => stored?.checkpoint?.items?.length === 2 && stored.checkpoint.items[0].explanation === "ATP transfers usable energy between cellular processes.");
   job = null; restarting = true;
   await page.reload();
-  await page.getByText("Your study set is ready with 10 questions.", { exact: true }).waitFor();
+  await page.getByText("Your study set is ready with 2 questions.", { exact: true }).waitFor();
   assert.equal(submissions.length, 2, "A confirmed restart should replay once");
   assert.equal(saved.items[0].card_id, "retained-1");
   await page.waitForFunction(() => !localStorage.getItem("dawnstudy_generation_v1:recovery-student"));
-  console.log("PASS lost gateway response reattaches; refresh after host restart replays original files, request ID and validated checkpoint.");
+  console.log("PASS lost gateway response reattaches; restart restores original files/ID and same-count verified explanation progress.");
 
   const compiled = ts.transpileModule(readFileSync(new URL("../app/pending-generation.ts", import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
   const moduleUrl = "data:text/javascript;base64," + Buffer.from(compiled).toString("base64");

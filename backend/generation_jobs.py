@@ -207,6 +207,8 @@ def merge_continued_generation(base, generated):
             if old:
                 protected = {key: old[key] for key in ("card_id", "answer", "correct_answer", "answer_origin", "matching_pairs") if key in old}
                 item = {**old, **item, **protected}
+                if item.get("explanation_origin") in {"provided", "ai"} and str(item.get("explanation") or "").strip():
+                    item.pop("explanation_pending", None)
                 if old.get("card_id"):
                     retained_cards.add(old["card_id"])
             key = identity(item)
@@ -231,7 +233,7 @@ def merge_continued_generation(base, generated):
         **base, **generated, "id": base["id"], "created_at": base["created_at"],
         "title": base["title"], "type": base["type"], "items": items,
         "sources": list(sources.values())[:20], "requested_count": target,
-        "incomplete": len(items) < target, "source_url": base.get("source_url", ""),
+        "incomplete": len(items) < target or any(item.get("explanation_pending") for item in items), "source_url": base.get("source_url", ""),
         "page_ranges": base.get("page_ranges", {}), "focus_topic": base.get("focus_topic", ""),
         "material_fingerprint": base.get("material_fingerprint", ""),
         "models_used": list(dict.fromkeys([*base.get("models_used", []), *generated.get("models_used", [])])),

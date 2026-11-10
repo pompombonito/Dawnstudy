@@ -20,12 +20,14 @@ class QuestionnaireResilienceTests(unittest.TestCase):
                 return {"items": [
                     {"number": item["number"], "question": item["question"],
                      "answer": item["options"][0], "uncertain": item["number"] == "2",
+                     "explanation": "The selected option satisfies the defining property in this question.",
                      "distractors": [], "matching_pairs": []}
                     for item in batch
                 ]}
             return {"items": [
                 {"number": item["number"], "question": item["question"],
                  "answer": item["options"][2], "uncertain": False,
+                 "explanation": "The selected option satisfies the defining property in this question.",
                  "distractors": [], "matching_pairs": []}
                 for item in batch
             ]}
@@ -61,6 +63,7 @@ class QuestionnaireResilienceTests(unittest.TestCase):
             return {"items": [{
                 "number": item["number"], "question": item["question"], "answer": item["options"][2],
                 "uncertain": False, "distractors": [], "matching_pairs": [],
+                "explanation": "The selected option satisfies the defining property in this question.",
             } for item in batch]}
 
         source = "\n".join(

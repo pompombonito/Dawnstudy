@@ -138,12 +138,14 @@ def snapshot(room, user, profiles):
     if room["phase"] in {"question", "reveal"}:
         card = room["cards"][room["index"]]
         data["question"] = {"question": card["question"], "options": card.get("options", []),
+                            "option_labels": card.get("option_labels", []),
                             "quiz_type": card_kind(card, room["kind"]), "images": card.get("images", []),
                             "image_labels": card.get("image_labels", []),
                             "matching_prompts": card.get("matching_prompts", []),
                             "matching_options": card.get("matching_options", [])}
         if room["phase"] == "reveal":
-            data["question"].update({"answer": card.get("correct_answer") or card.get("answer"), "explanation": card.get("explanation", "")})
+            data["question"].update({"answer": card.get("correct_answer") or card.get("answer"), "explanation": card.get("explanation", ""),
+                                     "explanation_origin": card.get("explanation_origin"), "import_notices": card.get("import_notices", [])})
             if card.get("matching_pairs"):
                 data["question"]["matching_pairs"] = card["matching_pairs"]
             data["feedback"] = room["answers"].get(user, {"correct": False, "points": 0})

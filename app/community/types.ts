@@ -75,6 +75,7 @@ export type Game = {
   question?: {
     question: string;
     options: string[];
+    option_labels?: string[];
     quiz_type?: "multiple_choice" | "checkbox" | "identification" | "matching";
     images?: string[];
     image_labels?: string[];
@@ -83,6 +84,8 @@ export type Game = {
     matching_options?: string[];
     answer?: string | string[];
     explanation?: string;
+    explanation_origin?: "provided" | "ai";
+    import_notices?: string[];
   };
   feedback?: { correct: boolean; points: number };
 };

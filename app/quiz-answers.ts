@@ -6,7 +6,7 @@ type QuizCard = {
 };
 
 export function normalizedAnswer(value: unknown): string {
-  return String(value ?? "").toLocaleLowerCase().trim().replace(/\s+/g, " ");
+  return String(value ?? "").normalize("NFKC").toLocaleLowerCase().trim().replace(/\s+/g, " ");
 }
 
 export function quizKind(card: QuizCard, setType: string): QuizKind {
@@ -50,6 +50,7 @@ export function quizAnswerIsCorrect(card: QuizCard, setType: string, response: u
     if (typeof response !== "object" || Array.isArray(response)) return false;
     const matches = card.matching_pairs || [];
     return matches.length > 0 && matches.length === (card.matching_prompts || []).length
+      && Object.keys(response).length === (card.matching_prompts || []).length
       && matches.every((pair) => normalizedAnswer((response as Record<string, unknown>)[pair.prompt]) === normalizedAnswer(pair.answer));
   }
   if (typeof response !== "string" && !Array.isArray(response)) return false;
@@ -61,7 +62,9 @@ export function quizAnswerIsCorrect(card: QuizCard, setType: string, response: u
   const expected = (resolved.length ? resolved : kind === "checkbox" ? raw.split("|") : [raw])
     .map(normalizedAnswer).filter(Boolean).sort();
   if (kind === "checkbox") {
-    const values = Array.isArray(response) ? response : card.imported ? [response] : response.split("|");
+    const values = Array.isArray(response) ? response : card.imported
+      ? card.correct_answers && card.correct_answers.length > 1 ? response.split(/\r?\n/) : [response]
+      : response.split("|");
     if (values.some((value) => typeof value !== "string")) return false;
     const actual = values.map(normalizedAnswer).filter(Boolean).sort();
     return actual.length > 0 && actual.length === expected.length && actual.every((answer, index) => answer === expected[index]);

@@ -8,6 +8,19 @@ export type PendingGenerationRequest = {
   fields: SavedField[]; base?: Record<string, unknown>; checkpoint?: Record<string, unknown>; cancelRequested?: boolean;
 };
 
+/** Detect new verified content without repeatedly serializing large image bytes. */
+export function generationCheckpointRevision(checkpoint: Record<string, unknown>): string {
+  const { items, ...metadata } = checkpoint;
+  return JSON.stringify({
+    ...metadata,
+    items: Array.isArray(items) ? items.map((value) => {
+      if (!value || typeof value !== "object") return value;
+      const { images, ...card } = value as Record<string, unknown>;
+      return { ...card, image_count: Array.isArray(images) ? images.length : 0 };
+    }) : items,
+  });
+}
+
 function openDatabase(): Promise<IDBDatabase> {
   if (typeof indexedDB === "undefined") return Promise.reject(new Error("Local generation recovery is unavailable."));
   return new Promise((resolve, reject) => {

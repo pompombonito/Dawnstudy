@@ -208,7 +208,7 @@ class QuestionnaireRecoveryIntegrationTests(unittest.TestCase):
     def test_checkpoint_resume_keeps_keyed_item_and_retries_only_missing_answer(self):
         from test_generation_limits import main
         source = (
-            "1. Which pigment absorbs light?\nA. Chlorophyll\nB. Melanin\nC. Hemoglobin\nD. Keratin\nAnswer: A\n\n"
+            "1. Which pigment absorbs light?\nA. Chlorophyll\nB. Melanin\nC. Hemoglobin\nD. Keratin\nAnswer: A\nExplanation: Chlorophyll captures light energy for photosynthesis.\n\n"
             "2. Which organelle releases usable energy?\nA. Nucleus\nB. Mitochondrion\nC. Ribosome\nD. Cell membrane"
         )
         choice = model("groq")
@@ -235,6 +235,7 @@ class QuestionnaireRecoveryIntegrationTests(unittest.TestCase):
                 submitted.append([record["number"] for record in batch])
                 return {"items": [{"number": record["number"], "question": record["question"],
                                    "answer": "Mitochondrion", "uncertain": False,
+                                   "explanation": "Mitochondria release usable energy through cellular respiration.",
                                    "distractors": [], "matching_pairs": []} for record in batch]}
             with patch.object(main, "configured_ai_models", return_value=[choice]), \
                  patch.object(main, "generate_with_provider", side_effect=available):
@@ -260,6 +261,7 @@ class QuestionnaireRecoveryIntegrationTests(unittest.TestCase):
             calls.append([record["number"] for record in batch])
             return {"items": [{"number": record["number"], "question": record["question"],
                                "answer": "Invented overwrite" if len(batch) > 1 else record["answer"],
+                               "explanation": "The supplied answer identifies the structure responsible for this function.",
                                "uncertain": False, "distractors": ["Keratin", "Melanin", "Hemoglobin"],
                                "matching_pairs": []} for record in batch]}
         with patch.object(main, "configured_ai_models", return_value=[model("groq")]), \

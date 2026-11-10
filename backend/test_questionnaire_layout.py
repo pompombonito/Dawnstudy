@@ -1,3 +1,4 @@
+import json
 import unittest
 from io import BytesIO
 from unittest.mock import patch, Mock
@@ -180,15 +181,26 @@ class QuestionnaireLayoutTests(unittest.TestCase):
         self.assertEqual([record["answer"] for record in records], ["Third", "Beta"])
         self.assertTrue(all(record["answer"] in record["options"] for record in records))
 
-    def test_native_pdf_import_uses_highlights_without_ai(self):
+    def test_native_pdf_import_preserves_highlights_when_ai_adds_missing_explanations(self):
         user = {"user_id": "pdf-student", "email": "student@gmail.com"}
         main.app.dependency_overrides[main.onboarded_user] = lambda: user
         try:
-            with patch.object(main, "generate_with_provider", side_effect=AssertionError("Provided highlighted answers must not be inferred")):
+            def explain(_provider, _model, _key, prompt, _schema, _tokens):
+                records = json.loads(prompt.rsplit("\n", 1)[-1])
+                return {"title": "Marked questions", "items": [{
+                    "number": record["number"], "question": record["question"],
+                    "answer": record["answer"], "uncertain": False,
+                    "explanation": "The supplied key identifies the appropriate choice.",
+                    "distractors": [], "matching_pairs": [],
+                } for record in records]}
+            models = [("groq:test", "groq", "test", "test-key", "Test model")]
+            with patch.object(main, "configured_ai_models", return_value=models), \
+                 patch.object(main, "generate_with_provider", side_effect=explain):
                 response = TestClient(main.app).post("/api/generate", data={"format": "multiple_choice", "input_mode": "questionnaire"}, files={"files": ("marked.pdf", highlighted_pdf(), "application/pdf")})
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual([item["answer"] for item in response.json()["items"]], ["Third", "Beta"])
             self.assertTrue(all(item["answer_origin"] == "provided" for item in response.json()["items"]))
+            self.assertTrue(all(item["explanation"] for item in response.json()["items"]))
         finally:
             main.app.dependency_overrides.clear()
 

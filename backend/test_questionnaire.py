@@ -17,11 +17,13 @@ A. Nucleus
 B. Mitochondrion
 C. Ribosome
 D. Cell membrane
+Explanation: Mitochondria release usable energy through cellular respiration.
 2. Which is a product of photosynthesis?
 A. Oxygen
 B. Nitrogen
 C. Helium
 D. Sodium
+Explanation: Photosynthesis releases oxygen as a product.
 Answer key:
 1. B  2. A
 """
@@ -133,12 +135,12 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(item["question"], records[0]["question"])
         self.assertEqual(item["answer_origin"], "provided")
         self.assertEqual(len(item["options"]), 4)
-        self.assertIn("Choices added by AI", item["explanation"])
+        self.assertIn("Choices added by AI", " ".join(item["import_notices"]))
 
 
 class ImportRouteTests(unittest.TestCase):
     def test_partial_136_question_import_progress_uses_source_total_not_notes_default(self):
-        source = "\n".join(f"{number}. Choose item {number}?\nA. Alpha\nB. Beta\n" + ("Answer: A" if number <= 134 else "") for number in range(1, 137))
+        source = "\n".join(f"{number}. Choose item {number}?\nA. Alpha\nB. Beta\n" + ("Answer: A\nExplanation: Alpha is the supplied correct response for this item." if number <= 134 else "") for number in range(1, 137))
         snapshots = []
         update = main.generation_jobs.update
 
@@ -151,10 +153,11 @@ class ImportRouteTests(unittest.TestCase):
             response = self.request(source, "same_as_source", route="/api/generation-jobs", question_count="10")
         self.assertEqual(response.status_code, 202, response.text)
         job = main.generation_jobs.get(response.json()["job_id"], self.user["user_id"])
-        self.assertEqual(job["status"], "complete")
+        self.assertEqual(job["status"], "queued")
         self.assertEqual((job["completed"], job["requested"]), (134, 136))
-        self.assertIn("134 of 136 questions are saved", job["message"])
-        self.assertIn("other 2 could not be completed in this run", job["message"])
+        self.assertEqual(len(job["checkpoint"]["items"]), 134)
+        self.assertIn("resume automatically", job["message"])
+        self.assertEqual(self.saved, [])
         self.assertTrue(any(s["stage"] == "preparing" and s["requested"] == 136 for s in snapshots))
         self.assertTrue(all(s["requested"] == 0 or s["requested"] >= s["completed"] for s in snapshots))
 
@@ -174,6 +177,7 @@ class ImportRouteTests(unittest.TestCase):
             patch.object(main, "save_study_set", side_effect=lambda value: self.saved.append(copy.deepcopy(value))),
             patch.object(main, "_generation_workers", InlineExecutor()),
             patch.object(main, "generation_jobs", GenerationJobs()),
+            patch.object(main.threading, "Timer", return_value=Mock()),
         ]
         for item in patches:
             item.start()
@@ -181,7 +185,7 @@ class ImportRouteTests(unittest.TestCase):
 
     def complete(self, provider, model, key, prompt, schema, max_tokens):
         batch = json.loads(prompt.split("\n", 1)[1])
-        return {"title": "Ignored model title", "items": [{"number": item["number"], "question": item["question"], "answer": item["answer"] or (item["options"][1] if item["options"] else "Mitochondrion"), "uncertain": False, "distractors": [] if item["options"] else ["Nucleus", "Ribosome", "Chloroplast"]} for item in batch]}
+        return {"title": "Ignored model title", "items": [{"number": item["number"], "question": item["question"], "answer": item["answer"] or (item["options"][1] if item["options"] else "Mitochondrion"), "uncertain": False, "distractors": [] if item["options"] else ["Nucleus", "Ribosome", "Chloroplast"], "matching_pairs": item.get("matching_pairs", []), "explanation": item.get("explanation") or "The source concept supports this response and distinguishes it from the alternatives."} for item in batch]}
 
     def request(self, text=CHOICES, kind="multiple_choice", route="/api/generate", **fields):
         return self.client.post(route, data={"format": kind, "input_mode": "questionnaire", "questionnaire_type_confirmed": "true", "questionnaire_type_policy": "convert", **fields}, files={"files": ("quiz.txt", text.encode(), "text/plain")})
@@ -193,7 +197,7 @@ class ImportRouteTests(unittest.TestCase):
             self.assertEqual(result.json()["requested_count"], 2)
             self.assertFalse(result.json()["incomplete"])
             self.assertEqual(result.json()["items"][0]["answer_origin"], "provided")
-        result = self.request("1. 2 + 2?\nAnswer: 4", "flashcards")
+        result = self.request("1. 2 + 2?\nAnswer: 4\nExplanation: Adding two and two gives four.", "flashcards")
         self.assertEqual(result.status_code, 200, result.text)
         self.provider.assert_not_called()
 
@@ -206,7 +210,8 @@ class ImportRouteTests(unittest.TestCase):
             self.assertEqual(item["question"], "Identify the organelle that releases usable energy.")
             self.assertEqual(item["options"], ["Mitochondrion", "Nucleus", "Ribosome", "Chloroplast"])
             self.assertEqual(item["answer_origin"], "provided" if with_key else "inferred")
-            self.assertEqual("AI-inferred" in item["explanation"], not with_key)
+            self.assertEqual("AI-inferred" in " ".join(item.get("import_notices", [])), not with_key)
+            self.assertEqual(item["explanation_origin"], "ai")
 
     def test_missing_key_preserves_original_choices_and_infers_only_answer(self):
         result = self.request(CHOICES.split("Answer key")[0])
@@ -286,7 +291,7 @@ class ImportRouteTests(unittest.TestCase):
 
     def test_matching_is_previewed_and_preserved_when_single_answer_format_cannot_represent_it(self):
         source = ("1. Match each term to its description.\n__ First term\n__ Second term\n"
-                  "A. First description\nB. Second description\nAnswer: 1-B; 2-A")
+                  "A. First description\nB. Second description\nAnswer: 1-B; 2-A\nExplanation: The supplied matching key associates each term with its description.")
         preview = self.request(source, "multiple_choice", route="/api/generation-jobs", questionnaire_type_confirmed="false")
         self.assertEqual(preview.status_code, 409, preview.text)
         item_preview = preview.json()["mismatches"][0]
@@ -308,30 +313,30 @@ class ImportRouteTests(unittest.TestCase):
         job = self.client.get("/api/generation-jobs/" + result.json()["job_id"]).json()
         self.assertEqual(job["status"], "complete", job)
 
-    def test_partial_questionnaire_is_saved_when_providers_are_unavailable(self):
-        source = "1. First question?\nAnswer: Alpha\n2. Second question?"
+    def test_partial_questionnaire_is_checkpointed_when_providers_are_unavailable(self):
+        source = "1. First question?\nAnswer: Alpha\nExplanation: Alpha is the supplied response to the first question.\n2. Second question?"
         with patch.object(main, "configured_ai_models", return_value=[]):
             response = self.request(source, "flashcards", route="/api/generation-jobs")
         self.assertEqual(response.status_code, 202, response.text)
         job = self.client.get("/api/generation-jobs/" + response.json()["job_id"]).json()
-        self.assertEqual(job["status"], "complete", job)
-        self.assertTrue(job["result"]["incomplete"])
-        self.assertEqual(job["result"]["requested_count"], 2)
-        self.assertEqual([item["answer"] for item in job["result"]["items"]], ["Alpha"])
-        self.assertIn("Questions 2 still need verified answers or choices", job["result"]["notices"][0])
-        self.assertTrue(self.saved[0]["incomplete"])
-        self.assertEqual(self.saved[0]["requested_count"], 2)
+        self.assertEqual(job["status"], "queued", job)
+        self.assertTrue(job["checkpoint"]["incomplete"])
+        self.assertEqual(job["checkpoint"]["requested_count"], 2)
+        self.assertEqual([item["answer"] for item in job["checkpoint"]["items"]], ["Alpha"])
+        self.assertIn("resume automatically", job["message"])
+        self.assertEqual(self.saved, [])
 
     def test_keyed_question_without_generated_choices_does_not_crash_partial_import(self):
-        source = "1. Which is a primary color?\nA. Red\nB. Table\nC. Cloud\nD. Chair\nAnswer: A\n2. Name the process plants use to make food.\nAnswer: Photosynthesis"
+        source = "1. Which is a primary color?\nA. Red\nB. Table\nC. Cloud\nD. Chair\nAnswer: A\nExplanation: Red is the color among these choices.\n2. Name the process plants use to make food.\nAnswer: Photosynthesis"
         with patch.object(main, "configured_ai_models", return_value=[]):
             response = self.request(source, "multiple_choice", route="/api/generation-jobs")
         self.assertEqual(response.status_code, 202, response.text)
         job = self.client.get("/api/generation-jobs/" + response.json()["job_id"]).json()
-        self.assertEqual(job["status"], "complete", job)
-        self.assertTrue(job["result"]["incomplete"])
-        self.assertEqual([item["question"] for item in job["result"]["items"]], ["Which is a primary color?"])
-        self.assertEqual(job["result"]["items"][0]["options"], ["Red", "Table", "Cloud", "Chair"])
+        self.assertEqual(job["status"], "queued", job)
+        self.assertTrue(job["checkpoint"]["incomplete"])
+        self.assertEqual([item["question"] for item in job["checkpoint"]["items"]], ["Which is a primary color?"])
+        self.assertEqual(job["checkpoint"]["items"][0]["options"], ["Red", "Table", "Cloud", "Chair"])
+        self.assertEqual(self.saved, [])
 
     def test_figure_stays_on_card_and_is_sent_separately_to_a_vision_model(self):
         image = "data:image/webp;base64,AA=="
@@ -360,6 +365,7 @@ class ImportRouteTests(unittest.TestCase):
             "id": "partial-import", "title": "quiz", "type": "flashcards",
             "items": [{"question": "First question?", "answer": "Alpha", "source_number": "1", "questionnaire_index": 1,
                        "imported": True, "answer_origin": "provided", "card_id": "saved-card", "quiz_type": "identification",
+                       "explanation": "Alpha is the supplied response to the first question.", "explanation_origin": "provided",
                        "questionnaire_type_confirmed": True, "questionnaire_type_policy": "mixed"}],
             "created_at": "2026-11-04T00:00:00+00:00", "requested_count": 2, "incomplete": True,
             "material_fingerprint": fingerprint, "page_ranges": {}, "focus_topic": "", "source_url": "", "sources": [],
@@ -392,7 +398,7 @@ class ImportRouteTests(unittest.TestCase):
             self.assertEqual(len(result.json()["items"]), 2)
 
     def test_200_question_imports_survive_batching_and_background_save(self):
-        text = "\n".join(f"{i}. Name energy organelle number {i}.\nAnswer: Mitochondrion" for i in range(1, 201))
+        text = "\n".join(f"{i}. Name energy organelle number {i}.\nAnswer: Mitochondrion\nExplanation: Mitochondria release usable energy through cellular respiration." for i in range(1, 201))
         for kind in ("flashcards", "multiple_choice"):
             result = self.request(text, kind, route="/api/generation-jobs")
             self.assertEqual(result.status_code, 202, result.text)

@@ -120,8 +120,8 @@ class VisualGenerationTests(unittest.TestCase):
         self.assertFalse(self.sets)
 
     def test_no_progress_continuation_is_an_error_instead_of_an_identical_success(self):
-        source = "1. First question?\nAnswer: Alpha\n2. Second question?"
-        existing = [{"question": "First question?", "answer": "Alpha", "source_number": "1", "questionnaire_index": 1, "imported": True, "card_id": "saved"}]
+        source = "1. First question?\nAnswer: Alpha\nExplanation: Alpha is the original supplied value.\n2. Second question?"
+        existing = [{"question": "First question?", "answer": "Alpha", "explanation": "Alpha is the original supplied value.", "explanation_origin": "provided", "source_number": "1", "questionnaire_index": 1, "imported": True, "card_id": "saved"}]
         with patch.object(main, "configured_ai_models", return_value=[]):
             with self.assertRaises(main.HTTPException) as caught:
                 main.import_questionnaire([source], "flashcards", "auto", existing_items=existing)

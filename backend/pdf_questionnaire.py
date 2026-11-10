@@ -6,12 +6,13 @@ import random
 
 from PIL import Image
 
-from questionnaire import OPTION, QuestionnaireError, parse_questionnaire
+from questionnaire import EXPLANATION, MULTIPLE_ANSWER_STEM, OPTION, QuestionnaireError, parse_questionnaire
 from questionnaire_ocr import image_data_url, ocr_questionnaire_image, ocr_learning_image, ocr_cancellation
+from pdf_questionnaire_layout import ordered_questionnaire_text
 
 # PDFium is not thread-safe. Generation workers may import PDFs concurrently.
 _pdfium_lock = threading.RLock()
-_QUESTION_START = re.compile(r"(?m)^[ \t]*(?:Q(?:uestion)?\s*)?(\d+)[.)]\s*\S", re.I)
+_QUESTION_START = re.compile(r"(?m)^[ \t]*(?:Q(?:uestion)?\s*)?(\d+)(?:[.)]|:\s+)\s*\S", re.I)
 _OPTION_START = re.compile(r"(?m)^[ \t]*(?:\([A-Ha-h]\)|[A-Ha-h][.)])\s+\S")
 _OPTION_TOKEN = re.compile(r"(?i)(?<![A-Za-z])(?:\(([A-H])\)|([A-H])[.)])\s+\S")
 _FIGURE = re.compile(r"\bFIGURE\s+\d+(?:[-.]\d+)*\b", re.I)
@@ -120,6 +121,16 @@ def _flattened_highlight_keys(page, textpage, text):
         first_a = next((index for index, (_start, _line, token) in enumerate(candidates)
                         if (token.group(1) or token.group(2)).upper() == "A"), None)
         if first_a is None:
+            # Some source documents continue printed labels at E/F/G/H.
+            # Require a real contiguous set of standalone choice labels, so
+            # organism abbreviations in the question do not become keys.
+            standalone = [(index, (token.group(1) or token.group(2)).upper())
+                          for index, (_start, line, token) in enumerate(candidates)
+                          if not line[:token.start()].strip()]
+            labels = sorted({label for _index, label in standalone})
+            if len(labels) >= 2 and [ord(label) for label in labels] == list(range(ord(labels[0]), ord(labels[-1]) + 1)):
+                first_a = next(index for index, label in standalone if label == labels[0])
+        if first_a is None:
             continue
         candidates = candidates[first_a:]
 
@@ -140,7 +151,8 @@ def _flattened_highlight_keys(page, textpage, text):
                 continue
             filtered.append(candidate)
         labels = [(token.group(1) or token.group(2)).upper() for _start, _line, token in filtered]
-        if not labels or len(labels) != len(set(labels)) or set(labels) != set("ABCDEFGH"[:len(labels)]):
+        if (not labels or len(labels) != len(set(labels))
+                or sorted(ord(label) for label in labels) != list(range(ord(min(labels)), ord(min(labels)) + len(labels)))):
             continue
 
         fractions = []
@@ -149,8 +161,9 @@ def _flattened_highlight_keys(page, textpage, text):
             segment = line[token.start():end]
             fractions.append((labels[index], highlight_fraction(segment, line_start + token.start())))
         marked = [label for label, fraction in fractions if fraction >= 0.18]
-        if len(marked) == 1:
-            result[(number, occurrences[number])] = marked[0]
+        stem_end = candidates[0][0] + candidates[0][2].start()
+        if len(marked) == 1 or (marked and MULTIPLE_ANSWER_STEM.search(text[question.start():stem_end])):
+            result[(number, occurrences[number])] = " | ".join(marked)
 
     image.close()
     return result
@@ -160,6 +173,67 @@ def _rect_distance(first, second):
     dx = max(0, first[0] - second[2], second[0] - first[2])
     dy = max(0, first[1] - second[3], second[1] - first[3])
     return (dx * dx + dy * dy) ** 0.5
+
+
+def _annotated_highlight_keys(annotations, textpage, original, keys):
+    """Resolve each highlight quad independently, preserving multi-select keys.
+
+    One PDF annotation may contain several separate highlighted choices. A
+    wrapped selection can also start after its printed option label, so use
+    its owning source line rather than treating a partial word as the answer.
+    """
+    for reference in annotations:
+        annotation = reference.get_object()
+        if annotation.get("/Subtype") != "/Highlight":
+            continue
+        points = list(annotation.get("/QuadPoints", []))
+        if len(points) < 8 or len(points) % 8:
+            continue
+        for offset in range(0, len(points), 8):
+            quad = [float(value) for value in points[offset:offset + 8]]
+            left, right = min(quad[::2]), max(quad[::2])
+            bottom, top = min(quad[1::2]), max(quad[1::2])
+            value = textpage.get_text_bounded(left, bottom, right, top).strip()
+            first_index = textpage.get_index(left + min(2, (right - left) / 2), (top + bottom) / 2, 4, 4)
+            if first_index is None or first_index < 0:
+                continue
+            starts = list(_QUESTION_START.finditer(original[:first_index]))
+            if not starts:
+                continue
+            question = starts[-1]
+            next_question = _QUESTION_START.search(original, question.end())
+            block_end = next_question.start() if next_question else len(original)
+            block = original[question.start():block_end]
+            first_option = _OPTION_START.search(block)
+            stem = block[:first_option.start()] if first_option else block
+            line_start = original.rfind("\n", 0, first_index) + 1
+            line_end = original.find("\n", first_index)
+            line = original[line_start:line_end if line_end >= 0 else len(original)].strip()
+            labeled = OPTION.match(value) or OPTION.match(line)
+            if not labeled:
+                preceding = list(_OPTION_START.finditer(original[question.start():first_index]))
+                if not preceding:
+                    continue
+                last_option = preceding[-1]
+                tail = original[question.start() + last_option.end():first_index]
+                if any(EXPLANATION.match(part.strip()) for part in tail.splitlines()):
+                    continue
+                labeled = OPTION.match(last_option.group() + " selected")
+            if not labeled:
+                continue
+            key = (labeled[1] or labeled[2]).upper()
+            number = question[1]
+            occurrence = (number, sum(match[1] == number for match in starts))
+            existing_labels = [part.strip() for part in keys.get(occurrence, "").split("|") if part.strip()]
+            if existing_labels and key not in existing_labels:
+                if MULTIPLE_ANSWER_STEM.search(stem) and all(re.fullmatch(r"[A-H]", part) for part in existing_labels):
+                    key = " | ".join(sorted(set([*existing_labels, key])))
+                else:
+                    raise QuestionnaireError(f"Question {number} has multiple highlighted answers. Use one clear correct answer or supply a written key.")
+            elif existing_labels:
+                key = " | ".join(existing_labels)
+            keys[occurrence] = key
+    return keys
 
 
 def _image_data_url(image_object, bounds, page_area, maximum_area=.4):
@@ -328,7 +402,10 @@ def _image_question_context(stem):
 
 def _last_image_question(text):
     matches = list(_QUESTION_START.finditer(text))
-    return _image_question_context(text[matches[-1].start():]) if matches else None
+    if not matches:
+        return None
+    block = text[matches[-1].start():]
+    return {**_image_question_context(block), "has_options": bool(_OPTION_START.search(block))}
 
 
 def _image_markers(image):
@@ -398,12 +475,30 @@ def _read_page_images(page, textpage, text, has_previous_question=False, previou
             continue
         end = matches[position + 1].start() if position + 1 < len(matches) else len(text)
         block = text[match.start():end]
+        first_option = next(_OPTION_START.finditer(block), None)
+        first_option_bounds = None
+        if first_option:
+            option_start = match.start() + first_option.start()
+            option_end = text.find("\n", option_start)
+            option_end = option_end if option_end >= 0 else len(text)
+            first_option_bounds = _line_bounds(textpage, text[option_start:option_end], option_start)
         question_anchors.append({
             "line_start": text.rfind("\n", 0, match.start()) + 1,
             "x": (box[0] + box[2]) / 2,
             "y": (box[1] + box[3]) / 2,
+            "first_option_bounds": first_option_bounds,
             **_image_question_context(block),
         })
+
+    # The previous page's last stem may continue with a figure and its first
+    # choices, even when the wording never explicitly mentions an image.
+    first_question_start = matches[0].start() if matches else len(text)
+    continuation_option_bounds = None
+    first_option = next(_OPTION_START.finditer(text[:first_question_start]), None)
+    if first_option:
+        option_end = text.find("\n", first_option.start())
+        option_end = option_end if option_end >= 0 else len(text)
+        continuation_option_bounds = _line_bounds(textpage, text[first_option.start():option_end], first_option.start())
 
     # PDFium can merge two independent captions on a shared horizontal line.
     # Keep each label's own glyph bounds so columns do not share one caption.
@@ -457,9 +552,47 @@ def _read_page_images(page, textpage, text, has_previous_question=False, previou
         if following and following["image_position"] == "above":
             markers_after_question.setdefault(following["line_start"], []).append(image_object)
             continue
+        # Layout can establish ownership: a figure lies between a stem and its
+        # first A choice. This includes a left-column stem whose figure and
+        # choices continue at the top of the right column. A figure following
+        # a completed answer/choice block does not qualify.
+        structural_owners = []
+        for anchor in question_anchors:
+            option = anchor["first_option_bounds"]
+            if not option or min(bounds[2], option[2]) <= max(bounds[0], option[0]) or option[3] > image_bottom + 2:
+                continue
+            same_column_stem = abs(anchor["x"] - option[0]) < page_width * .15 and anchor["y"] >= image_top
+            continued_column_stem = (anchor["x"] + page_width * .2 < option[0]
+                                     and anchor["x"] < bounds[0]
+                                     and not any(other is not anchor
+                                                 and abs(other["x"] - option[0]) < page_width * .15
+                                                 and other["y"] > image_bottom
+                                                 for other in question_anchors))
+            if same_column_stem or continued_column_stem:
+                structural_owners.append(anchor)
+        if len(structural_owners) == 1:
+            markers_after_question.setdefault(structural_owners[0]["line_start"], []).append(image_object)
+            continue
+        if (previous_question and not previous_question.get("has_options", True)
+                and continuation_option_bounds
+                and min(bounds[2], continuation_option_bounds[2]) > max(bounds[0], continuation_option_bounds[0])
+                and continuation_option_bounds[3] <= image_bottom + 2
+                and not preceding):
+            leading_markers.append(image_object)
+            continue
         if preceding and preceding["references_image"] and preceding["image_position"] != "above":
             markers_after_question.setdefault(preceding["line_start"], []).append(image_object)
             continue
+        if label and preceding and not preceding["references_image"]:
+            # A captioned textbook plate can follow an intervening text-only
+            # question. Bind it only when this column has one still-unmatched
+            # question explicitly asking about visible/stained morphology.
+            unmatched_visuals = [anchor for anchor in above if anchor["references_image"]
+                                 and anchor["image_position"] != "above"
+                                 and not markers_after_question.get(anchor["line_start"])]
+            if len(unmatched_visuals) == 1:
+                markers_after_question.setdefault(unmatched_visuals[0]["line_start"], []).append(image_object)
+                continue
         # A figure at the top of a continuation page belongs to the pending
         # image question from the previous page. A new question saying "below"
         # cannot own a figure positioned above its stem.
@@ -495,7 +628,9 @@ def _read_page_images(page, textpage, text, has_previous_question=False, previou
             continue
 
         if skipping_caption:
-            if not (_QUESTION_START.match(value) or _OPTION_START.match(value) or re.match(r"(?i)^\s*(?:Answer|Ans)\s*[:=]", value)):
+            if not (_QUESTION_START.match(value) or _OPTION_START.match(value)
+                    or re.match(r"(?i)^\s*(?:Answer|Ans)\s*[:=]", value)
+                    or EXPLANATION.match(value.strip())):
                 continue
             skipping_caption = False
 
@@ -573,45 +708,13 @@ def extract_pdf_questionnaire(raw, reader, page_indices, include_skipped=False):
                         finally:
                             image.close()
                         continue
-                    text, leading_markers = _read_page_images(page, textpage, original, has_previous_question, previous_question)
+                    original, layout_textpage = ordered_questionnaire_text(textpage, original, page_width)
+                    text, leading_markers = _read_page_images(page, layout_textpage, original, has_previous_question, previous_question)
                     label = f"PDF page {index + 1}"
                     if leading_markers:
                         _attach_continuation_images(segments, leading_markers, label)
-                    keys = _flattened_highlight_keys(page, textpage, original)
-                    for reference in reader.pages[index].get("/Annots", []):
-                        annotation = reference.get_object()
-                        if annotation.get("/Subtype") != "/Highlight":
-                            continue
-                        points = list(annotation.get("/QuadPoints", []))
-                        if len(points) < 8 or len(points) % 8:
-                            continue
-                        selected, first_index = [], None
-                        for offset in range(0, len(points), 8):
-                            quad = [float(value) for value in points[offset:offset + 8]]
-                            left, right = min(quad[::2]), max(quad[::2])
-                            bottom, top = min(quad[1::2]), max(quad[1::2])
-                            selected.append(textpage.get_text_bounded(left, bottom, right, top).strip())
-                            if first_index is None:
-                                first_index = textpage.get_index(left + min(2, (right - left) / 2), (top + bottom) / 2, 4, 4)
-                        if first_index is None:
-                            continue
-                        prefix = original[:first_index]
-                        starts = list(_QUESTION_START.finditer(prefix))
-                        if not starts:
-                            continue
-                        question = starts[-1]
-                        value = " ".join(part for part in selected if part)
-                        labeled = OPTION.match(value)
-                        if not labeled and not any(_OPTION_START.match(line.strip()) for line in prefix[question.start():].splitlines()[1:]):
-                            continue
-                        key = (labeled[1] or labeled[2]).upper() if labeled else value
-                        if not key:
-                            raise QuestionnaireError("A highlighted PDF answer could not be read. Add a written answer key for that question.")
-                        number = question[1]
-                        occurrence = (number, sum(match[1] == number for match in starts))
-                        if occurrence in keys and keys[occurrence] != key:
-                            raise QuestionnaireError(f"Question {number} has multiple highlighted answers. Use one clear correct answer or supply a written key.")
-                        keys[occurrence] = key
+                    keys = _flattened_highlight_keys(page, layout_textpage, original)
+                    keys = _annotated_highlight_keys(reader.pages[index].get("/Annots", []), layout_textpage, original, keys)
 
                     starts = list(_QUESTION_START.finditer(text))
                     seen, insertions = {}, []
@@ -625,7 +728,7 @@ def extract_pdf_questionnaire(raw, reader, page_indices, include_skipped=False):
                         # Put the verified key after the whole question block so
                         # wrapped choice text (for example the second line of C)
                         # remains attached to its option instead of the answer.
-                        insertions.append((end, f"\nAnswer: {key}\n"))
+                        insertions.append((end, f"\n[PDF_HIGHLIGHT_ANSWER: {key}]\n"))
                     for insertion, value in reversed(insertions):
                         text = text[:insertion] + value + text[insertion:]
                     if text.strip():

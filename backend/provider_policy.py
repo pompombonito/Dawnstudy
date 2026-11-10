@@ -83,7 +83,8 @@ def eligible_questionnaire_records(records, supports_images):
     """
     return [record for record in records if isinstance(record, dict)
             and (supports_images or not record.get("images")
-                 or str(record.get("answer") or "").strip())]
+                 or (str(record.get("answer") or "").strip()
+                     and not record.get("explanation_requires_vision")))]
 
 
 def interleave_order(primary, candidates, *, rotation=0):

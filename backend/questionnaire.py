@@ -11,20 +11,84 @@ QUESTION = re.compile(r"^(?:Q(?:uestion)?\s*)?(\d+)(?:[.)]|:\s+)\s*(\S.*)$", re.
 QA = re.compile(r"^(?:Q|Question)\s*:\s*(\S.*)$", re.I)
 OPTION = re.compile(r"^(?:\(([A-Ha-h])\)|([A-Ha-h])[.)])\s+(.+)$")
 ANSWER = re.compile(r"^(?:Correct\s+answer|Answer|Ans|A)\s*[:=]\s*(.*)$", re.I)
-KEY_HEADING = re.compile(r"^(?:answer\s*key|answers|key\s+to\s+answers)\s*:?(.*)$", re.I)
+PDF_HIGHLIGHT_ANSWER = re.compile(r"^\[PDF_HIGHLIGHT_ANSWER:\s*(.+?)\]$")
+KEY_HEADING = re.compile(r"^(?:(?:answer\s*key|answers|correct\s+answers|key\s+to\s+answers)(?:\s*(?:and|&|with|/)\s*(?:rationales?|explanations?))?|answer\s+(?:and|&|with|/)\s+(?:rationales?|explanations?))\s*:?(.*)$", re.I)
 SOURCE = re.compile(r"^\[SOURCE: (.+)\]$")
 PDF_IMAGE = re.compile(r"^\[PDF_IMAGE:\s*(data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=_-]+)\]$", re.I)
 PDF_IMAGE_CAPTION = re.compile(r"^\[PDF_IMAGE_CAPTION:\s*(.+?)\]$", re.I)
 SECTION = re.compile(r"^(?:(?:section|part|quiz|test|chapter|unit|set)\s+(?:\d+|[ivxlcdm]+|[a-z])(?:\b|[:.)])|(?-i:[IVXLCDM]+[.)]\s+(?:[A-Z][a-z]+|[A-Z0-9\s,:;—-]{3,}))|#{1,6}\s+\S)", re.I)
 MULTIPLE_ANSWER_STEM = re.compile(r"\b(?:select|choose|check|mark)\s+(?:all|every|(?:the\s+)?(?:two|three|four|[2-8]))\b|\b(?:select|choose)\b.{0,50}\bthat apply\b", re.I)
+EXPLANATION_LABEL = r"(?:explanations?|(?:answer\s+)?rationales?|(?:answer\s+)?explanations?|justifications?|reason(?:ing)?|why(?:\s+(?:this|the)\s+answer)?|solutions?|(?:side\s+)?notes?)"
+EXPLANATION = re.compile(r"^(?:\*\*)?(?:" + EXPLANATION_LABEL + r")(?:\*\*)?\s*(?:[:=\u2013\u2014-]\s*(?:\*\*)?\s*(.*)|$)", re.I)
+INLINE_EXPLANATION = re.compile(r"(?:^|\s+)(?:\*\*)?(?:" + EXPLANATION_LABEL + r")(?:\*\*)?\s*[:=]\s*(?:\*\*)?\s*", re.I)
+IMPORT_NOTICES = (
+    "AI-inferred answer: no answer key was supplied. Review it for accuracy.",
+    "Choices added by AI. Review them for accuracy.",
+)
+QUESTIONNAIRE_TITLE = re.compile(r"(?:[\w &,./'-]+\s+)?(?:questionnaire|(?:practice\s+)?(?:test|quiz|examination|exam))(?:\s+by\b.*|\s*:?\s*)", re.I)
+
+
+def _is_questionnaire_title(line):
+    return bool(QUESTIONNAIRE_TITLE.fullmatch(line) and
+                (line.isupper() or re.search(r"\bby\s+\S", line, re.I)
+                 or re.match(r"^(?:practice|review|sample|mock)\s+(?:test|quiz|exam)", line, re.I)
+                 or line.casefold().rstrip(":") == "questionnaire"))
+
+
+def questionnaire_item_explanation(item):
+    """Return teaching text, excluding metadata used as legacy explanations."""
+    if not isinstance(item, dict):
+        return ""
+    value = item.get("explanation")
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    if item.get("explanation_origin") in {"provided", "ai"}:
+        return value
+    for notice in IMPORT_NOTICES:
+        value = value.replace(notice, "")
+    return value.strip()
+
+
+def _split_explanation(value):
+    match = INLINE_EXPLANATION.search(value)
+    return (value[:match.start()].rstrip(), value[match.end():].strip()) if match else (value, "")
+
+
+def _add_explanation(record, value):
+    value = value.strip()
+    if value:
+        existing = record.get("explanation", "")
+        record["explanation"] = (existing + "\n" + value) if existing else value
+        record["explanation_origin"] = "provided"
+
+
+def _questionnaire_lines(document):
+    """Exclude an explicitly separated lecture preface, never ordinary items."""
+    lines = document.splitlines()
+    for index, value in enumerate(lines):
+        line = value.strip()
+        if not (_is_questionnaire_title(line)
+                and not QUESTION.match(line)):
+            continue
+        prefix = lines[:index]
+        lecture = any(re.match(r"\s*[\u25cb\u25cf\u25a0\u2605]", text) or re.search(r"\blecture\s+notes?\b", text, re.I) for text in prefix)
+        real_questions = any(ANSWER.match(text.strip()) or QA.match(text.strip()) or "?" in text
+                             or ((question := QUESTION.match(text.strip())) and re.match(r"(?:what|which|who|when|where|why|how|identify|name|state|give|list|define|match|choose|select)\b", question[2], re.I)) for text in prefix)
+        if lecture and not real_questions:
+            marker = next((text for text in reversed(prefix) if SOURCE.match(text.strip())), None)
+            return ([marker] if marker else []) + lines[index:]
+        break
+    return lines
 
 
 def docx_questionnaire_text(document):
     """Include tables in document order; retain common Word list numbering."""
+    from docx_questionnaire_images import paragraph_questionnaire_text, cell_questionnaire_text
     parts, counter = [], 0
     for block in document.iter_inner_content():
         if hasattr(block, "text"):
-            text = block.text.strip()
+            text = paragraph_questionnaire_text(block)
             if not text:
                 continue
             if KEY_HEADING.match(text):
@@ -34,24 +98,48 @@ def docx_questionnaire_text(document):
                 text = f"{counter}. {text}"
             parts.append(text)
         else:
-            rows = [[cell.text.strip() for cell in row.cells] for row in block.rows]
+            rows = [[cell_questionnaire_text(cell) for cell in row.cells] for row in block.rows]
             if not rows:
                 continue
-            headers = [value.casefold() for value in rows[0]]
-            if "question" in headers:
+            headers = [re.sub(r"\s+", " ", value.casefold()).strip().rstrip(".:") for value in rows[0]]
+            question_column = next((index for index, value in enumerate(headers) if value in {"question", "questions", "question text", "prompt", "stem"}), None)
+            explanation_columns = [index for index, value in enumerate(headers)
+                                   if re.fullmatch(EXPLANATION_LABEL, value, re.I)
+                                   or value in {"explanation / rationale", "answer explanation", "answer rationale"}]
+            number_column = next((index for index, value in enumerate(headers) if value in {"no", "number", "question no", "item no", "#"}), None)
+            answer_columns = [index for index, value in enumerate(headers) if value in {"answer", "correct answer", "key"}]
+            if question_column is not None:
                 for row in rows[1:]:
-                    question = row[headers.index("question")]
+                    question = row[question_column]
                     if not question:
                         if any(row):
                             raise QuestionnaireError("A questionnaire table has an answer or choices but no question.")
                         continue
+                    if not QUESTION.match(question) and number_column is not None and row[number_column].isdigit():
+                        question = row[number_column] + ". " + question
                     parts.append(question if QUESTION.match(question) else "Q: " + question)
                     for index, header in enumerate(headers):
                         if header in list("abcdefgh") and row[index]:
                             parts.append(f"{header.upper()}. {row[index]}")
-                    for answer_header in ("answer", "correct answer"):
-                        if answer_header in headers and row[headers.index(answer_header)]:
-                            parts.append("Answer: " + row[headers.index(answer_header)])
+                    for index in answer_columns:
+                        if row[index]:
+                            parts.append("Answer: " + row[index])
+                    for index in explanation_columns:
+                        if row[index]:
+                            parts.append("Explanation: " + row[index])
+            elif number_column is not None and answer_columns:
+                parts.append("Answer key:")
+                for row in rows[1:]:
+                    if not any(row):
+                        continue
+                    if not row[number_column].isdigit():
+                        raise QuestionnaireError("An answer-key table needs a question number in every nonempty row.")
+                    for index in answer_columns:
+                        if row[index]:
+                            parts.append(row[number_column] + ". " + row[index])
+                    for index in explanation_columns:
+                        if row[index]:
+                            parts.append("Explanation: " + row[index])
             else:
                 for row in rows:
                     if len(row) == 2 and row[0].isdigit():
@@ -171,9 +259,24 @@ def _apply_answer_keys(records, scopes, blocks):
             if item["number"] not in keys:
                 continue
             key = keys[item["number"]]
+            key, inline_explanation = _split_explanation(key)
+            if item.get("options"):
+                # Textbook keys commonly print '1. b. <rationale>' without an
+                # Explanation label. A long prose body after the keyed letter
+                # is teaching text; a matching option remains ordinary answer
+                # text. Short mismatched labels still fail validation.
+                prose = re.fullmatch(r"\(?([A-Ha-h])\)?[.)]\s*(\S[\s\S]*)", key)
+                if prose and prose[1].upper() in item["labels"]:
+                    option = item["options"][item["labels"].index(prose[1].upper())]
+                    if _normalized(prose[2]) != _normalized(option) and len(prose[2].split()) >= 5:
+                        key, inline_explanation = prose[1], "\n".join(value for value in (prose[2], inline_explanation) if value)
             if item.get("key_answer") and item["key_answer"] != key:
                 raise QuestionnaireError(f"Conflicting answer keys for question {item['source_number']}.")
             item["key_answer"] = key
+            explanation = block.get("explanations", {}).get(item["number"], "")
+            for value in (inline_explanation, explanation):
+                if value and value != item.get("explanation"):
+                    _add_explanation(item, value)
 
 
 def parse_questionnaire(documents, limit=200):
@@ -194,20 +297,34 @@ def parse_questionnaire(documents, limit=200):
             raise QuestionnaireError(f"Answer key {number} is empty.")
         number = number.lstrip("0") or "0"
         keys = blocks[-1]["keys"]
-        if number in keys and keys[number] != value.strip():
+        answer, explanation = _split_explanation(value.strip())
+        if number in keys and keys[number] != answer:
             raise QuestionnaireError(f"Conflicting answer keys for question {number}.")
-        keys[number] = value.strip()
+        keys[number] = answer
+        if explanation:
+            blocks[-1].setdefault("explanations", {})[number] = explanation
+        return number
+
+    def put_key_explanation(number, value):
+        values = blocks[-1].setdefault("explanations", {})
+        values[number] = "\n".join(part for part in (values.get(number, ""), value.strip()) if part)
 
     for document_index, document in enumerate(documents):
         current, in_key, source = None, False, ""
+        last_key, key_explanation = None, False
         pending_images = []
         pending_image_labels = []
         scope = new_scope(document_index)
-        lines = document.splitlines()
+        lines = _questionnaire_lines(document)
         # Split same-line choices only at explicit labels; preserve their order.
         for line_index, raw_line in enumerate(lines):
             line = raw_line.strip()
+            recovered_answer = PDF_HIGHLIGHT_ANSWER.match(line)
+            if recovered_answer:
+                line = "Answer: " + recovered_answer[1]
             if not line:
+                if current is not None and current.get("in_explanation") and current.get("explanation"):
+                    current["explanation"] += "\n"
                 continue
             image = PDF_IMAGE.match(line)
             if image:
@@ -237,7 +354,7 @@ def parse_questionnaire(documents, limit=200):
                 if continues_current and source not in current["source_refs"]:
                     current["source_refs"].append(source)
                 continue
-            if SECTION.match(line) and not OPTION.match(line):
+            if (SECTION.match(line) or (_is_questionnaire_title(line) and not QUESTION.match(line))) and not OPTION.match(line):
                 following = next((value.strip() for value in lines[line_index + 1:] if value.strip()), "")
                 if current is not None and OPTION.match(following):
                     # A page/section heading can interrupt the choices of a
@@ -250,33 +367,57 @@ def parse_questionnaire(documents, limit=200):
             heading = KEY_HEADING.match(line)
             if heading:
                 in_key, current = True, None
-                blocks.append({"scope": len(scopes) - 1, "keys": {}})
+                last_key, key_explanation = None, False
+                blocks.append({"scope": len(scopes) - 1, "keys": {}, "explanations": {}})
                 line = heading[1].strip()
                 if not line:
                     continue
             # A new question after a key need not have an explicit section title.
             if in_key and QUESTION.match(line):
                 following = next((value.strip() for value in lines[line_index + 1:] if value.strip() and not SOURCE.match(value.strip())), "")
-                if "?" in line or OPTION.match(following) or ANSWER.match(following):
+                keyed_body = re.match(r"\(?[A-Ha-h]\)?[.)]?(?:\s|$)", QUESTION.match(line)[2])
+                if ("?" in line and not keyed_body) or OPTION.match(following) or ANSWER.match(following):
                     in_key = False
                     scope = new_scope(document_index)
             if in_key:
+                explanation = EXPLANATION.match(line)
+                if explanation:
+                    if last_key is None:
+                        raise QuestionnaireError("Place each answer-key explanation after its numbered answer.")
+                    put_key_explanation(last_key, explanation[1] or "")
+                    key_explanation = True
+                    continue
                 # Supports key columns such as '1. B  2. C', including one-letter answers.
                 entries = list(re.finditer(r"(?:^|\s+)(\d+)\s*[.):=\-]\s*", line))
                 if not entries:
+                    if last_key is not None:
+                        if key_explanation or re.match(r"^\(?[A-Ha-h]\)?(?:[.)]|$)", blocks[-1]["keys"][last_key]):
+                            put_key_explanation(last_key, line)
+                            key_explanation = True
+                        else:
+                            blocks[-1]["keys"][last_key] += "\n" + line
+                        continue
                     raise QuestionnaireError("Use numbered answer keys, for example: 1. B or 2. Mitochondrion.")
                 for index, match in enumerate(entries):
                     end = entries[index + 1].start() if index + 1 < len(entries) else len(line)
-                    put_key(match[1], line[match.end():end])
+                    last_key = put_key(match[1], line[match.end():end])
+                    key_explanation = bool(blocks[-1]["explanations"].get(last_key))
                 continue
             numbered, qa = QUESTION.match(line), QA.match(line)
+            if numbered and current is not None and current.get("in_explanation"):
+                following = next((value.strip() for value in lines[line_index + 1:] if value.strip() and not SOURCE.match(value.strip())), "")
+                looks_like_question = ("?" in numbered[2] or re.match(r"(?:what|which|who|when|where|why|how|identify|name|state|give|list|define|match|choose|select)\b", numbered[2], re.I)
+                                       or OPTION.match(following) or ANSWER.match(following))
+                if int(numbered[1]) <= int(current["source_number"]) and not looks_like_question:
+                    _add_explanation(current, line)
+                    continue
             if numbered or qa:
                 printed_number = numbered[1] if numbered else str(len(records) + 1)
                 number = printed_number.lstrip("0") or "0"
                 if any(item["number"] == number for item in scope["records"]):
                     scope = new_scope(document_index)
                 question = numbered[2] if numbered else qa[1]
-                current = {"number": number, "source_number": printed_number, "question": question, "options": [], "labels": [], "answer": "", "answer_after_option": False, "source_refs": [source] if source else []}
+                current = {"number": number, "source_number": printed_number, "question": question, "options": [], "labels": [], "answer": "", "answer_after_option": False, "source_refs": [source] if source else [], "explanation": ""}
                 current["matching_prompts"] = []
                 if pending_images:
                     current["images"] = pending_images[:]
@@ -289,20 +430,52 @@ def parse_questionnaire(documents, limit=200):
                 if len(records) > limit:
                     raise QuestionnaireError(f"This questionnaire has more than {limit} questions. Select fewer pages or split it into smaller files; nothing was imported.")
                 # Numbered question can also have choices on the same line.
-                line = question
+                line, inline_explanation = _split_explanation(question)
+                if inline_explanation and "?" not in line and not re.search(r"\b(?:Correct\s+answer|Answer|Ans)\s*[:=]", line, re.I):
+                    # A stem can itself discuss a 'rationale:' or 'reason:'.
+                    # Inline teaching annotations need an answer/question
+                    # boundary; standalone explanation headings are handled
+                    # independently below.
+                    line, inline_explanation = question, ""
+                if inline_explanation:
+                    _add_explanation(current, inline_explanation)
+                    current["in_explanation"] = True
+                    current["question"] = line
                 inline = re.search(r"\s+(?=\(?[Aa][.)]\s+)", line)
                 if inline:
                     current["question"] = line[:inline.start()].rstrip()
                     line = line[inline.end():]
                 else:
-                    inline_answer = re.search(r"\s+(?:Correct\s+answer|Answer|Ans)\s*[:=]\s*", question, re.I)
+                    inline_answer = re.search(r"\s+(?:Correct\s+answer|Answer|Ans)\s*[:=]\s*", line, re.I)
                     if inline_answer:
-                        current["question"] = question[:inline_answer.start()].rstrip()
-                        current["answer"] = question[inline_answer.end():].strip()
+                        current["question"] = line[:inline_answer.start()].rstrip()
+                        current["answer"] = line[inline_answer.end():].strip()
                     continue
             if current is None:
                 # Titles/instructions before the first numbered question aren't items.
                 continue
+            explanation = EXPLANATION.match(line)
+            if explanation:
+                if (current["options"] and not current.get("matching_prompts")
+                        and re.match(r"^notes?\s*:\s*all(?:\s+(?:of\s+)?(?:the\s+)?(?:above|options|choices|statements|these))?\s+(?:are\s+|is\s+)?(?:the\s+)?correct\s+answers?\b", line, re.I)):
+                    current["noted_all_correct"] = True
+                _add_explanation(current, explanation[1] or "")
+                current["in_explanation"] = True
+                continue
+            if current.get("in_explanation") and not ANSWER.match(line) and not (numbered or qa):
+                _add_explanation(current, line)
+                continue
+            printed_option = OPTION.match(line)
+            inline_marker = INLINE_EXPLANATION.search(line)
+            if printed_option and inline_marker and inline_marker.start() <= printed_option.start(3):
+                # 'D. Rationale: a reason for an action' can be the literal
+                # option text, rather than an annotation after that option.
+                inline_explanation = ""
+            else:
+                line, inline_explanation = _split_explanation(line)
+            if inline_explanation:
+                _add_explanation(current, inline_explanation)
+                current["in_explanation"] = True
             if current["options"] and re.match(r"^[-–—]\s+", line):
                 current["commentary"] = True
                 continue
@@ -316,7 +489,11 @@ def parse_questionnaire(documents, limit=200):
                 if current["answer"] and current["answer"] != value:
                     raise QuestionnaireError(f"Conflicting answers for question {current['number']}.")
                 current["answer"] = value
+                # PDF highlight recovery can insert this answer between two
+                # paragraphs of side notes. Keep their explanation block open
+                # until the next actual question or explicit section.
                 current["answer_after_option"] = bool(current["options"] and re.fullmatch(r"\(?[A-Ha-h]\)?[.)]?", value))
+                current["answer_is_recovered"] = bool(recovered_answer)
                 continue
             option = OPTION.match(line)
             if option:
@@ -328,6 +505,11 @@ def parse_questionnaire(documents, limit=200):
                     current["answer"] = value
                     line = line[:inline_answer.start()].rstrip()
                 parts = re.split(r"\s+(?=\([A-Ha-h]\)\s+|[A-Ha-h][.)]\s+)", line)
+                if any(OPTION.match(part) is None for part in parts):
+                    # 'A. E. histolytica' starts with the option label A and
+                    # an abbreviated genus. Splitting leaves an empty option,
+                    # not another independently readable choice.
+                    parts = [line]
                 # A scientific abbreviation such as "C. difficile" can look
                 # like an inline choice. If that label occurs again as a
                 # standalone option before the next question, preserve the
@@ -360,7 +542,17 @@ def parse_questionnaire(documents, limit=200):
             if current.get("commentary"):
                 continue
             if current.get("answer_after_option") and current["options"]:
-                current["options"][-1] += "\n" + line
+                # A printed key already identifies an existing choice. Prose
+                # below it explains that answer, rather than extending the
+                # last (often incorrect) option. OCR keys are emitted after
+                # complete question blocks so wrapped choices stay intact.
+                if current.get("answer_is_recovered"):
+                    # A physical page break can split the final choice after
+                    # the extractor recorded a highlight on the first page.
+                    current["options"][-1] += "\n" + line
+                else:
+                    _add_explanation(current, line)
+                    current["in_explanation"] = True
             elif current["answer"]:
                 current["answer"] += "\n" + line
             elif current["options"]:
@@ -372,10 +564,12 @@ def parse_questionnaire(documents, limit=200):
         raise QuestionnaireError("No questions were recognized. Use numbered questions (1. Question or 1) Question), A./B./C./D. choices, and Answer: text or a numbered Answer key section. Scanned PDFs need OCR first.")
     _apply_answer_keys(records, scopes, blocks)
     for item in records:
+        item.pop("in_explanation", None)
+        item["explanation"] = item.get("explanation", "").strip()
         options, labels = item["options"], item["labels"]
-        if options and (len(options) < 2 or set(labels) != set("ABCDEFGH"[:len(options)])):
+        if options and (len(options) < 2 or sorted(labels) != [chr(index) for index in range(ord(min(labels)), ord(max(labels)) + 1)]):
             found = ", ".join(labels) or "none"
-            raise QuestionnaireError(f"Question {item['number']} has missing choices or unreadable labels (found: {found}). Make sure every choice from A onward is readable, or upload a clearer copy.")
+            raise QuestionnaireError(f"Question {item['number']} has missing choices or unreadable labels (found: {found}). Make sure every choice from its first printed label onward is readable, or upload a clearer copy.")
         if options:
             # OCR often reads two columns as A,C,B,D. Match text to its printed
             # label before resolving answer keys, so 'Both A and B' stays valid.
@@ -387,6 +581,13 @@ def parse_questionnaire(documents, limit=200):
         explicit = item["answer"] if not re.fullmatch(r"[_\s.\-]+", item["answer"]) else ""
         raw_key = item.pop("key_answer", "")
         key = raw_key if not re.fullmatch(r"[_\s.\-]+", raw_key) else ""
+        if item.pop("noted_all_correct", False):
+            if any(resolve_answer_values(value, options, labels) != options for value in (explicit, key) if value):
+                raise QuestionnaireError(f"The explicit all-options answer note conflicts with another key for question {item['source_number']}.")
+            item["answer"] = " | ".join(options)
+            item["correct_answers"] = options[:]
+            item["quiz_type"] = "checkbox"
+            continue
         if item.get("matching_prompts"):
             provided = resolve_matching_answers(explicit, item["matching_prompts"], options, labels) if explicit else []
             from_key = resolve_matching_answers(key, item["matching_prompts"], options, labels) if key else []
@@ -409,7 +610,18 @@ def parse_questionnaire(documents, limit=200):
     return records
 
 
-def validate_completion(records, payload, choice_mode):
+def _completion_explanation(record, entry, required):
+    supplied = questionnaire_item_explanation(record)
+    explanation = supplied or questionnaire_item_explanation(entry)
+    if required and (not explanation or (not supplied and _normalized(explanation) == _normalized(entry.get("answer", "")))):
+        raise QuestionnaireError(f"The explanation for question {record['number']} could not be completed.")
+    if not explanation:
+        return {}
+    return {"explanation": explanation,
+            "explanation_origin": record.get("explanation_origin", "provided") if supplied else "ai"}
+
+
+def validate_completion(records, payload, choice_mode, require_explanations=False):
     """Reject omissions, changed source answers, duplicate distractors and wrong keys."""
     entries = payload.get("items") if isinstance(payload, dict) else None
     if not isinstance(entries, list) or len(entries) != len(records):
@@ -427,9 +639,12 @@ def validate_completion(records, payload, choice_mode):
         answer = entry.get("answer")
         if entry.get("question") != record["question"] or not isinstance(answer, str) or not answer.strip() or entry.get("uncertain") is not False:
             raise QuestionnaireError(f"An answer for question {record['number']} could not be established. Supply an answer key and retry.")
+        if record["answer"] and answer != record["answer"]:
+            raise QuestionnaireError("The model changed a supplied answer.")
+        explanation = _completion_explanation(record, entry, require_explanations or record.get("explanation_required", False))
         if record.get("matching_prompts"):
-            if record.get("matching_pairs"):
-                raise QuestionnaireError("A supplied matching key must be used directly without model completion.")
+            supplied_pairs = record.get("matching_pairs") or []
+            supplied_by_prompt = {pair["prompt"]: pair["answer"] for pair in supplied_pairs}
             raw_pairs = entry.get("matching_pairs")
             if not isinstance(raw_pairs, list) or len(raw_pairs) != len(record["matching_prompts"]):
                 raise QuestionnaireError(f"The model did not complete every match in question {record['number']}.")
@@ -437,19 +652,25 @@ def validate_completion(records, payload, choice_mode):
             for pair in raw_pairs:
                 if not isinstance(pair, dict) or pair.get("prompt") not in record["matching_prompts"] or pair["prompt"] in used_prompts:
                     raise QuestionnaireError(f"The model returned invalid matches for question {record['number']}.")
-                if not isinstance(pair.get("match"), str) or not pair["match"].strip():
+                raw_match = pair.get("match", pair.get("answer"))
+                if not isinstance(raw_match, str) or not raw_match.strip():
                     raise QuestionnaireError(f"The model returned an empty match for question {record['number']}.")
-                match = resolve_answer(pair["match"], record["options"], record["labels"])
+                match = raw_match if raw_match in record["options"] else resolve_answer(raw_match, record["options"], record["labels"])
+                if supplied_pairs and match != supplied_by_prompt.get(pair["prompt"]):
+                    raise QuestionnaireError("The model changed a supplied matching answer.")
                 used_prompts.add(pair["prompt"])
                 mapping.append({"prompt": pair["prompt"], "answer": match})
             if used_prompts != set(record["matching_prompts"]):
                 raise QuestionnaireError(f"The model omitted a match in question {record['number']}.")
             if len({_normalized(pair["answer"]) for pair in mapping}) != len(mapping):
                 raise QuestionnaireError(f"The model repeated a match in question {record['number']}.")
+            if supplied_pairs:
+                mapping = supplied_pairs
             completed[record["number"]] = {
                 "answer": "\n".join(f"{pair['prompt']} — {pair['answer']}" for pair in mapping),
                 "matching_pairs": mapping,
                 "distractors": [],
+                **explanation,
             }
             continue
         if entry.get("question") != record["question"] or not isinstance(answer, str) or not answer.strip() or entry.get("uncertain") is not False:
@@ -472,13 +693,13 @@ def validate_completion(records, payload, choice_mode):
                 raise QuestionnaireError("The model did not supply three usable distractors.")
             if len({_normalized(value) for value in [answer, *distractors]}) != 4:
                 raise QuestionnaireError("Generated choices contain duplicate answers.")
-        completed[record["number"]] = {"answer": answer, "distractors": distractors}
+        completed[record["number"]] = {"answer": answer, "distractors": distractors, **explanation}
         if correct_answers:
             completed[record["number"]]["correct_answers"] = correct_answers
     return completed
 
 
-def validate_completion_partial(records, payload, choice_mode):
+def validate_completion_partial(records, payload, choice_mode, require_explanations=False):
     """Keep independently verified answers when another item in the batch fails."""
     entries = payload.get("items") if isinstance(payload, dict) else None
     if not isinstance(entries, list):
@@ -510,7 +731,7 @@ def validate_completion_partial(records, payload, choice_mode):
             errors[number] = f"The model omitted question {number}."
             continue
         try:
-            completed.update(validate_completion([record], {"items": [entry]}, choice_mode))
+            completed.update(validate_completion([record], {"items": [entry]}, choice_mode, require_explanations=require_explanations))
         except QuestionnaireError as exc:
             errors[number] = str(exc)
     return completed, errors
@@ -560,6 +781,75 @@ def match_existing_questionnaire_items(records, existing_items):
     return matched
 
 
+def _set_item_explanation(item, record, completion, existing=None):
+    supplied = questionnaire_item_explanation(record)
+    saved = questionnaire_item_explanation(existing) if existing else ""
+    generated = questionnaire_item_explanation(completion)
+    explanation = supplied or saved or generated
+    item["explanation"] = explanation
+    if explanation:
+        item["explanation_origin"] = (record.get("explanation_origin", "provided") if supplied else
+                                      existing.get("explanation_origin", "provided") if saved else
+                                      completion.get("explanation_origin", "ai"))
+    else:
+        item.pop("explanation_origin", None)
+    if record.get("explanation_required") and not explanation:
+        item["explanation_pending"] = True
+    else:
+        item.pop("explanation_pending", None)
+    if existing:
+        saved_notices = existing.get("import_notices")
+        notices = [value for value in saved_notices if isinstance(value, str)] if isinstance(saved_notices, list) else []
+        legacy = str(existing.get("explanation") or "")
+        notices.extend(notice for notice in IMPORT_NOTICES if notice in legacy)
+        if notices:
+            item["import_notices"] = list(dict.fromkeys(notices))
+
+
+def _refresh_existing_choices(saved, record):
+    """Repair source choice extraction without silently changing a saved key."""
+    number = record.get("source_number", record["number"])
+    answer = saved["answer"]
+    if record.get("answer") and answer != record["answer"]:
+        raise QuestionnaireError(f"The saved answer for question {number} conflicts with its supplied source key. Review the saved answer before continuing this import.")
+    options = record.get("options") or []
+    if not options:
+        # Identification imports may already have generated distractors.
+        # Their source contains no replacement choices, so retain them.
+        return
+    if record.get("matching_prompts"):
+        pairs = saved.get("matching_pairs") or []
+        expected_prompts = set(record["matching_prompts"])
+        supplied = {pair["prompt"]: pair["answer"] for pair in record.get("matching_pairs", [])}
+        if (not isinstance(pairs, list) or len(pairs) != len(expected_prompts)
+                or any(not isinstance(pair, dict) or pair.get("prompt") not in expected_prompts
+                       or pair.get("answer") not in options
+                       or (supplied and supplied.get(pair.get("prompt")) != pair.get("answer"))
+                       for pair in pairs)
+                or len({pair["prompt"] for pair in pairs}) != len(expected_prompts)
+                or len({pair["answer"] for pair in pairs}) != len(pairs)):
+            raise QuestionnaireError(f"The saved matching answers for question {number} do not match its current source choices. Review the saved matches before continuing this import.")
+        if saved.get("matching_options") is not None or saved.get("quiz_type") == "matching":
+            saved["matching_prompts"] = record["matching_prompts"][:]
+            saved["matching_options"] = options[:]
+            saved["option_labels"] = record["labels"][:]
+        return
+    values = record.get("correct_answers") if record.get("answer") == answer else saved.get("correct_answers")
+    if not values:
+        values = [answer] if answer in options else answer.split(" | ")
+    if (not isinstance(values, list) or not values or any(value not in options for value in values)
+            or len(set(values)) != len(values)):
+        raise QuestionnaireError(f"The saved answer for question {number} is not one of its current source choices. Review the saved answer before continuing this import.")
+    if saved.get("correct_answer") is not None and saved["correct_answer"] != answer:
+        raise QuestionnaireError(f"The saved answer fields for question {number} disagree. Review the saved answer before continuing this import.")
+    if saved.get("options") is not None:
+        saved["options"] = options[:]
+        saved["option_labels"] = record["labels"][:]
+        saved["correct_answer"] = answer
+        if saved.get("correct_answers") is not None or record.get("correct_answers"):
+            saved["correct_answers"] = values[:]
+
+
 def convert_questionnaire(records, study_format, completions, existing_items=None, allow_incomplete=False, preserve_types=None):
     items = []
     preserve_types = {str(value) for value in (preserve_types or ())}
@@ -579,6 +869,8 @@ def convert_questionnaire(records, study_format, completions, existing_items=Non
                     saved["image_labels"] = record["image_labels"]
             if record.get("source_refs"):
                 saved["source_refs"] = record["source_refs"]
+            _refresh_existing_choices(saved, record)
+            _set_item_explanation(saved, record, completions.get(record["number"], {}), existing)
             items.append(saved)
             continue
         inferred = not bool(record["answer"])
@@ -613,10 +905,11 @@ def convert_questionnaire(records, study_format, completions, existing_items=Non
                     matching_prompts=record["matching_prompts"],
                     matching_options=record["options"],
                     matching_pairs=matching_pairs,
+                    option_labels=record["labels"][:],
                 )
             elif record["options"]:
                 quiz_type = "checkbox" if record_format == "checkbox" or record.get("quiz_type") == "checkbox" or len(correct_answers or [answer]) > 1 else "multiple_choice"
-                item.update(quiz_type=quiz_type, options=record["options"], correct_answer=answer)
+                item.update(quiz_type=quiz_type, options=record["options"], option_labels=record["labels"][:], correct_answer=answer)
             else:
                 item["quiz_type"] = "identification"
         elif study_format in {"multiple_choice", "checkbox"}:
@@ -633,8 +926,10 @@ def convert_questionnaire(records, study_format, completions, existing_items=Non
                 offset = len(items) % 4
                 options = options[offset:] + options[:offset]
                 notices.append("Choices added by AI. Review them for accuracy.")
-            item.update(options=options, correct_answer=answer)
-        item["explanation"] = " ".join(notices)
+            item.update(options=options, option_labels=record["labels"][:] if record["options"] else list("ABCDEFGH"[:len(options)]), correct_answer=answer)
+        _set_item_explanation(item, record, completion)
+        if notices:
+            item["import_notices"] = notices
         items.append(item)
     return items
 

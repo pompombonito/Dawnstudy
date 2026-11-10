@@ -27,16 +27,168 @@ def prepare_questionnaire_image(image):
     return clean, mask
 
 
-def _label(text):
+def _label(text, allow_bare=True):
     # Copyright-shaped 'c' is a common OCR confusion in lower-case option labels.
     text = text.replace("©.", "c.")
     text = re.sub(r"^([bB])[hH]([.)])", r"\1\2", text)
-    match = re.match(r"^(?:\(([A-Ha-h])\)|([A-Ha-h])[.)])\s*(.*)$", text)
+    match = re.match(r"^(?:\(([A-Ha-h])\)|([A-Ha-h])[.,)])\s*(.*)$", text)
     if match:
         return (match[1] or match[2]).upper(), match[3]
-    if re.fullmatch(r"[A-Ha-h]", text):
+    if allow_bare and re.fullmatch(r"[A-Ha-h]", text):
         return text.upper(), ""
     return None
+
+
+def _repair_option_glyphs(lines):
+    """Repair label OCR only at measured choice margins and within a sequence.
+
+    This does not supply option text. A digit resembling an A, or a cent sign
+    resembling C, must occupy the same margin as other printed choices and
+    agree with neighboring labels before it can become a choice boundary.
+    """
+    lines = [[dict(word) for word in sorted(words, key=lambda word: word["left"])] for words in lines]
+    # A faint label can be split into a tiny orphan block and its punctuation
+    # beside the actual option text. The orphan is label artwork, not prose
+    # continuing a later question in Tesseract's block order.
+    lines = [words for words in lines if not (len(words) == 1
+             and re.fullmatch(r"[nN][.,)]", words[0]["text"])
+             and any(other is not words and other[0]["text"] in {".", "·"}
+                     and 0 <= other[0]["left"] - words[0]["left"] <= 24
+                     and abs(min(word["top"] for word in other) - words[0]["top"]) <= max(20, words[0]["height"])
+                     for other in lines))]
+    margins = [words[0]["left"] for words in lines if words and _label(words[0]["text"], allow_bare=False)]
+
+    def aligned(words):
+        return words and any(abs(words[0]["left"] - margin) <= max(18, words[0]["height"] * .7) for margin in margins)
+
+    active, previous = False, None
+    for index, words in enumerate(lines):
+        if not words:
+            continue
+        token = words[0]["text"]
+        if re.fullmatch(r"\d+[.)]", token) and not aligned(words):
+            active, previous = True, None
+            continue
+        if not active:
+            continue
+        explicit = _label(token, allow_bare=False)
+        if explicit:
+            previous = explicit[0]
+            continue
+        if not aligned(words):
+            continue
+        expected = chr(ord(previous) + 1) if previous else "A"
+        if expected > "H":
+            continue
+        upcoming = []
+        for following in lines[index + 1:]:
+            next_token = following[0]["text"]
+            if re.fullmatch(r"\d+[.)]", next_token) and not aligned(following):
+                break
+            if aligned(following):
+                label = _label(next_token, allow_bare=False)
+                if label:
+                    upcoming.append(label[0])
+                    break
+                if re.fullmatch(r"[.·]|[1-8][.,)]?|[nN][.,)]", next_token):
+                    upcoming.append(None)
+        c_shape = bool(re.fullmatch(r"[<¢€©(oO][.,)]?", token))
+        a_shape = bool(re.fullmatch(r"[aA][0o]", token))
+        number_or_dot = bool(re.fullmatch(r"[.·]|[1-8][.,)]?|[nN][.,)]", token))
+        bare = _label(token)
+        confirmed = (c_shape and expected == "C" and (not upcoming or upcoming[-1] == "D"))
+        confirmed = confirmed or (a_shape and expected == "A" and upcoming[:1] == ["B"])
+        confirmed = confirmed or (number_or_dot and (
+            (expected == "A" and upcoming[:1] == ["B"])
+            or (expected == "C" and (upcoming[:1] == ["D"] or upcoming == [None]))
+            or (expected == "D" and not upcoming)))
+        confirmed = confirmed or (bare and bare[0] == expected
+                                   and upcoming[:1] == [chr(ord(expected) + 1)])
+        if confirmed:
+            words[0]["text"] = expected + "."
+            previous = expected
+    return lines
+
+
+def _recover_missing_choice_rows(tsv, source):
+    """Re-read one measured missing choice line instead of inventing its text.
+
+    A full-page pass can miss a short highlighted option. Only a single-label
+    gap between two aligned, recognized neighboring choices is eligible. The
+    green channel removes yellow/green highlighter contrast while retaining
+    the printed dark text. Local OCR results keep original page coordinates.
+    """
+    import tessdata
+    import tesserocr
+
+    if not tsv.startswith("level\t"):
+        tsv = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n" + tsv
+
+    lines = _repair_option_glyphs(_tsv_lines(tsv))
+    additions = []
+    for index, words in enumerate(lines):
+        first = _label(words[0]["text"], allow_bare=False)
+        if not first:
+            continue
+        following = None
+        for candidate in lines[index + 1:]:
+            if re.fullmatch(r"\d+[.)]", candidate[0]["text"]):
+                break
+            label = _label(candidate[0]["text"], allow_bare=False)
+            if label:
+                following = candidate, label[0]
+                break
+        if not following or ord(following[1]) - ord(first[0]) != 2:
+            continue
+        after, _label_after = following
+        if abs(words[0]["left"] - after[0]["left"]) > 20:
+            continue
+        top = max(word["top"] + word["height"] for word in words) + 1
+        bottom = min(word["top"] for word in after) - 1
+        if not 12 <= bottom - top <= min(120, source.height * .05):
+            continue
+        left = max(0, min(words[0]["left"], after[0]["left"]) - 8)
+        other_margins = [row[0]["left"] for row in lines
+                         if _label(row[0]["text"], allow_bare=False) and row[0]["left"] > left + source.width * .15]
+        right = min(other_margins) - 20 if other_margins else source.width - 10
+        if right <= left:
+            continue
+        with source.getchannel("G") as channel, channel.crop((left, top, right, bottom)) as crop:
+            with tesserocr.PyTessBaseAPI(path=tessdata.data_path(), lang="eng", psm=tesserocr.PSM.SINGLE_LINE) as ocr:
+                ocr.SetImage(crop)
+                ocr.Recognize()
+                recognized = _tsv_lines(ocr.GetTSVText(0))
+        if len(recognized) != 1 or len(recognized[0]) < 2:
+            continue
+        recovered = sorted(recognized[0], key=lambda word: word["left"])
+        expected = chr(ord(first[0]) + 1)
+        recognized_label = _label(recovered[0]["text"], allow_bare=False)
+        c_shape = expected == "C" and re.fullmatch(r"[<¢€©(oO][.,)]?", recovered[0]["text"])
+        if not ((recognized_label and recognized_label[0] == expected) or c_shape):
+            continue
+        recovered[0]["text"] = expected + "."
+        additions.append((after[0]["left"], after[0]["top"], [
+            {**word, "left": word["left"] + left, "top": word["top"] + top}
+            for word in recovered]))
+        if len(additions) >= 8:
+            break
+    if not additions:
+        return tsv
+    rows = list(csv.DictReader(StringIO(tsv), delimiter="\t", quoting=csv.QUOTE_NONE))
+    header = list(rows[0])
+    result = StringIO()
+    writer = csv.DictWriter(result, fieldnames=header, delimiter="\t", lineterminator="\n")
+    writer.writeheader()
+    pending = list(enumerate(additions, 1))
+    for row in rows:
+        for ordinal, (left, top, recovered) in list(pending):
+            if row.get("level") == "5" and int(row.get("left", -1)) == left and int(row.get("top", -1)) == top:
+                for number, word in enumerate(recovered, 1):
+                    writer.writerow({**row, **word, "block_num": f"recovered-{ordinal}",
+                                     "par_num": 1, "line_num": 1, "word_num": number, "conf": 90})
+                pending.remove((ordinal, (left, top, recovered)))
+        writer.writerow(row)
+    return result.getvalue()
 
 
 def _tsv_lines(tsv):
@@ -58,19 +210,30 @@ def _tsv_lines(tsv):
 
 def questionnaire_text_from_tsv(tsv, highlight_mask, reading_order="rows"):
     """Keep page rows/choice labels; AUTO OCR can preserve detected column blocks."""
-    lines = _tsv_lines(tsv)
+    lines = _repair_option_glyphs(_tsv_lines(tsv))
     ordered = lines if reading_order == "blocks" else sorted(lines, key=lambda words: (min(word["top"] for word in words), min(word["left"] for word in words)))
-    output = []
+    output, pending_keys = [], []
+    in_question = False
+    def flush_keys():
+        if pending_keys:
+            output.append("Answer: " + " | ".join(dict.fromkeys(pending_keys)))
+            pending_keys.clear()
     for words in ordered:
         words.sort(key=lambda word: word["left"])
-        first_label = _label(words[0]["text"])
+        raw = " ".join(word["text"] for word in words)
+        if re.match(r"\s*(?:Q(?:uestion)?\s*)?\d+[.)]\s+\S", raw, re.I):
+            flush_keys()
+            in_question = True
+        if re.match(r"\s*FIGURE\s+\d+(?:[-.]\d+)*\b", raw, re.I):
+            continue
+        first_label = _label(words[0]["text"], allow_bare=False)
         if not first_label:
-            output.append(" ".join(word["text"] for word in words))
+            output.append(raw)
             continue
         segments, segment = [], []
         for word in words:
             gap = word["left"] - (segment[-1]["left"] + segment[-1]["width"]) if segment else 0
-            if segment and _label(word["text"]) and gap >= max(12, word["height"]):
+            if segment and _label(word["text"], allow_bare=False) and gap >= max(12, word["height"]):
                 segments.append(segment)
                 segment = []
             segment.append(word)
@@ -88,8 +251,9 @@ def questionnaire_text_from_tsv(tsv, highlight_mask, reading_order="rows"):
                 continue
             histogram = highlight_mask.crop((left, top, right, bottom)).histogram()
             fraction = histogram[255] / ((right - left) * (bottom - top))
-            if fraction >= .18:
-                output.append(f"Answer: {label}")
+            if in_question and fraction >= .18:
+                pending_keys.append(label)
+    flush_keys()
     return "\n".join(output)
 
 
@@ -172,39 +336,59 @@ def _ocr_questionnaire_image_local(image, include_images=True):
         clean.close()
         mask.close()
         raise
+    source = image.convert("RGB").resize(clean.size, Image.Resampling.LANCZOS)
+    tsv = _recover_missing_choice_rows(tsv, source)
     text = questionnaire_text_from_tsv(tsv, mask, reading_order="blocks")
     if not include_images:
         clean.close()
         mask.close()
+        source.close()
         return text
 
-    anchors = []
-    for words in _tsv_lines(tsv):
+    anchors, captions = [], []
+    for words in _repair_option_glyphs(_tsv_lines(tsv)):
         words.sort(key=lambda word: word["left"])
         line = " ".join(word["text"] for word in words)
         number = re.match(r"\s*(\d+)[.)]\s+\S", line)
         if number:
             anchors.append({"number": number[1], "x": min(word["left"] for word in words),
-                            "y": min(word["top"] for word in words), "text": line})
+                            "y": min(word["top"] for word in words), "text": line,
+                            "ordinal": len(anchors)})
+        caption = re.match(r"\s*(FIGURE\s+\d+(?:[-.]\d+)*)\b", line, re.I)
+        if caption and anchors:
+            captions.append({"label": caption[1].capitalize(), "owner": anchors[-1],
+                             "left": min(word["left"] for word in words),
+                             "right": max(word["left"] + word["width"] for word in words),
+                             "top": min(word["top"] for word in words)})
     attached = defaultdict(list)
     # clean and mask can be resized versions of the source image. Use the
     # identical geometry for detected word masks and figure crop coordinates.
-    source = image.convert("RGB").resize(clean.size, Image.Resampling.LANCZOS)
     for bounds in scanned_figure_regions(source, tsv):
         center_x, center_y = (bounds[0]+bounds[2])/2, (bounds[1]+bounds[3])/2
         candidates = [anchor for anchor in anchors if anchor["y"] <= bounds[1] + 20]
         if not candidates:
             continue
-        anchor = min(candidates, key=lambda item: (abs(item["x"]-center_x) / source.width + abs(item["y"]-center_y) / source.height))
-        if abs(anchor["y"]-center_y) > source.height * .45:
+        nearby = [caption for caption in captions
+                  if min(bounds[2], caption["right"]) > max(bounds[0], caption["left"])
+                  and abs(caption["top"] - bounds[3]) <= source.height * .05]
+        caption = min(nearby, key=lambda item: abs(item["top"] - bounds[3])) if nearby else None
+        anchor = caption["owner"] if caption else min(candidates, key=lambda item: (abs(item["x"]-center_x) / source.width + abs(item["y"]-center_y) / source.height))
+        if not caption and abs(anchor["y"]-center_y) > source.height * .45:
             continue
         with source.crop(bounds) as figure:
             data = image_data_url(figure)
         if data:
-            attached[anchor["number"]].append(data)
-    for number, images in attached.items():
-        pattern = re.compile(r"(?m)^(\s*" + re.escape(number) + r"[.)]\s+[^\n]+)$")
-        text = pattern.sub(lambda match: match[0] + "\n" + "\n".join(f"[PDF_IMAGE: {data}]" for data in images), text, count=1)
+            attached[anchor["ordinal"]].append((data, caption["label"] if caption else None))
+    starts = list(re.finditer(r"(?m)^\s*\d+[.)]\s+[^\n]+", text))
+    for ordinal in reversed(range(len(starts))):
+        markers = []
+        for data, caption in attached.get(ordinal, []):
+            markers.append(f"[PDF_IMAGE: {data}]")
+            if caption:
+                markers.append(f"[PDF_IMAGE_CAPTION: {caption}]")
+        if markers:
+            end = starts[ordinal].end()
+            text = text[:end] + "\n" + "\n".join(markers) + text[end:]
     clean.close()
     mask.close()
     source.close()

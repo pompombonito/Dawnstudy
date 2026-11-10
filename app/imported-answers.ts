@@ -1,6 +1,6 @@
 type ImportedCard = { answer: string; correct_answer?: string; correct_answers?: string[]; options?: string[] };
 
-const normalize = (value: string) => value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+const normalize = (value: string) => value.normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase();
 
 function correctAnswers(card: ImportedCard): string[] {
   return card.correct_answers?.length ? card.correct_answers : [card.correct_answer || card.answer];

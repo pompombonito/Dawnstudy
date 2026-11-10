@@ -63,6 +63,8 @@ test("matching grades every prompt and preserves answer punctuation", () => {
   assert.equal(quizAnswerIsCorrect(card, "same_as_source", { First: "C++", Second: "C#" }), true);
   assert.equal(quizAnswerIsCorrect(card, "same_as_source", { First: "C#", Second: "C++" }), false);
   assert.equal(quizAnswerIsCorrect(card, "same_as_source", { First: "C++" }), false);
+  assert.equal(quizAnswerIsCorrect(card, "same_as_source", { First: "C++", Second: "C#", Extra: "C#" }), false);
+  assert.equal(quizAnswerIsCorrect({ ...card, matching_pairs: [] }, "same_as_source", { First: "C++", Second: "C#" }), false);
 });
 
 test("imported source answers remain literal and single-answer quizzes reject extra responses", () => {
@@ -79,4 +81,17 @@ test("imported checkbox keys use structured answers and retain literal pipes ins
   assert.equal(quizAnswerIsCorrect(card, "same_as_source", ["x", "y", "C++"]), false);
   assert.equal(quizAnswerIsCorrect(card, "same_as_source", ["x | y", "C#"]), false);
   assert.equal(quizAnswerIsCorrect(card, "identification", "x | y | C++"), false);
+});
+
+test("written imported multi-answer questions preserve literal pipes with one answer per line", () => {
+  const card = { imported: true, quiz_type: "checkbox", answer: "x | y | C++", correct_answers: ["x | y", "C++"] };
+  assert.equal(quizAnswerIsCorrect(card, "checkbox", "C++\nx | y"), true);
+  assert.equal(quizAnswerIsCorrect(card, "checkbox", "C++ | x | y"), false);
+  assert.equal(quizAnswerIsCorrect(card, "checkbox", "C++\nx\ny"), false);
+});
+
+test("compatibility-equivalent source lettering matches without discarding punctuation", () => {
+  const card = { imported: true, answer: "C++" };
+  assert.equal(quizAnswerIsCorrect(card, "identification", "Ｃ＋＋"), true);
+  assert.equal(quizAnswerIsCorrect(card, "identification", "C#"), false);
 });

@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { Copy, Flag, Gamepad2, Trophy, Volume2, VolumeX } from "lucide-react";
 import Avatar from "../components/Avatar";
 import StudyFigures from "../components/StudyFigures";
+import AnswerExplanation from "../components/AnswerExplanation";
+import { choiceLabel } from "../choice-labels";
 import { communityApi } from "./api";
 import type { Community } from "./useCommunity";
 import type { Game } from "./types";
@@ -541,7 +543,7 @@ export default function GameRoom({
               </div>
               <h3>{game.question?.question}</h3>
               {game.question && <StudyFigures card={game.question}/>}
-              {questionKind === "matching" ? <div className="matching-rows">{(game.question?.matching_prompts || []).map((prompt, index) => <label className="matching-row" key={`${index}-${prompt}`}><span>{prompt}</span><select value={matchingAnswers[prompt] || ""} disabled={game.answered || game.phase !== "question" || busy} onChange={(event) => setAnswer({ ...matchingAnswers, [prompt]: event.target.value })}><option value="">Choose a match</option>{(game.question?.matching_options || []).map((option, optionIndex) => <option key={`${optionIndex}-${option}`} value={option} disabled={Object.entries(matchingAnswers).some(([other, value]) => other !== prompt && value === option)}>{String.fromCharCode(65 + optionIndex)}. {option}</option>)}</select></label>)}</div> : game.question?.options?.length ? (
+              {questionKind === "matching" ? <div className="matching-rows">{(game.question?.matching_prompts || []).map((prompt, index) => <label className="matching-row" key={`${index}-${prompt}`}><span>{prompt}</span><select value={matchingAnswers[prompt] || ""} disabled={game.answered || game.phase !== "question" || busy} onChange={(event) => setAnswer({ ...matchingAnswers, [prompt]: event.target.value })}><option value="">Choose a match</option>{(game.question?.matching_options || []).map((option, optionIndex) => <option key={`${optionIndex}-${option}`} value={option} disabled={Object.entries(matchingAnswers).some(([other, value]) => other !== prompt && value === option)}>{choiceLabel(game.question!, optionIndex)}. {option}</option>)}</select></label>)}</div> : game.question?.options?.length ? (
                 <div className="game-options">
                   {game.question.options.map((option, i) => (
                     <button
@@ -570,7 +572,7 @@ export default function GameRoom({
                         else setAnswer(option);
                       }}
                     >
-                      <b>{String.fromCharCode(65 + i)}</b>
+                      <b>{choiceLabel(game.question!, i)}</b>
                       {option}
                     </button>
                   ))}
@@ -624,7 +626,7 @@ export default function GameRoom({
                         : game.question?.answer}
                     </strong>
                   </p>
-                  <p>{game.question?.explanation}</p>
+                  {game.question && <AnswerExplanation card={game.question} revealed={game.phase === "reveal"}/>}
                   <small>Next round in {remaining}s</small>
                 </div>
               )}

@@ -54,7 +54,7 @@ class QuestionnaireMixedAnswerTests(unittest.TestCase):
     def test_supplied_matching_keys_are_used_verbatim_without_ai(self):
         for key in ("1-B; 2-A", "Second term: A; First term: B", "B, A"):
             with self.subTest(key=key):
-                source = f"1. Match each term to its description.\n__First term\n__Second term\nA. First description\nB. Second description\nAnswer: {key}"
+                source = f"1. Match each term to its description.\n__First term\n__Second term\nA. First description\nB. Second description\nAnswer: {key}\nExplanation: The source key supplies the complete associations between the terms and descriptions."
                 with patch.object(main, "configured_ai_models", side_effect=AssertionError("A provided key must not require AI")):
                     items, _models, incomplete, requested, _unresolved = main.import_questionnaire([source], "same_as_source", "auto")
                 self.assertEqual(requested, 1)
@@ -67,7 +67,7 @@ class QuestionnaireMixedAnswerTests(unittest.TestCase):
 
     def test_select_all_source_is_never_silently_reduced_to_single_answer(self):
         source = ("1. Select all correct values.\nA. Alpha\nB. Beta\nC. Gamma\n"
-                  "Answer: A | C")
+                  "Answer: A | C\nExplanation: Alpha and Gamma satisfy the supplied source criteria.")
         items, _models, incomplete, _requested, _unresolved = main.import_questionnaire(
             [source], "multiple_choice", "auto", type_policy="convert")
         self.assertFalse(incomplete)

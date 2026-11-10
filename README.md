@@ -116,9 +116,11 @@ Uploaded file contents are held in memory for extraction and generation. `POST /
 
 Choose **Import questionnaire** in the material step, upload the questionnaire (and its answer key, if separate), then choose the quiz format. All recognized questions are imported in source order, up to 200; the notes-generation count and difficulty do not apply.
 
+Supplied explanations and rationales are preserved, including SIDE NOTES blocks and explanation columns in tables. When an explanation is missing, AI supplies it while retaining the original question and any supplied answer. Explanations appear after answering/revealing, with separate labels for source text and AI text; correct practice answers also show their explanations. Import notices remain separate. Generation keeps retrying temporary failures until required explanations are ready, and restart checkpoints retain explanation progress even when all questions are already present. See the [questionnaire audit and validation](docs/questionnaire-import-audit.md).
+
 - Flashcards / identification keep each question and only its correct answer, without choices.
 - Multiple choice keeps the original choice text and order. Identification questions receive three AI-generated distractors alongside the original answer.
-- Missing answers are inferred by the configured model and marked for review. Supplied answers are never overwritten by AI. Fully keyed imports needing no new choices make no model calls.
+- Missing answers are inferred by the configured model and marked for review. Supplied answers are never overwritten by AI. Imports with complete source answers, choices, and explanations make no model calls; other imports use AI only for the missing information.
 - Imported items retain their order on reopening, saving, sharing, and refresh. Existing history never excludes questions from an import.
 - Conflicting keys, unsupported layouts, and oversized questionnaires return explicit errors. Model omissions trigger smaller completion batches; temporary provider failures keep the job pending. Questions still lacking a verifiable answer are listed for correction, with verified items preserved rather than silently omitted. Cancellation remains available before saving.
 
