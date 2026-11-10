@@ -4,6 +4,24 @@ export type GenerationStatus = {
   status: GenerationJobState | "paused" | "reconnecting"; stage: string; message: string; completed: number; requested: number; model?: string | null; can_cancel?: boolean;
 };
 
+/** Count verified cards, including explanation-only questionnaire progress. */
+export function generationCheckpointProgress(checkpoint: unknown): { completed: number; requested: number } {
+  if (!checkpoint || typeof checkpoint !== "object") return { completed: 0, requested: 0 };
+  const saved = checkpoint as Record<string, unknown>;
+  const completed = Array.isArray(saved.items) ? saved.items.filter(item => item && typeof item === "object" && !item.explanation_pending).length : 0;
+  const requested = typeof saved.requested_count === "number" && Number.isFinite(saved.requested_count) && saved.requested_count > 0
+    ? Math.floor(saved.requested_count) : 0;
+  return { completed, requested };
+}
+
+/** Call only within the same request; starting a new request resets its state. */
+export function mergeGenerationStatus(previous: GenerationStatus | null, next: GenerationStatus, ...checkpoints: unknown[]): GenerationStatus {
+  const retained = checkpoints.map(generationCheckpointProgress);
+  const completed = Math.max(previous?.completed || 0, Number.isFinite(next.completed) ? next.completed : 0, ...retained.map(progress => progress.completed));
+  const requested = retained.find(progress => progress.requested > 0)?.requested || (Number.isFinite(next.requested) && next.requested > 0 ? next.requested : previous?.requested || 0);
+  return { ...next, completed, requested, model: next.model ?? previous?.model };
+}
+
 /** Older jobs may report the notes default before discovering a PDF's real total. */
 export function generationReadyText(completed: number, requested: number): string {
   if (!Number.isFinite(completed) || completed < 0) return "";

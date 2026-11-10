@@ -19,7 +19,7 @@ import GameRoom from "./community/GameRoom";
 import CompanionDock from "./community/CompanionDock";
 import Agreement from "./community/Agreement";
 import { DawnArtwork, DawnMark } from "./components/DawnArtwork";
-import { cancelGenerationJob, findGenerationJob, generationReadyText, GenerationCancelledError, GenerationJobError, GenerationJobMissingError, pollGenerationJob, startGenerationJob, QuestionnaireTypeMismatchError, type GenerationJob, type GenerationStatus, type QuestionnaireMismatchPreview } from "./generation-jobs";
+import { cancelGenerationJob, findGenerationJob, generationReadyText, mergeGenerationStatus, GenerationCancelledError, GenerationJobError, GenerationJobMissingError, pollGenerationJob, startGenerationJob, QuestionnaireTypeMismatchError, type GenerationJob, type GenerationStatus, type QuestionnaireMismatchPreview } from "./generation-jobs";
 import { deleteUnsyncedStudyDraft, getUnsyncedStudyDraft, saveUnsyncedStudyDraft } from "./unsynced-study-drafts";
 import { captureGenerationRequest, deletePendingGenerationRequest, generationCheckpointRevision, getPendingGenerationRequest, restoreGenerationForm, savePendingGenerationRequest, updatePendingGenerationRequest, type PendingGenerationRequest } from "./pending-generation";
 import {
@@ -665,7 +665,7 @@ export default function Home() {
     await deletePendingGenerationRequest(userId, request.requestId).catch(() => undefined);
   }
 
-  function updateGenerationStatus(status: GenerationStatus, controller: AbortController) {
+  function updateGenerationStatus(status: GenerationStatus & { checkpoint?: unknown }, controller: AbortController) {
     if (controller.signal.aborted || generationController.current !== controller) return;
     if (status.status === "cancelling" || status.status === "cancelled") {
       generationCancelIntent.current = true;
@@ -676,9 +676,8 @@ export default function Home() {
       setGenerationCancelRequested(false);
       setGenerationCancelError("");
     }
-    setGenerationStatus((old) => status.completed < 0
-      ? { ...status, completed: old?.completed || 0, requested: old?.requested || 0, model: old?.model }
-      : status);
+    const request = generationRequest.current;
+    setGenerationStatus((old) => mergeGenerationStatus(old, status, status.checkpoint, request?.checkpoint, request?.base));
   }
 
   async function requestGenerationCancellation(jobId: string, token: string, controller: AbortController) {
@@ -808,6 +807,7 @@ export default function Home() {
       // Another tab/device already had active work. These newly selected files
       // do not belong to that job and must never be replayed as its sources.
       await clearGenerationRecovery(userId);
+      setGenerationStatus(null);
       request = null;
       pending = { job_id: job.job_id };
     }
@@ -1024,7 +1024,7 @@ export default function Home() {
         }
         const form = restoreGenerationForm(recovery);
         controller.signal.throwIfAborted();
-        setGenerationStatus({ status: "reconnecting", stage: "reconnecting", message: "The service restarted. Restoring your materials and completed questions…", completed: Array.isArray(recovery.checkpoint?.items) ? recovery.checkpoint.items.length : 0, requested: Number(form.get("question_count")) || 0 });
+        updateGenerationStatus({ status: "reconnecting", stage: "reconnecting", message: "The service restarted. Restoring your materials and completed questions…", completed: 0, requested: Number(form.get("question_count")) || 0 }, controller);
         job = await startGenerationJob<GenerationResult>(form, generationOptions(token, controller));
       }
       if (!job) {

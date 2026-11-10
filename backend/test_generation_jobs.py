@@ -28,6 +28,16 @@ class GenerationRecoveryTests(unittest.TestCase):
         self.assertIsNone(self.store.recover("alice"))
         self.assertIsNotNone(self.store.get(job_id, "alice"))
 
+    def test_retry_preparation_cannot_reset_verified_progress(self):
+        job_id = self.store.start("alice", 50)
+        self.store.update(job_id, status="running", stage="generating", completed=18)
+        self.store.defer(job_id, "Waiting for capacity")
+        for stage in ("reading", "preparing", "generating"):
+            self.store.update(job_id, status="running", stage=stage, completed=0)
+            self.assertEqual(self.store.get(job_id, "alice")["completed"], 18)
+        self.store.update(job_id, completed=22)
+        self.assertEqual(self.store.get(job_id, "alice")["completed"], 22)
+
     def test_other_accounts_cannot_read_or_acknowledge_a_job(self):
         job_id = self.store.start("alice", 10)
         self.assertIsNone(self.store.get(job_id, "bob"))

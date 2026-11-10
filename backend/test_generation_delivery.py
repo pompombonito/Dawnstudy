@@ -1,6 +1,7 @@
 """Offline end-to-end recovery contracts: no provider quota or real timers."""
 import copy
 import json
+import time
 import unittest
 from unittest.mock import patch
 from uuid import uuid4
@@ -10,13 +11,16 @@ from generation_jobs import GenerationJobs
 
 main = fixture.main
 real_generate_with_provider = main.generate_with_provider
+real_monotonic = time.monotonic
 
 
 class ManualTimer:
     pending = []
+    elapsed = 0
 
     def __init__(self, seconds, callback):
         self.seconds, self.callback, self.cancelled = seconds, callback, False
+        self.deadline = real_monotonic() + self.elapsed + seconds
 
     def start(self):
         self.pending.append(self)
@@ -26,7 +30,11 @@ class ManualTimer:
 
     def fire(self):
         if not self.cancelled:
-            self.callback()
+            # Firing a timer means its scheduled delay actually elapsed. Keep
+            # per-provider reset deadlines realistic without waiting in tests.
+            ManualTimer.elapsed = max(ManualTimer.elapsed, self.deadline - real_monotonic())
+            with patch.object(main.time, "monotonic", side_effect=lambda: real_monotonic() + ManualTimer.elapsed):
+                self.callback()
 
 
 class DeliveryTests(unittest.TestCase):
@@ -43,6 +51,7 @@ class DeliveryTests(unittest.TestCase):
         self.addCleanup(scoped_sets.stop)
         self.request_id = str(uuid4())
         ManualTimer.pending = []
+        ManualTimer.elapsed = 0
         timer_patch = patch.object(main.threading, "Timer", ManualTimer)
         timer_patch.start()
         self.addCleanup(timer_patch.stop)
@@ -253,6 +262,100 @@ class DeliveryTests(unittest.TestCase):
                 prompt, {"properties": {"items": {"items": {"properties": {}}}}}, choice[0], 1, study_format="flashcards")
         self.assertEqual(len(payload["items"]), 1)
         self.assertFalse(incomplete)
+
+    def test_deferral_reuses_document_and_resumes_the_same_source_window(self):
+        import re
+        self.fixture.material = ("Nucleic acids are polymers of nucleotides. " * 110
+                                 + "RNA translates genetic information into proteins. " * 110
+                                 + "DNA stores genetic information for inheritance. " * 110).encode()
+        prompts = []
+        provide = self.fixture.provide
+
+        def provider(*args):
+            prompts.append(re.search(r"<course_material>(.*?)</course_material>", args[3], re.S)[1])
+            if len(prompts) == 2:
+                raise main.ProviderError("groq", "groq:test", 429, "quota", retry_after=91)
+            return provide(*args)
+
+        self.fixture.provider.side_effect = provider
+        with patch.object(main, "extract_material", wraps=main.extract_material) as reader:
+            self.assertEqual(self.submit().status_code, 202)
+            self.assertEqual(self.job()["completed"], 2)
+            self.assertNotEqual(prompts[0], prompts[1])
+            ManualTimer.pending[-1].fire()
+            self.assertEqual(self.job()["status"], "complete", self.job())
+            self.assertEqual(reader.call_count, 1)
+        self.assertEqual(prompts[1], prompts[2])
+        self.assertEqual(len(self.job()["result"]["items"]), 6)
+
+    def test_short_provider_reset_does_not_erase_another_providers_long_reset(self):
+        models = [("groq:test", "groq", "test", "key", "First"),
+                  ("mistral:test", "mistral", "test", "key", "Second")]
+        calls = []
+        ready = [False]
+
+        def provider(provider, *_args):
+            calls.append(provider)
+            if not ready[0]:
+                raise main.ProviderError(provider, provider + ":test", 429, "quota",
+                                         retry_after=30 if provider == "groq" else 300)
+            return {"title": "Recovered", "items": [{"question": "What carries inherited information?", "answer": "DNA"}]}
+
+        self.fixture.provider.side_effect = provider
+        with patch.object(main, "configured_ai_models", return_value=models):
+            self.assertEqual(self.submit(1, model=models[0][0]).status_code, 202)
+            self.assertEqual(calls, ["groq", "mistral"])
+            ManualTimer.pending[-1].fire()
+            self.assertEqual(calls, ["groq", "mistral", "groq"])
+            self.assertEqual(self.job()["stage"], "waiting")
+            ready[0] = True
+            ManualTimer.pending[-1].fire()
+        self.assertEqual(calls, ["groq", "mistral", "groq", "groq"])
+        self.assertEqual(self.job()["status"], "complete")
+
+    def test_transient_failure_budget_survives_worker_deferral(self):
+        self.fixture.provider.side_effect = main.ProviderError("groq", "groq:test", 503, "temporarily unavailable")
+        self.assertEqual(self.submit(1).status_code, 202)
+        self.assertLessEqual(ManualTimer.pending[-1].seconds, 5)
+        ManualTimer.pending[-1].fire()
+        self.assertEqual(self.fixture.provider.call_count, 2)
+        self.assertEqual(ManualTimer.pending[-1].seconds, 60, "Do not restart the first transient retry indefinitely")
+        self.fixture.provider.side_effect = self.fixture.provide
+        ManualTimer.pending[-1].fire()
+        self.assertEqual(self.job()["status"], "complete")
+
+    def test_verified_diagrams_survive_deferral_without_more_extraction_or_vision_calls(self):
+        image = "data:image/webp;base64,AA=="
+        source_ref = "notes.docx · Part 1"
+        figure = {"id": "figure-1", "data_url": image, "source_ref": "Part 1", "context": "Chloroplasts contain thylakoids."}
+        def extract(_name, _raw, _range, **kwargs):
+            kwargs["extracted_figures"].append(figure)
+            return "[SOURCE: Part 1]\n" + self.fixture.material.decode(), ["Part 1"], []
+        provide = self.fixture.provide
+        calls = [0]
+        def provider(*args):
+            calls[0] += 1
+            if calls[0] == 2:
+                raise main.ProviderError("groq", "groq:test", 429, "quota", retry_after=91)
+            self.assertIn("file-0-figure-1", main._material_figures.get())
+            payload = provide(*args)
+            for item in payload["items"]:
+                item["figure_refs"] = ["file-0-figure-1"]
+            return payload
+        self.fixture.provider.side_effect = provider
+        with patch.object(main, "extract_material", side_effect=extract) as reader, \
+             patch.object(main, "describe_material_figures", return_value={"file-0-figure-1": {
+                 **figure, "source_ref": source_ref, "description": figure["context"],
+             }}) as vision:
+            response = self.client.post("/api/generation-jobs", data={"client_request_id": self.request_id,
+                "format": "flashcards", "question_count": "3", "include_images": "true"},
+                files={"files": ("notes.docx", b"fixture", "application/octet-stream")})
+            self.assertEqual(response.status_code, 202, response.text)
+            ManualTimer.pending[-1].fire()
+            self.assertEqual(self.job()["status"], "complete", self.job())
+            self.assertEqual(reader.call_count, 1)
+            self.assertEqual(vision.call_count, 1)
+        self.assertTrue(all(item["images"] == [image] for item in self.job()["result"]["items"]))
 
     def test_http_200_upstream_quota_is_routed_as_a_quota_with_validated_partial_output(self):
         from unittest.mock import Mock

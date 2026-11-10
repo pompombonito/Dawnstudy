@@ -7,12 +7,37 @@ const source = readFileSync(new URL("../app/generation-jobs.ts", import.meta.url
 const javascript = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
 }).outputText;
-const { findGenerationJob, startGenerationJob, cancelGenerationJob, pollGenerationJob, generationReadyText, GenerationJobError, GenerationCancelledError, QuestionnaireTypeMismatchError } =
+const { findGenerationJob, startGenerationJob, cancelGenerationJob, pollGenerationJob, generationReadyText, mergeGenerationStatus, generationCheckpointProgress, GenerationJobError, GenerationCancelledError, QuestionnaireTypeMismatchError } =
   await import("data:text/javascript;base64," + Buffer.from(javascript).toString("base64"));
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const running = { job_id: "job-1", status: "running", stage: "generating", message: "GPT-OSS is generating", completed: 8, requested: 20, model: "GPT-OSS" };
 const result = { id: "saved-set", title: "Recovered questions", items: [{ question: "Already generated" }] };
+
+test("retained progress never falls from 18 of 50 to zero while the same job retries", () => {
+  let status = { ...running, completed: 18, requested: 50 };
+  for (const stage of ["waiting", "queued", "reading", "preparing", "generating", "reconnecting"]) {
+    status = mergeGenerationStatus(status, { ...running, status: "running", stage, completed: 0, requested: 50 });
+    assert.equal(generationReadyText(status.completed, status.requested), "18 of 50 questions ready");
+    assert.equal(status.stage, stage);
+  }
+  status = mergeGenerationStatus(status, { ...running, completed: 22, requested: 50 });
+  assert.equal(status.completed, 22);
+  status = mergeGenerationStatus(status, { ...running, completed: -1, requested: 0, model: null });
+  assert.equal(status.completed, 22);
+  assert.equal(status.requested, 50);
+  assert.equal(status.model, "GPT-OSS");
+});
+
+test("reload uses verified checkpoint count and continuation total before the server catches up", () => {
+  const checkpoint = { requested_count: 50, items: Array.from({ length: 18 }, () => ({ question: "Verified" })) };
+  const recovered = mergeGenerationStatus(null, { ...running, completed: 0, requested: 32 }, checkpoint);
+  assert.equal(generationReadyText(recovered.completed, recovered.requested), "18 of 50 questions ready");
+  assert.equal(mergeGenerationStatus(null, { ...running, completed: 0, requested: 50 }).completed, 0, "A new request starts at zero");
+  const explanations = { requested_count: 2, items: [{ question: "Ready" }, { question: "Needs explanation", explanation_pending: true }] };
+  assert.deepEqual(generationCheckpointProgress(explanations), { completed: 1, requested: 2 });
+  assert.equal(mergeGenerationStatus(null, { ...running, completed: 0, requested: 10 }, explanations).requested, 2, "A discovered questionnaire total replaces the old default");
+});
 const options = (fetcher, controller = new AbortController()) => ({
   baseUrl: "https://api.example", token: "own-account-token", signal: controller.signal, fetcher, intervalMs: 0, timeoutMs: 1000,
 });

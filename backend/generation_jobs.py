@@ -79,6 +79,11 @@ class GenerationJobs:
             job = self.jobs.get(job_id)
             if not job or job["status"] in self.TERMINAL:
                 return False
+            if "completed" in fields:
+                # Reading/preparation callbacks default to zero on a retry.
+                # Verified work belongs to this job and cannot be lost merely
+                # because its worker or provider is starting another attempt.
+                fields["completed"] = max(job["completed"], fields["completed"])
             if job["status"] == "cancelling":
                 # A provider can finish after cancellation was requested. Its
                 # progress callback must not make the job appear active again.
