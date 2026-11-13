@@ -154,7 +154,7 @@ try {
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await page
-    .locator('input[type="file"]')
+    .locator('input[type="file"][multiple]')
     .first()
     .setInputFiles({
       name: "notes.txt",

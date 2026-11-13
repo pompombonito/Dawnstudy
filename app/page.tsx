@@ -30,8 +30,13 @@ import {
 } from "lucide-react";
 
 type Kind = "flashcards" | "multiple_choice" | "checkbox" | "identification" | "same_as_source";
-type Card = ExplanationCard & { card_id?: string; question: string; answer: string; options?: string[]; option_labels?: string[]; correct_answer?: string; correct_answers?: string[]; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred"; images?: string[]; image_labels?: string[]; image_captions?: string[]; questionnaire_index?: number; quiz_type?: "multiple_choice" | "checkbox" | "identification" | "matching"; questionnaire_type_confirmed?: boolean; questionnaire_type_policy?: "convert" | "mixed"; matching_prompts?: string[]; matching_options?: string[]; matching_pairs?: { prompt: string; answer: string }[] };
-type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; source_url?: string; include_images?: boolean; created_at: string; material_fingerprint?: string; page_ranges?: Record<string, string>; focus_topic?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; questionnaire_type_confirmed?: boolean; questionnaire_type_policy?: "convert" | "mixed" | null; notices?: string[]; usage?: { remaining: number | null; limit: number | null; resets_at: string | null; unlimited?: boolean } };
+type Card = ExplanationCard & { card_id?: string; question: string; answer: string; options?: string[]; option_labels?: string[]; correct_answer?: string; correct_answers?: string[]; source_refs?: string[]; imported?: boolean; answer_origin?: "provided" | "inferred"; images?: string[]; image_labels?: string[]; image_captions?: string[]; questionnaire_index?: number; quiz_type?: "multiple_choice" | "checkbox" | "identification" | "matching"; questionnaire_type_confirmed?: boolean; questionnaire_type_policy?: "convert" | "mixed"; matching_prompts?: string[]; matching_options?: string[]; matching_pairs?: { prompt: string; answer: string }[]; statement_combinations?: boolean };
+type QuizBlueprint = {
+  title: string;
+  topics: { id: string; title: string; description: string; weight: number; group: string }[];
+};
+type BlueprintCoverage = { topic_id: string; requested: number; completed: number }[];
+type StudySet = { id: string; title: string; type: Kind; items: Card[]; sources?: { title: string; url: string }[]; source_url?: string; include_images?: boolean; created_at: string; material_fingerprint?: string; page_ranges?: Record<string, string>; focus_topic?: string; previous_question_count?: number; model?: string; models_used?: string[]; fallback?: { from: string; to: string; reason: string } | null; incomplete?: boolean; requested_count?: number; questionnaire_type_confirmed?: boolean; questionnaire_type_policy?: "convert" | "mixed" | null; notices?: string[]; usage?: { remaining: number | null; limit: number | null; resets_at: string | null; unlimited?: boolean }; statement_combinations?: boolean; quiz_blueprint?: QuizBlueprint | null; blueprint_coverage?: BlueprintCoverage };
 type ActiveShare = { set_id: string; title: string; token: string; created_at: string };
 type ReviewItem = { study_set_id: string; study_set_title: string; type: Kind; card: Card; retried?: boolean; intervals: { again: string; hard: string; good: string; easy: string } };
 type Progress = { total_reviews: number; reviewed_today: number; accuracy: number; current_streak: number; best_streak: number; due_count: number; total_cards: number; week: { date: string; reviews: number }[] };
@@ -81,6 +86,7 @@ function rememberGeneration(userId: string, pending: PendingGeneration | null) {
 const supportedFiles = new Set(["pdf", "pptx", "docx", "txt", "md", "png", "jpg", "jpeg", "webp"]);
 const maxFileBytes = 64 * 1024 * 1024;
 const maxCombinedFileBytes = 80 * 1024 * 1024;
+const maxQuizBlueprintBytes = 10 * 1024 * 1024;
 const voicePersonas: { id: VoicePersona; name: string; rate: number; pitch: number }[] = [
   { id: "warm_tutor", name: "Warm tutor", rate: 0.96, pitch: 1.04 },
   { id: "calm_mentor", name: "Calm mentor", rate: 0.88, pitch: 0.92 },
@@ -150,10 +156,29 @@ function quizTypeLabel(value: string) {
   return labels[value] || value.replaceAll("_", " ");
 }
 
-function studySetTypeLabel(studySet: Pick<StudySet, "type" | "items">) {
+function studySetTypeLabel(studySet: Pick<StudySet, "type" | "items" | "statement_combinations">) {
+  if (studySet.statement_combinations) return "Statement combinations";
   if (studySet.type === "same_as_source") return quizTypeLabel(studySet.type);
   if (studySet.items.some((card) => card.quiz_type && card.quiz_type !== studySet.type)) return "Mixed question types";
   return types.find((type) => type.id === studySet.type)?.title || quizTypeLabel(studySet.type);
+}
+
+function QuizBlueprintCoverage({ blueprint, coverage }: { blueprint: QuizBlueprint; coverage: BlueprintCoverage }) {
+  const byTopic = new Map(coverage.map((entry) => [entry.topic_id, entry]));
+  return <details className="scope-details quiz-coverage">
+    <summary><span>Quiz coverage</span><ChevronDown size={16}/></summary>
+    <ul>
+      {blueprint.topics.map((topic) => {
+        const entry = byTopic.get(topic.id);
+        if (!entry) return null;
+        const remaining = Math.max(0, entry.requested - entry.completed);
+        return <li key={topic.id}>
+          <strong>{topic.title}</strong>
+          <span>{entry.completed} of {entry.requested} ready{remaining > 0 && <span className="quiz-coverage-gap"> · {remaining} remaining</span>}</span>
+        </li>;
+      })}
+    </ul>
+  </details>;
 }
 
 function explanationGapCount(studySet: Pick<StudySet, "items">) {
@@ -189,6 +214,9 @@ export default function Home() {
   const [selected, setSelected] = useState<Kind>("flashcards");
   const [inputMode, setInputMode] = useState<"notes" | "questionnaire">("notes");
   const [files, setFiles] = useState<File[]>([]);
+  const [quizBlueprintFile, setQuizBlueprintFile] = useState<File | null>(null);
+  const [statementCombinations, setStatementCombinations] = useState(false);
+  const useStatementCombinations = inputMode === "notes" && selected === "multiple_choice" && statementCombinations;
   const [pageRanges, setPageRanges] = useState<Record<string, string>>({});
   const [websitePageRange, setWebsitePageRange] = useState("");
   const [focusTopic, setFocusTopic] = useState("");
@@ -281,6 +309,7 @@ export default function Home() {
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
   const input = useRef<HTMLInputElement>(null);
+  const quizBlueprintInput = useRef<HTMLInputElement>(null);
   const replaceFilesOnPick = useRef(false);
   const googleButton = useRef<HTMLDivElement>(null);
   const mediaRecorder = useRef<MediaRecorder | null>(null);
@@ -554,6 +583,16 @@ export default function Home() {
     setError("");
   }
 
+  function selectQuizBlueprint(file?: File) {
+    if (!file) return;
+    if (!/\.pdf$/i.test(file.name) || !file.size || file.size > maxQuizBlueprintBytes) {
+      setError("Choose a nonempty Table of Specifications PDF up to 10 MB.");
+      return;
+    }
+    setQuizBlueprintFile(file);
+    setError("");
+  }
+
   useEffect(() => {
     if (community.data?.profile?.theme && !themeSavesPending.current) setColorTheme(community.data.profile.theme);
   }, [community.data?.profile?.theme]);
@@ -611,6 +650,8 @@ export default function Home() {
 
   function beginStudySet() {
     setResult(null);
+    setQuizBlueprintFile(null);
+    setStatementCombinations(false);
     setReviewActive(false);
     setPracticeActive(false);
     setPracticeComplete(false);
@@ -749,6 +790,8 @@ export default function Home() {
     }
     if (signal.aborted) throw new DOMException("Generation monitoring stopped.", "AbortError");
     setActiveView("study"); setSelected(studySet.type); setResult(studySet); setCurrent(0);
+    setQuizBlueprintFile(null);
+    setStatementCombinations(false);
     resetStudyAnswer(); resetReviewAnswer(); setReviewActive(false); setPracticeActive(false); setPracticeComplete(false); setShareUrl("");
     setFocusTopic(studySet.focus_topic || "");
     if (studySet.source_url) {
@@ -767,7 +810,8 @@ export default function Home() {
         const body = JSON.stringify({ title: studySet.title, type: studySet.type, items: studySet.items,
           sources: studySet.sources || [], source_url: studySet.source_url || "", material_fingerprint: studySet.material_fingerprint,
           incomplete: studySet.incomplete || false, requested_count: studySet.requested_count || studySet.items.length,
-          page_ranges: studySet.page_ranges || {}, focus_topic: studySet.focus_topic || "", include_images: Boolean(studySet.include_images) });
+          page_ranges: studySet.page_ranges || {}, focus_topic: studySet.focus_topic || "", include_images: Boolean(studySet.include_images),
+          statement_combinations: studySet.statement_combinations, quiz_blueprint: studySet.quiz_blueprint, blueprint_coverage: studySet.blueprint_coverage });
         const headers = { "Content-Type": "application/json", Authorization: "Bearer " + token };
         const saved = await fetch(API_BASE + "/api/study-sets/" + encodeURIComponent(studySet.id), {
           method: "PUT", headers, body, signal: AbortSignal.any([signal, AbortSignal.timeout(90_000)]),
@@ -788,9 +832,14 @@ export default function Home() {
     }
     if (signal.aborted) throw new DOMException("Generation monitoring stopped.", "AbortError");
     if (synced) setSets((old) => [studySet, ...old.filter((item) => item.id !== studySet.id && item.id !== base?.id)].slice(0, 100));
+    const count = studySet.items.length;
+    const requested = Math.max(count, studySet.requested_count || 0);
+    const incompleteAction = studySet.quiz_blueprint
+      ? "Open Quiz coverage to see the remaining topics."
+      : "Continue generating to retry the remaining questions.";
     const notices = [studySet.incomplete
-      ? `${studySet.items.length} of ${Math.max(studySet.items.length, studySet.requested_count || 0)} questions are ${synced ? "saved" : "ready"}. The others could not be completed in this run; continue generating to retry with the available models.`
-      : `Your study set is ready with ${studySet.items.length} questions.`];
+      ? `${count} of ${requested} questions are ${synced ? "saved" : "ready"}. ${incompleteAction}`
+      : `Your study set is ready with ${count} questions.`];
     if (data.auto_model) notices.push("Auto chose " + modelName(data.auto_model) + ".");
     if (data.fallback) notices.push(modelName(data.fallback.to) + " helped complete the generation.");
     if (data.notices?.length) notices.push(...data.notices);
@@ -1062,6 +1111,8 @@ export default function Home() {
     else form.append("source_url", websiteUrl.trim());
     form.append("input_mode", inputMode);
     form.append("format", selected); form.append("use_web", String(inputMode === "notes" && web));
+    if (inputMode === "notes" && quizBlueprintFile) form.append("quiz_blueprint", quizBlueprintFile);
+    if (useStatementCombinations) form.append("statement_combinations", "true");
     form.append("questionnaire_type_confirmed", String(selected === "same_as_source"));
     form.append("questionnaire_type_policy", "convert");
     form.append("include_images", String(inputMode === "notes" && includeImages));
@@ -1148,6 +1199,7 @@ export default function Home() {
     const questionnaireImport = result.items.some((item) => item.imported);
     form.append("input_mode", questionnaireImport ? "questionnaire" : "notes");
     form.append("format", result.type);
+    if (result.statement_combinations) form.append("statement_combinations", "true");
     if (questionnaireImport) {
       form.append("questionnaire_type_confirmed", String(result.questionnaire_type_confirmed || result.type === "same_as_source"));
       form.append("questionnaire_type_policy", result.questionnaire_type_policy || "convert");
@@ -1171,6 +1223,8 @@ export default function Home() {
     generationController.current?.abort(); generationController.current = null;
     resetGenerationCancellation();
     setBusy(false); setContinueBusy(false); setGenerationStatus(null); setGenerationNeedsReconnect(false);
+    setQuizBlueprintFile(null);
+    setStatementCombinations(false);
     localStorage.removeItem(TOKEN_KEY); setAuthToken(""); setAccount(null); setSets([]); setActiveShares([]); setResult(null); setProgress(null); setReviewActive(false); setReviewQueue([]);
     restoreGuestTheme();
     setNotice("You’re signed out. Sign in with your Google account to continue using Dawnstudy.");
@@ -1196,6 +1250,8 @@ export default function Home() {
     const normalizedSet = studySet;
     setInputMode(normalizedSet.items.some((card) => card.imported) ? "questionnaire" : "notes");
     setIncludeImages(Boolean(normalizedSet.include_images));
+    setQuizBlueprintFile(null);
+    setStatementCombinations(false);
     setActiveView("study");
     if (normalizedSet.incomplete && !normalizedSet.source_url) setFiles([]);
     setSourceMode(normalizedSet.source_url ? /(?:youtube\.com|youtu\.be)/i.test(normalizedSet.source_url) ? "youtube" : "website" : "file");
@@ -1502,7 +1558,7 @@ export default function Home() {
     const selectedIsCorrect = Boolean(selectedAnswer && isCorrect(selectedAnswer));
     return <div className={`study-face choice-study-face ${revealed ? "is-revealed" : ""}`}>
       <span className="face-label">{revealed ? "ANSWER FEEDBACK" : "CHOOSE YOUR ANSWER"}</span>
-      <span className="face-question">{card.question}</span>
+      <span className={card.statement_combinations ? "face-question statement-combination-prompt" : "face-question"}>{card.question}</span>
       <div className="choice-options">{card.options?.map((option, index) => {
         const correct = isCorrect(option);
         const selected = selectedOption === index;
@@ -1621,7 +1677,7 @@ export default function Home() {
               <strong>Generate from notes</strong>
               <span id="notes-mode-description" className="material-mode-description">Turn lessons and study notes into new questions.</span>
             </button>
-            <button type="button" className="material-mode-card" aria-label="Import questionnaire" aria-describedby="questionnaire-mode-description" aria-pressed={inputMode === "questionnaire"} onClick={() => { setInputMode("questionnaire"); setSourceMode("file"); setError(""); }}>
+            <button type="button" className="material-mode-card" aria-label="Import questionnaire" aria-describedby="questionnaire-mode-description" aria-pressed={inputMode === "questionnaire"} onClick={() => { setInputMode("questionnaire"); setSourceMode("file"); setQuizBlueprintFile(null); setStatementCombinations(false); setError(""); }}>
               <span className="material-mode-top" aria-hidden="true"><span className="material-mode-icon"><FileText size={21}/></span><span className="material-mode-state">{inputMode === "questionnaire" && "Selected"}<span className="material-mode-indicator">{inputMode === "questionnaire" && <Check size={13} strokeWidth={3}/>}</span></span></span>
               <strong>Import questionnaire</strong>
               <span id="questionnaire-mode-description" className="material-mode-description">Use existing questions and keep their original wording.</span>
@@ -1649,14 +1705,28 @@ export default function Home() {
               </article>;
             })}</div>}
           </section> : <section className="website-source-zone"><label htmlFor="website-source-url">{sourceMode === "youtube" ? "Public YouTube video" : "Public website link"}</label><div className="website-source-input"><Globe2 size={17}/><input id="website-source-url" type="url" inputMode="url" value={websiteUrl} onChange={(event) => setWebsiteUrl(event.target.value)} maxLength={2048} placeholder={sourceMode === "youtube" ? "https://www.youtube.com/watch?v=…" : "https://example.edu/biology/cell-division"}/><button type="button" onClick={() => setWebsiteUrl("")} disabled={!websiteUrl} aria-label="Clear website link"><X size={16}/></button></div><small>{sourceMode === "youtube" ? "Captions first, then video understanding if available. Public videos only; some videos cannot be read. Use the topic field to focus your quiz." : "Public pages only. Pages requiring sign-in will show a specific access message."}</small>{sourceMode !== "youtube" && <label className="file-page-range website-page-range">Pages <span>(optional, for direct PDF links)</span><input value={websitePageRange} onChange={(event) => setWebsitePageRange(event.target.value)} maxLength={120} placeholder="All pages, or 1-5, 8, 12-15"/></label>}</section>}
+                    {inputMode === "notes" && <details className="scope-details quiz-blueprint-details">
+                      <summary><span><FileText size={17}/> Table of Specifications (TOS) <small>{quizBlueprintFile ? "ADDED" : "OPTIONAL"}</small></span><ChevronDown size={16}/></summary>
+                      <p className="quiz-blueprint-help">Add your instructor’s quiz plan as a PDF up to 10 MB. Its topics and weights guide the questions drawn from your study materials.</p>
+                      <input ref={quizBlueprintInput} type="file" accept=".pdf,application/pdf" aria-label="Table of Specifications PDF" hidden onChange={(event) => { selectQuizBlueprint(event.target.files?.[0]); event.target.value = ""; }}/>
+                      <div className="quiz-blueprint-file">
+                        {quizBlueprintFile && <span>{quizBlueprintFile.name}</span>}
+                        <button type="button" className="upload-browse-button" onClick={() => quizBlueprintInput.current?.click()}>{quizBlueprintFile ? "Replace TOS PDF" : "Choose TOS PDF"}</button>
+                        {quizBlueprintFile && <button type="button" className="remove-file" aria-label="Remove TOS PDF" onClick={() => setQuizBlueprintFile(null)}><X size={17}/></button>}
+                      </div>
+                    </details>}
                     {inputMode === "notes" && <details className="scope-details"><summary><span><FileText size={17}/> Focus on a topic or chapter <small>OPTIONAL</small></span><ChevronDown size={16}/></summary><label className="focus-topic-field"><span>Topic or chapter</span><input value={focusTopic} onChange={(event) => setFocusTopic(event.target.value)} maxLength={300} placeholder="e.g. Chapter 4: cellular respiration"/><small>Leave blank to use all the selected material.</small></label></details>}
                     <button type="button" className="finder-shortcut" onClick={() => navigateTo("finder")}><Search size={17}/><span>No material yet? <b>Find something to study</b></span><ArrowUpRight size={17}/></button>
                   </div>}
                   {composerStep === 1 && <div className="creator-practice"><div className="creator-prompt"><h3>How do you want to practice?</h3><p>Choose the format that works for you.</p></div>
-          <div className="type-grid">{types.filter(({ id }) => inputMode === "questionnaire" || id !== "same_as_source").map(({ id, title, detail, icon: Icon }) => <button key={id} className={`type-card ${selected === id ? "chosen" : ""}`} onClick={() => { setSelected(id); setResult(null); setCurrent(0); resetStudyAnswer(); resetReviewAnswer(); setError(""); }}><span className="type-icon"><Icon size={19}/></span><span className="type-text"><strong>{title}</strong><small>{detail}</small></span>{selected === id && <span className="check-icon"><Check size={13} strokeWidth={3}/></span>}</button>)}</div>
+          <div className="type-grid">{types.filter(({ id }) => inputMode === "questionnaire" || id !== "same_as_source").map(({ id, title, detail, icon: Icon }) => <button key={id} className={`type-card ${selected === id ? "chosen" : ""}`} onClick={() => { setSelected(id); if (id !== "multiple_choice") setStatementCombinations(false); setResult(null); setCurrent(0); resetStudyAnswer(); resetReviewAnswer(); setError(""); }}><span className="type-icon"><Icon size={19}/></span><span className="type-text"><strong>{title}</strong><small>{detail}</small></span>{selected === id && <span className="check-icon"><Check size={13} strokeWidth={3}/></span>}</button>)}</div>
+                    {inputMode === "notes" && selected === "multiple_choice" && <label className="statement-combination-option">
+                      <input type="checkbox" checked={statementCombinations} onChange={(event) => setStatementCombinations(event.target.checked)} aria-describedby="statement-combination-hint"/>
+                      <span><strong>Statement combinations</strong><small id="statement-combination-hint">Read four numbered statements and choose one combination, such as “1 and 2 only.”</small></span>
+                    </label>}
                     {inputMode === "questionnaire" ? <p className="questionnaire-help">{selected === "same_as_source" ? "Keep multiple-choice and matching questions in their original formats. Extracted PDF figures stay with their questions." : "All imported questions · original wording and difficulty. Missing answers will be inferred and marked for review."}</p> : <div className="session-options"><label htmlFor="question-count">Questions<select id="question-count" value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{Array.from({ length: 20 }, (_, index) => (index + 1) * 10).map((count) => <option key={count} value={count}>{count} questions</option>)}</select></label><fieldset className="difficulty-choice"><legend>Difficulty</legend><div>{["easy", "medium", "hard"].map((level) => <button type="button" key={level} aria-pressed={difficulty === level} className={difficulty === level ? "selected" : ""} onClick={() => setDifficulty(level as "easy" | "medium" | "hard")}>{level}</button>)}</div></fieldset></div>}
                   </div>}
-                  {composerStep === 2 && <div className="creator-ready"><div className="creator-prompt"><h3>Your next session, ready to go.</h3><p>A quick look before we bring your material to life.</p></div><div className="session-summary"><span className="summary-icon"><BookOpen size={25}/></span><div><strong>{types.find((type) => type.id === selected)?.title}</strong><span>{inputMode === "questionnaire" ? "All imported questions · original wording" : <>{questionCount} questions <i/> {difficulty} difficulty</>}</span><small>{sourceMode === "file" ? files.length ? `${files.length} material${files.length === 1 ? "" : "s"} selected` : "Add your material in step 1" : websiteUrl.trim() ? sourceMode === "youtube" ? "YouTube video selected" : "Public website selected" : "Add a link in step 1"}{inputMode === "notes" && focusTopic ? ` · ${focusTopic}` : ""}</small></div><button type="button" className="plain-icon" aria-label="Edit practice choices" onClick={() => setComposerStep(1)}><ArrowUpRight size={18}/></button></div><label className="model-choice-field" htmlFor="model-choice"><span><Cpu size={18}/> AI model</span><select id="model-choice" value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}><option value="auto">Auto choose the best available model</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select></label>{inputMode === "notes" && <div className="options-row generation-material-options"><button type="button" className={`web-toggle ${includeImages ? "on" : ""}`} aria-pressed={includeImages} onClick={() => setIncludeImages(!includeImages)}><span className="toggle-track"><span/></span><span><b>Include questions about images and diagrams</b><small>Use relevant figures from your material when available and keep them with their questions.</small></span><FileImage size={19}/></button><button type="button" className={`web-toggle ${web ? "on" : ""}`} aria-pressed={web} onClick={() => setWeb(!web)}><span className="toggle-track"><span/></span><span><b>Enrich with the web</b><small>Add relevant context and source links.</small></span><Globe2 size={19}/></button></div>}<details className="model-help-details"><summary>About generation <ChevronDown size={14}/></summary><p className="model-help">{inputMode === "questionnaire" ? "Imports preserve all recognized items, up to 200. AI is only used for missing answers or new choices. Supply an answer key for questions that need context. Ambiguous layouts or conflicting keys must be corrected before import." : <>Create up to 200 questions per set, with no daily generation limit. AI providers may still have their own usage limits. If a model is busy, another available model can help. Completed questions are saved, and partial sets can be continued.</>}</p></details></div>}
+                  {composerStep === 2 && <div className="creator-ready"><div className="creator-prompt"><h3>Your next session, ready to go.</h3><p>A quick look before we bring your material to life.</p></div><div className="session-summary"><span className="summary-icon"><BookOpen size={25}/></span><div><strong>{useStatementCombinations ? "Statement combinations" : types.find((type) => type.id === selected)?.title}</strong><span>{inputMode === "questionnaire" ? "All imported questions · original wording" : <>{questionCount} questions <i/> {difficulty} difficulty</>}</span><small>{sourceMode === "file" ? files.length ? `${files.length} material${files.length === 1 ? "" : "s"} selected` : "Add your material in step 1" : websiteUrl.trim() ? sourceMode === "youtube" ? "YouTube video selected" : "Public website selected" : "Add a link in step 1"}{inputMode === "notes" && focusTopic ? ` · ${focusTopic}` : ""}</small>{inputMode === "notes" && quizBlueprintFile && <small className="quiz-blueprint-caption">TOS · {quizBlueprintFile.name}</small>}</div><button type="button" className="plain-icon" aria-label="Edit practice choices" onClick={() => setComposerStep(1)}><ArrowUpRight size={18}/></button></div><label className="model-choice-field" htmlFor="model-choice"><span><Cpu size={18}/> AI model</span><select id="model-choice" value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}><option value="auto">Auto choose the best available model</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>)}</select></label>{inputMode === "notes" && <div className="options-row generation-material-options"><button type="button" className={`web-toggle ${includeImages ? "on" : ""}`} aria-pressed={includeImages} onClick={() => setIncludeImages(!includeImages)}><span className="toggle-track"><span/></span><span><b>Include questions about images and diagrams</b><small>Use relevant figures from your material when available and keep them with their questions.</small></span><FileImage size={19}/></button><button type="button" className={`web-toggle ${web ? "on" : ""}`} aria-pressed={web} onClick={() => setWeb(!web)}><span className="toggle-track"><span/></span><span><b>Enrich with the web</b><small>Add relevant context and source links.</small></span><Globe2 size={19}/></button></div>}<details className="model-help-details"><summary>About generation <ChevronDown size={14}/></summary><p className="model-help">{inputMode === "questionnaire" ? "Imports preserve all recognized items, up to 200. AI is only used for missing answers or new choices. Supply an answer key for questions that need context. Ambiguous layouts or conflicting keys must be corrected before import." : <>Create up to 200 questions per set, with no daily generation limit. AI providers may still have their own usage limits. If a model is busy, another available model can help. Completed questions are saved, and partial sets can be continued.</>}</p></details></div>}
                 </div>
                 <div className="creator-footer"><span className="creator-footer-note">{composerStep === 0 ? <><Leaf size={15}/> One small step starts it.</> : <button type="button" className="creator-back" onClick={() => setComposerStep((step) => Math.max(0, step - 1))}><ChevronLeft size={16}/> Back</button>}</span>{composerStep < 2 ? <button className="creator-next" type="button" onClick={() => setComposerStep((step) => step + 1)}>{composerStep === 0 ? "Choose practice" : "Review & create"}<ArrowRight size={18}/></button> : <button className="generate-button" onClick={generate} disabled={busy || continueBusy || generationNeedsReconnect}>{busy ? <><span className="spinner"/> Generating...</> : <>Create study set <ArrowRight size={18}/></>}</button>}</div>
               </section>
@@ -1693,11 +1763,16 @@ export default function Home() {
               <button className="finish-test" onClick={() => { setPracticeActive(false); setPracticeComplete(false); }}>Back to study cards</button>
             </> : null}
           </section>}
-          {result && currentCard && !reviewActive && !practiceActive && <section className="result-panel"><div className="result-head"><div><div className="result-kicker"><span/> YOUR STUDY SET</div><h2>{result.title}</h2><p>{result.items.length} {studySetTypeLabel(result).toLowerCase()} · ready when you are{result.model ? ` · ${modelName(result.model)}` : ""}</p></div><button className="plain-icon" title="Close study set" onClick={() => setResult(null)}><X size={18}/></button></div>
+          {result && currentCard && !reviewActive && !practiceActive && <section className="result-panel"><div className="result-head"><div><div className="result-kicker"><span/> YOUR STUDY SET</div><h2>{result.title}</h2><p>{result.items.length} {studySetTypeLabel(result).toLowerCase()} · ready when you are{result.model ? ` · ${modelName(result.model)}` : ""}</p>{result.quiz_blueprint?.title && <p className="quiz-blueprint-caption">TOS · {result.quiz_blueprint.title}</p>}</div><button className="plain-icon" title="Close study set" onClick={() => setResult(null)}><X size={18}/></button></div>
+            {result.quiz_blueprint && !!result.blueprint_coverage?.length && <QuizBlueprintCoverage blueprint={result.quiz_blueprint} coverage={result.blueprint_coverage}/>}
             <div className="set-action-row"><label>Test pace<select value={practiceSecondsPerQuestion} onChange={(event) => setPracticeSecondsPerQuestion(Number(event.target.value))}><option value={0}>No timer</option><option value={20}>20 sec / question</option><option value={30}>30 sec / question</option><option value={45}>45 sec / question</option></select></label>{result.items.some((card) => quizKind(card, result.type) !== "flashcards") && <button className="action-button" onClick={() => { if (result) setGameSet(result.id); navigateTo("games"); }}><Gamepad2 size={15}/> Play with friends</button>}<button className="action-button" onClick={startPractice}><AlarmClock size={15}/> {practiceSecondsPerQuestion === 0 ? "Start practice" : "Start timed test"}</button><button className="action-button" onClick={() => void shareCurrentSet()} disabled={shareBusy}><Share2 size={15}/>{shareBusy ? "Working…" : "Share set"}</button></div>
-            {(result.incomplete || explanationGaps > 0) && <div className="incomplete-generation"><div><strong>{result.items.length} of {Math.max(result.items.length, result.requested_count || 0)} questions {result.items.some(card => card.imported) ? "imported" : "generated"}{explanationGaps > 0 ? ` · ${explanationGaps} explanations pending` : ""}</strong><span>{result.source_url ? "Your generated questions are held. Continue from the same public webpage when ready." : files.length ? "Your completed questions are kept. Use the original files to finish the remaining questions." : "Re-select the original files to continue this set."}</span>{!result.source_url && files.length > 0 && <button type="button" className="resume-source-button" onClick={pickOriginalFiles}>Replace original files ({files.length} selected)</button>}</div><button className="continue-generation-button" disabled={continueBusy || busy || generationNeedsReconnect} onClick={() => { if (!files.length && !result.source_url) pickOriginalFiles(); else void continueGenerating(); }}>{continueBusy ? <><span className="spinner"/> Continuing…</> : <><Sparkles size={17}/> {!files.length && !result.source_url ? "Select original files" : explanationGaps > 0 && result.items.length >= (result.requested_count || result.items.length) ? "Complete explanations" : "Continue generating"}</>}</button></div>}
+            {(result.incomplete || explanationGaps > 0) && <div className="incomplete-generation"><div><strong>{result.items.length} of {Math.max(result.items.length, result.requested_count || 0)} questions {result.items.some(card => card.imported) ? "imported" : "generated"}{explanationGaps > 0 ? ` · ${explanationGaps} explanations pending` : ""}</strong><span>{result.quiz_blueprint
+                  ? "Open Quiz coverage to see remaining topics. Continue with the original material to retry. If a topic needs more evidence, start a new quiz with the TOS and the additional readings."
+                  : result.source_url ? "Your generated questions are held. Continue from the same public webpage when ready."
+                  : files.length ? "Your completed questions are kept. Use the original files to finish the remaining questions."
+                  : "Re-select the original files to continue this set."}</span>{!result.source_url && files.length > 0 && <button type="button" className="resume-source-button" onClick={pickOriginalFiles}>Replace original files ({files.length} selected)</button>}</div><button className="continue-generation-button" disabled={continueBusy || busy || generationNeedsReconnect} onClick={() => { if (!files.length && !result.source_url) pickOriginalFiles(); else void continueGenerating(); }}>{continueBusy ? <><span className="spinner"/> Continuing…</> : <><Sparkles size={17}/> {!files.length && !result.source_url ? "Select original files" : explanationGaps > 0 && result.items.length >= (result.requested_count || result.items.length) ? "Complete explanations" : "Continue generating"}</>}</button></div>}
             {shareUrl && <div className="share-link-row"><span>Anyone with this link can view this set:</span><a href={shareUrl} target="_blank" rel="noreferrer">{shareUrl}</a><button className="plain-icon" title="Copy share link" onClick={() => { void navigator.clipboard.writeText(shareUrl).then(() => setNotice("Share link copied.")).catch(() => setNotice("Select and copy the share link above.")); }}><Copy size={15}/></button><button className="share-revoke" disabled={shareBusy} onClick={() => void turnOffShareLink(result.id)}>Turn off link</button></div>}
-            <div className="study-card"><div className="study-card-top"><span className="flashcard-label">{quizTypeLabel(quizKind(currentCard, result.type)).toUpperCase()}</span><span className="card-number">{String(current + 1).padStart(2,"0")} <i>/</i> {String(result.items.length).padStart(2,"0")}</span></div>
+            <div className="study-card"><div className="study-card-top"><span className="flashcard-label">{currentCard.statement_combinations ? "STATEMENT COMBINATIONS" : quizTypeLabel(quizKind(currentCard, result.type)).toUpperCase()}</span><span className="card-number">{String(current + 1).padStart(2,"0")} <i>/</i> {String(result.items.length).padStart(2,"0")}</span></div>
               {currentCard.answer_origin === "inferred" && <p className="import-review-note">AI-inferred answer · review for accuracy</p>}{renderQuestionImages(currentCard)}{renderCardInteraction(currentCard, result.type)}
               {currentCard.source_refs?.length ? <div className="material-citations"><strong>From your material</strong>{currentCard.source_refs.map((source) => <span key={source}>{source}</span>)}</div> : null}
               <AnswerExplanation card={currentCard} revealed={revealed}/>

@@ -119,4 +119,103 @@
 @media(max-width:700px){.generation-status:has(.generation-status-actions){flex-wrap:wrap}.generation-status:has(.generation-status-actions) .generation-status-copy{flex-basis:calc(100% - 18px)}.generation-status:has(.generation-status-actions) .generation-progress-track{flex:1 1 100%;width:auto;margin:0 0 2px 18px}.generation-status-actions{flex:1 1 100%;justify-content:flex-end;flex-wrap:wrap}.generation-status-actions button{flex:0 1 auto;min-width:0}}
 .answer-explanation{overflow-wrap:anywhere;white-space:normal}.answer-explanation .answer-rationale>strong,.answer-explanation .answer-import-notices>strong{display:block;font-size:11px;line-height:1.6;color:var(--ink)}.answer-explanation .answer-rationale>p{margin:6px 0 0;white-space:pre-wrap}.answer-import-notices{margin-top:12px;font-size:12px;line-height:1.65;color:var(--ink-soft)}.answer-import-notices ul{margin:5px 0 0;padding-left:18px}.practice-answer-status{display:block;margin-top:5px;font-size:11px;font-weight:700;color:var(--muted)}.practice-answer-correct .practice-answer-status{color:var(--teal)}
 .face-question,.practice-question h3,.missed-card>strong,.shared-question-card h2,.game-round>h3,.matching-row>span,.choice-option>span,.practice-choice>span,.shared-option>span,.game-options>button{white-space:pre-wrap;overflow-wrap:anywhere}
+.choice-study-face .statement-combination-prompt {
+  text-align: left;
+}
+
+.quiz-blueprint-help,
+.statement-combination-option small {
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.quiz-blueprint-help {
+  margin: 0 0 10px;
+}
+
+.quiz-blueprint-file {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.quiz-blueprint-file > span {
+  flex: 1 1 0;
+  min-width: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.quiz-blueprint-file button {
+  min-height: 44px;
+}
+
+.quiz-blueprint-file .remove-file {
+  flex: 0 0 44px;
+  margin-left: 0;
+}
+
+.quiz-blueprint-caption {
+  overflow-wrap: anywhere;
+}
+
+.quiz-coverage ul {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.quiz-coverage li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink-soft);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.quiz-coverage li strong {
+  color: var(--ink);
+}
+
+.quiz-coverage-gap {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.statement-combination-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-block: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+  cursor: pointer;
+}
+
+.statement-combination-option input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  margin: 2px 0 0;
+  accent-color: var(--teal);
+}
+
+.statement-combination-option span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
 .shared-shell .shared-written-answer>textarea{width:100%;min-width:0;padding:14px 17px;border:1px solid var(--share-line);border-radius:9px;background:var(--share-paper);color:var(--share-ink);font:inherit;resize:vertical}.shared-shell .answer-explanation .answer-rationale>strong,.shared-shell .answer-explanation .answer-import-notices>strong{color:var(--share-ink)}.shared-shell .answer-explanation .answer-rationale>p,.shared-shell .answer-import-notices{color:var(--share-soft);font-size:14px;line-height:1.75}

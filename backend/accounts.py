@@ -343,12 +343,17 @@ def _study_set_payload(study_set: dict[str, Any]) -> tuple[list[str], str, str]:
             if isinstance(image, str):
                 counts[image] = counts.get(image, 0) + 1
     duplicates = {image for image, count in counts.items() if count > 1}
-    if duplicates:
+    blueprint = study_set.get("quiz_blueprint")
+    if duplicates or blueprint:
         assets = {"image:" + hashlib.sha256(image.encode("utf-8")).hexdigest(): image for image in duplicates}
         references = {value: key for key, value in assets.items()}
         packed_items = [{**item, **({"images": [references.get(image, image) for image in item["images"]]} if item.get("images") else {})} for item in study_set["items"]]
-        packed_json = json.dumps({"storage_version": 1, "items": packed_items, "image_assets": assets}, ensure_ascii=False, separators=(",", ":"))
-        if len(packed_json) < len(items_json):
+        packed = {"storage_version": 1, "items": packed_items, "image_assets": assets}
+        if blueprint:
+            packed["quiz_blueprint"] = blueprint
+            packed["blueprint_coverage"] = study_set.get("blueprint_coverage", [])
+        packed_json = json.dumps(packed, ensure_ascii=False, separators=(",", ":"))
+        if blueprint or len(packed_json) < len(items_json):
             items_json = packed_json
     sources_json = json.dumps(study_set.get("sources", []), ensure_ascii=False, separators=(",", ":"))
     page_ranges_json = json.dumps(study_set.get("page_ranges", {}), ensure_ascii=False, separators=(",", ":"))
@@ -584,7 +589,11 @@ def list_study_sets(user_id: str) -> list[dict[str, Any]]:
             sources = json.loads(row["sources_json"] or "[]")
         except ValueError:
             continue
+        blueprint = None
+        blueprint_coverage = []
         if isinstance(items, dict) and items.get("storage_version") == 1:
+            blueprint = items.get("quiz_blueprint")
+            blueprint_coverage = items.get("blueprint_coverage")
             assets = items.get("image_assets")
             stored_items = items.get("items")
             if not isinstance(assets, dict) or not isinstance(stored_items, list):
@@ -631,6 +640,10 @@ def list_study_sets(user_id: str) -> list[dict[str, Any]]:
             "incomplete": row.get("incomplete", "").casefold() == "true",
             "requested_count": max(len(items), requested_count),
             "include_images": row.get("include_images", "").casefold() == "true",
+            "statement_combinations": row["type"] == "multiple_choice" and bool(items)
+            and all(item.get("statement_combinations") is True for item in items),
+            **({"quiz_blueprint": blueprint} if isinstance(blueprint, dict) else {}),
+            **({"blueprint_coverage": blueprint_coverage} if isinstance(blueprint_coverage, list) and blueprint_coverage else {}),
             "questionnaire_type_confirmed": questionnaire_policy is not None,
             "questionnaire_type_policy": questionnaire_policy,
         })
