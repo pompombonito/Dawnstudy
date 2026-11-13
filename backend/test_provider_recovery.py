@@ -3,7 +3,7 @@
 import unittest
 from datetime import datetime, timezone
 
-from provider_recovery import embedded_provider_error, parse_reset_duration, parse_retry_after, retry_delay_from_response
+from provider_recovery import embedded_provider_error, model_scoped_quota, parse_reset_duration, parse_retry_after, retry_delay_from_response
 
 
 class RetryHintTests(unittest.TestCase):
@@ -87,6 +87,25 @@ class EmbeddedErrorTests(unittest.TestCase):
     def test_safe_identifiers_are_bounded_and_messages_are_not_exposed(self):
         result = embedded_provider_error({"error": {"code": 503, "param": "x" * 200, "message": "secret"}})
         self.assertEqual(result, (503, "503", "x" * 120))
+
+
+class QuotaScopeTests(unittest.TestCase):
+    def test_gemini_distinguishes_model_quota_and_project_wide_violation(self):
+        violations = [{"quotaDimensions": {"model": "gemini-3.1-flash-lite", "location": "global"}}]
+        body = {"error": {"details": [
+            {"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": violations},
+        ]}}
+        self.assertTrue(model_scoped_quota("gemini", body))
+        violations.append({"quotaDimensions": {"location": "global"}})
+        self.assertFalse(model_scoped_quota("gemini", body))
+
+    def test_model_limit_codes_and_router_metadata_are_not_generalized(self):
+        self.assertTrue(model_scoped_quota("groq", {"error": {"code": "rate_limit_exceeded"}}))
+        self.assertFalse(model_scoped_quota("groq", {"error": {"code": "429"}}))
+        for scope in ("upstream_provider_shared_pool", "openrouter_free_tier_per_minute"):
+            body = {"choices": [{"error": {"code": 429, "metadata": {"limit_source": scope}}}]}
+            self.assertEqual(model_scoped_quota("openrouter", body), scope == "upstream_provider_shared_pool")
+        self.assertFalse(model_scoped_quota("zai", {"error": {"code": "1302"}}))
 
 
 if __name__ == "__main__":

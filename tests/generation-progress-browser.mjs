@@ -58,10 +58,15 @@ try {
     await page.reload();
     const bubble = page.locator(".buddy-generation-bubble");
     await bubble.filter({ hasText: "18 of 50 questions ready" }).waitFor();
-    for (const stage of ["waiting", "preparing", "generating"]) {
-      job = { ...job, stage, message: `Retrying ${stage}`, completed: 0 };
+    job = { ...job, status: "queued", stage: "waiting", message: "All providers have reached their rate limits.", retry_at: new Date(Date.now() + 600_000).toISOString() };
+    await bubble.filter({ hasText: "All providers have reached their rate limits." }).waitFor();
+    assert.match(await bubble.innerText(), /18 of 50 questions ready/);
+    assert.match(await bubble.innerText(), /Next attempt at /);
+    for (const stage of ["preparing", "generating"]) {
+      job = { ...job, status: "running", stage, message: `Retrying ${stage}`, completed: 0 };
       await bubble.filter({ hasText: `Retrying ${stage}` }).waitFor();
       assert.match(await bubble.innerText(), /18 of 50 questions ready/);
+      assert.doesNotMatch(await bubble.innerText(), /Next attempt at /);
     }
     const checkpoint = { type: "flashcards", requested_count: 50, material_fingerprint: "same-source", items: Array.from({ length: 22 }, (_, i) => ({ question: `Verified concept ${i}?`, answer: "DNA" })) };
     job = { ...job, completed: 22, checkpoint, message: "New questions verified" };

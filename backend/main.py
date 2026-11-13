@@ -36,7 +36,7 @@ from smry_material import SmryUnavailable, extract_public_article as extract_smr
 from website_figures import extract_website_figures
 from provider_policy import ProviderAttemptPolicy, eligible_questionnaire_records, interleave_order
 from questionnaire_recovery import complete_questionnaire_batches
-from provider_recovery import retry_delay_from_response, embedded_provider_error
+from provider_recovery import retry_delay_from_response, embedded_provider_error, model_scoped_quota
 from pptx_questionnaire import extract_pptx_questionnaire
 from generation_jobs import GenerationAlreadyRunning, GenerationCancelled, GenerationDeferred, GenerationJobs, GenerationQueueFull, merge_continued_generation
 
@@ -158,9 +158,9 @@ def check_generation_cancelled():
         callback()
 
 
-def generation_defer(seconds=30):
+def generation_defer(seconds=30, message=None):
     check_generation_cancelled()
-    raise GenerationDeferred(seconds)
+    raise GenerationDeferred(seconds, message)
 
 
 def begin_generation_commit():
@@ -1429,6 +1429,7 @@ class ProviderError(RuntimeError):
         error_field: str | None = None,
         retry_after: float | None = None,
         output_diagnostics: dict[str, Any] | None = None,
+        model_scoped_quota: bool = False,
     ):
         super().__init__(message)
         self.provider = provider
@@ -1439,6 +1440,7 @@ class ProviderError(RuntimeError):
         self.error_field = error_field
         self.retry_after = retry_after
         self.output_diagnostics = output_diagnostics or {}
+        self.model_scoped_quota = model_scoped_quota
 
 
 def provider_error_diagnostics(response: requests.Response) -> tuple[str | None, str | None]:
@@ -1959,6 +1961,7 @@ def generate_with_provider(provider: str, model: str, api_key: str, prompt: str,
             error_code=error_code,
             error_field=error_field,
             retry_after=retry_after,
+            model_scoped_quota=response.status_code == 429 and model_scoped_quota(provider, error_body),
         )
     content = ""
     finish_reason = ""
@@ -1976,7 +1979,8 @@ def generate_with_provider(provider: str, model: str, api_key: str, prompt: str,
                 recovered = [item for item in recovered if has_source_evidence(item)]
             raise ProviderError(provider, model_id, status, "provider returned an upstream error", recovered,
                                 error_code=code, error_field=field,
-                                retry_after=retry_delay_from_response(response.headers, body))
+                                retry_after=retry_delay_from_response(response.headers, body),
+                                model_scoped_quota=status == 429 and model_scoped_quota(provider, body))
         if provider == "antigravity":
             body = response.json()
             content = antigravity_interaction_text(body)
@@ -2285,12 +2289,11 @@ def generation_max_tokens(provider: str, model: str, batch: int) -> int:
 def fallback_order(primary, candidates):
     """Keep the chosen model first, then try independent providers before siblings."""
     if primary and primary[1] in {"ollama", "gemini"}:
-        if primary[1] == "ollama":
-            gemini_order = GEMINI_FALLBACK_ORDER
-        elif primary[0] in GEMINI_FALLBACK_ORDER:
-            gemini_order = GEMINI_FALLBACK_ORDER[GEMINI_FALLBACK_ORDER.index(primary[0]) + 1:]
-        else:
-            gemini_order = ()
+        candidates = [candidate for candidate in candidates if candidate[0] != primary[0]]
+        gemini_order = GEMINI_FALLBACK_ORDER
+        if primary[0] in gemini_order:
+            start = gemini_order.index(primary[0]) + 1
+            gemini_order = gemini_order[start:] + gemini_order[:start - 1]
         gemini_candidates = [
             candidate for model_id in gemini_order
             for candidate in candidates if candidate[0] == model_id
@@ -2322,17 +2325,21 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
     title, fallback, pending = str(seed.get("title") or ""), None, None
     durable = _generation_durable.get()
     deadline, attempts = (float("inf") if durable else time.monotonic() + GENERATION_DEADLINE_SECONDS), 0
-    last_progress = time.monotonic()
     attempt_limit = float("inf") if durable else max(48, question_count * 2 + len(ordered) * 3)
-    queue = deque(ordered)
     state = _generation_state.get()
     cooldowns = state.setdefault("cooldowns", {}) if durable and state is not None else {}
+    unavailable_models = state.setdefault("unavailable_models", set()) if durable and state is not None else set()
+    queue = deque(choice for choice in ordered if choice[0] not in unavailable_models)
     token_limits = state.setdefault("token_limits", {}) if durable and state is not None else {}
     output_feedback = state.setdefault("output_feedback", {}) if durable and state is not None else {}
     rate_retries = defaultdict(int)
     transient_retries = state.setdefault("transient_retries", defaultdict(int)) if durable and state is not None else defaultdict(int)
     def cooldown_until(choice):
         return max(cooldowns.get(choice[1], 0), cooldowns.get((choice[1], choice[2]), 0))
+
+    def eligible_routes():
+        return deque(choice for choice in ordered if choice[0] not in unavailable_models
+                     and attempt_policy.can_attempt(choice[1], choice[2]))
     attempt_policy = ProviderAttemptPolicy()
     source_window_cycles = 0
     recovery_rounds = 0
@@ -2350,11 +2357,28 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
             queue.append((model_id, provider, model, api_key, label))
             # Work on another provider during a cooldown. Wait only when all
             # remaining candidates are cooling down, checking cancellation.
-            if all(cooldown_until(choice) > time.monotonic() for choice in queue):
+            now = time.monotonic()
+            if all(cooldown_until(choice) > now for choice in queue):
+                # A usable model may have returned no valid items for the
+                # current excerpt. Rate-limited routes still in the queue
+                # must not prevent it from trying another source section.
+                if blueprint_plan:
+                    ready_routes = [choice for choice in eligible_routes() if cooldown_until(choice) <= now]
+                    if ready_routes:
+                        advanced = (source_window_cycles < blueprint_plan.window_count - 1
+                                    and blueprint_plan.advance_window(len(completed)))
+                        if advanced:
+                            source_window_cycles += 1
+                        elif blueprint_plan.postpone_topic(completed):
+                            source_window_cycles = recovery_rounds = 0
+                            advanced = True
+                        if advanced:
+                            queue.extendleft(reversed(ready_routes))
+                            continue
                 wait_until = min(cooldown_until(choice) for choice in queue)
                 generation_progress("finishing", "Waiting for AI capacity to reset; your completed questions are kept…", len(completed), label)
                 if durable:
-                    generation_defer(max(1, wait_until - time.monotonic()))
+                    generation_defer(wait_until - now, "Waiting to retry rate-limited or busy AI models. Your verified questions are kept…")
                 while time.monotonic() < min(wait_until, deadline):
                     check_generation_cancelled()
                     time.sleep(max(0, min(.5, wait_until - time.monotonic())))
@@ -2373,7 +2397,7 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
                 batch = blueprint_plan.batch_size(batch, completed)
                 if not batch:
                     if blueprint_plan.has_postponed_work(completed) and durable:
-                        generation_defer(60)
+                        generation_defer(60, "The remaining topics need more source-checked answers. Retrying with your verified questions kept…")
                     if completed or blueprint_plan.prior:
                         return {"title": title, "items": completed}, used_models, fallback, True
                     raise HTTPException(422, "The selected study material did not support the topics needed by this Table of Specifications. Add the course readings it lists or broaden the selected pages.")
@@ -2389,8 +2413,11 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
             elif output_feedback.get(model_id) in {"invalid_json", "invalid_items", "empty_output", "output_truncated"}:
                 prompt += "\nReturn only the requested JSON object with title and items. Complete each item and close the JSON. Do not include reasoning or commentary."
             if excluded_questions:
-                history_limit = 10 if provider == "groq" else 30
-                prompt += "\nDo not repeat or closely paraphrase these earlier questions: " + json.dumps(excluded_questions[-history_limit:], ensure_ascii=False)
+                history_limit = 8 if statement_combinations else 10 if provider == "groq" else 30
+                history = excluded_questions[-history_limit:]
+                if statement_combinations:
+                    history = [question[:240] for question in history]
+                prompt += "\nDo not repeat or closely paraphrase these earlier questions: " + json.dumps(history, ensure_ascii=False)
             if empty_attempts:
                 prompt += "\nReturn new, complete, self-contained concept questions. Do not repeat rejected source-location trivia."
                 if statement_combinations:
@@ -2425,12 +2452,14 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
                 check_generation_cancelled()
                 reset_after = exc.retry_after
                 zai_overloaded = provider == "zai" and exc.error_code == "1305"
+                retry_identity = (provider, model)
+                quota_scope = retry_identity if exc.model_scoped_quota else provider
                 if (exc.status == 429 and not zai_overloaded
                         and (durable or (reset_after is not None and 0 <= reset_after < deadline - time.monotonic()
-                                         and rate_retries[provider] < 2))):
+                                         and rate_retries[quota_scope] < 2))):
                     failures.append(exc)
-                    rate_retries[provider] += 1
-                    cooldowns[provider] = time.monotonic() + max(1, reset_after if reset_after is not None else 60)
+                    rate_retries[quota_scope] += 1
+                    cooldowns[quota_scope] = time.monotonic() + max(1, reset_after if reset_after is not None else 60)
                     queue.append((model_id, provider, model, api_key, label))
                     pending = pending or (model_id, "limit")
                     retry_rate_limit = True
@@ -2442,13 +2471,12 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
                 )
                 if output_validation_failure and exc.error_code:
                     output_feedback[model_id] = exc.error_code
-                transient_failure = (
+                transient_failure = zai_overloaded or (
                     exc.status is not None and exc.status >= 500
                     and exc.error_code != "local_capacity"
                 ) or (
                     exc.status is None and exc.error_code in {"timeout", "network_error"}
                 )
-                retry_identity = (provider, model)
                 retry_transient = (
                     transient_failure and transient_retries[retry_identity] < 1
                 )
@@ -2468,18 +2496,24 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
                     print(f"AI provider {provider} ({model}) failed: {describe_provider_failure(exc)}; retrying with a batch of {adaptive_batch_size}")
                 else:
                     failures.append(exc)
-                    model_specific_gemini_denial = (
-                        provider == "gemini"
-                        and model in {"gemini-2.5-flash-lite", "gemini-2.5-flash"}
-                        and exc.status in {403, 404}
-                    )
                     if retry_rate_limit or output_validation_failure:
                         # Bad output is specific to this source/batch. Do not
                         # disable an otherwise working model for later pages.
                         pass
-                    elif exc.error_code == "local_capacity":
+                    elif zai_overloaded:
+                        if not retry_transient:
+                            attempt_policy.skip_model(provider, model)
+                    elif exc.error_code == "local_capacity" or (exc.status == 429 and exc.model_scoped_quota):
                         attempt_policy.skip_model(provider, model)
-                    elif model_specific_gemini_denial:
+                    elif exc.status == 401:
+                        # Siblings reuse this credential. An authentication
+                        # rejection will remain until configuration changes.
+                        unavailable_models.update(choice[0] for choice in ordered if choice[1] == provider)
+                        attempt_policy.record_failure(provider, model, exc.status)
+                    elif exc.status in {403, 404} or (provider == "antigravity" and exc.status == 400):
+                        # Model access and missing/invalid routes do not rule
+                        # out sibling models offered under the same key.
+                        unavailable_models.add(model_id)
                         attempt_policy.skip_model(provider, model)
                     elif not retry_transient:
                         attempt_policy.record_failure(provider, model, exc.status)
@@ -2503,8 +2537,8 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
                 print(f"AI provider {provider} ({model}) validation: received={received_count}, "
                       f"concept={concept_count}, visual={visual_count}, answer_consistent={len(candidates)}, unique_added=0")
             if added:
-                last_progress = time.monotonic()
                 rate_retries[provider] = 0
+                rate_retries[(provider, model)] = 0
                 transient_retries[(provider, model)] = 0
                 recovery_rounds = 0
                 source_window_cycles = 0
@@ -2556,15 +2590,11 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
                     f"Trying another source section with the available models · {len(completed)} of {question_count} ready",
                     len(completed),
                 )
-                queue = deque(choice for choice in ordered
-                              if attempt_policy.can_attempt(choice[1], choice[2]))
+                queue = eligible_routes()
                 if queue:
                     continue
             if recovery_rounds < GENERATION_RECOVERY_ROUNDS:
-                retryable_models = [
-                    choice for choice in ordered
-                    if attempt_policy.can_attempt(choice[1], choice[2])
-                ]
+                retryable_models = eligible_routes()
                 if retryable_models:
                     recovery_rounds += 1
                     generation_progress(
@@ -2572,17 +2602,20 @@ def generate_with_fallback(prompt_builder, schema: dict[str, Any], selected_mode
                         f"Retrying remaining questions with available models · {len(completed)} of {question_count} ready",
                         len(completed),
                     )
-                    queue = deque(retryable_models)
+                    queue = retryable_models
                     continue
             if blueprint_plan and blueprint_plan.postpone_topic(completed):
-                queue = deque(choice for choice in ordered if attempt_policy.can_attempt(choice[1], choice[2]))
+                queue = eligible_routes()
                 source_window_cycles = recovery_rounds = 0
     if durable:
         # A temporary outage or bad model response must never become a
         # successful-but-short background job. Keep the checkpoint, release the
         # worker, and retry with fresh per-run provider/source failure budgets.
+        if all(choice[0] in unavailable_models for choice in ordered):
+            unavailable_models.clear()
+            generation_defer(600, "The configured AI routes rejected their requests. Retrying after a pause with your verified questions kept…")
         generation_progress("waiting", "Waiting to retry the remaining questions; your verified progress is kept…", len(completed))
-        generation_defer(60)
+        generation_defer(60, "The available models haven't returned usable answers for the remaining questions. Retrying with your verified questions kept…")
     if completed:
         # Keep usable work even if every provider stops before reaching the
         # requested count. The UI can save this partial set and offer Continue.
@@ -3034,7 +3067,7 @@ def persist_generation_result(result, user):
                 if checkpoint:
                     checkpoint(result)
                 generation_progress("waiting", "Your questions are ready. Waiting to sync them to your library…", len(result["items"]))
-                generation_defer(30)
+                generation_defer(30, "Your questions are ready. Retrying library sync…")
             result["persistence_error"] = str(exc.detail)
     check_generation_cancelled()
     return result
@@ -3400,8 +3433,14 @@ def generate(
                               batch_prompt, flags=re.DOTALL)
         continuation = ""
         if completed:
-            related = [item for item in completed if set(item.get("source_refs", [])) & set(batch_labels)]
-            previous_questions = json.dumps([item["question"] for item in (related or completed)[-10:]], ensure_ascii=False)
+            if blueprint_plan:
+                related = [item for item in completed if item.get("blueprint_topic") == blueprint_plan.topic.id]
+            else:
+                related = [item for item in completed if set(item.get("source_refs", [])) & set(batch_labels)]
+            history = [item["question"] for item in (related or completed)[-10:]]
+            if statement_combinations:
+                history = [question[:240] for question in history[-6:]]
+            previous_questions = json.dumps(history, ensure_ascii=False)
             continuation = f"\n\nContinue the same study set. Create exactly {remaining} ADDITIONAL items. Do not repeat or closely paraphrase these already completed questions: {previous_questions}."
         blueprint_instructions = ""
         if blueprint_plan:
@@ -3792,8 +3831,10 @@ async def start_generation_job(
             generation_jobs.finish_cancelled(job_id)
             return
         try:
+            update({"status": "queued", "stage": "queued", "message": "Waiting for a generation slot…"})
             _generation_workers.submit(run)
         except RuntimeError:
+            generation_jobs.defer(job_id, "Waiting for the generation worker to restart…", 10)
             schedule_retry(10)
 
     def schedule_retry(seconds):
@@ -3826,7 +3867,7 @@ async def start_generation_job(
         commit_token = _generation_commit.set(lambda: generation_jobs.begin_commit(job_id))
         try:
             check_generation_cancelled()
-            update({"status": "running"})
+            update({"status": "running", "stage": "preparing", "message": "Resuming your study set…", "retry_at": None})
             with _generation_inputs_lock:
                 captured = _generation_inputs.get(job_id, [])
                 uploads = [UploadFile(filename=name, file=BytesIO(raw)) for name, raw in captured]
@@ -3845,7 +3886,7 @@ async def start_generation_job(
                 except HTTPException as exc:
                     if exc.status_code in {429, 500, 502, 503, 504}:
                         checkpoint(result)
-                        generation_defer(30)
+                        generation_defer(30, "Your questions are ready. Retrying library sync…")
                     result["persistence_error"] = str(exc.detail)
             begin_generation_commit()
             completed = len(result["items"])
@@ -3871,13 +3912,13 @@ async def start_generation_job(
                 generation_jobs.finish_cancelled(job_id)
             else:
                 deferred = exc.retry_after
-                generation_jobs.defer(job_id, "Waiting for service capacity. Your verified progress is kept; generation will resume automatically…")
+                generation_jobs.defer(job_id, exc.message or "Waiting for service capacity. Your verified progress is kept; generation will resume automatically…", deferred)
         except HTTPException as exc:
             if generation_jobs.is_cancelled(job_id):
                 generation_jobs.finish_cancelled(job_id)
             elif exc.status_code in {429, 500, 502, 503, 504}:
                 deferred = 30
-                generation_jobs.defer(job_id, "A service is temporarily unavailable. Your generation will resume automatically…")
+                generation_jobs.defer(job_id, "A service is temporarily unavailable. Your generation will resume automatically…", deferred)
             else:
                 update({"status": "error", "message": exc.detail, "error_status": exc.status_code})
         except Exception as exc:
@@ -3922,7 +3963,7 @@ async def start_generation_job(
     try:
         _generation_workers.submit(run)
     except RuntimeError:
-        generation_jobs.defer(job_id, "The generation queue is restarting. Your request is kept and will retry automatically…")
+        generation_jobs.defer(job_id, "The generation queue is restarting. Your request is kept and will retry automatically…", 10)
         schedule_retry(10)
     return generation_jobs.get(job_id, user["user_id"])
 

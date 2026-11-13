@@ -3,6 +3,7 @@ import re
 import threading
 import time
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 
@@ -22,8 +23,9 @@ class GenerationCancelled(Exception):
 class GenerationDeferred(Exception):
     """Release a worker while retaining a job until upstream capacity returns."""
 
-    def __init__(self, retry_after=30):
+    def __init__(self, retry_after=30, message=None):
         self.retry_after = max(1, retry_after)
+        self.message = message
 
 
 class GenerationJobs:
@@ -46,10 +48,13 @@ class GenerationJobs:
 
     @staticmethod
     def _public(job_id, job):
+        hidden = {"user_id", "updated", "acknowledged", "_cancel_event", "_committing"}
+        if job["status"] != "queued" or job["stage"] != "waiting":
+            hidden.add("retry_at")
         return deepcopy({"job_id": job_id,
                          "can_cancel": job["status"] in {"queued", "running"} and not job.get("_committing", False),
                          **{key: value for key, value in job.items()
-                            if key not in {"user_id", "updated", "acknowledged", "_cancel_event", "_committing"}}})
+                            if key not in hidden}})
 
     def start(self, user_id, requested, job_id=None):
         with self.lock:
@@ -146,7 +151,7 @@ class GenerationJobs:
             job.update(_committing=True, status="running", stage="saving", message="Saving your study set…", updated=self.clock())
             return True
 
-    def defer(self, job_id, message):
+    def defer(self, job_id, message, retry_after=None):
         """Keep admission and progress while releasing a worker for a retry."""
         with self.lock:
             job = self.jobs.get(job_id)
@@ -154,7 +159,8 @@ class GenerationJobs:
                 return False
             if job["status"] in self.TERMINAL:
                 return False
-            job.update(status="queued", stage="waiting", message=message,
+            retry_at = (datetime.now(timezone.utc) + timedelta(seconds=retry_after)).isoformat() if retry_after is not None else None
+            job.update(status="queued", stage="waiting", message=message, retry_at=retry_at,
                        _committing=False, updated=self.clock())
             return True
 

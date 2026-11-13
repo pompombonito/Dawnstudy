@@ -324,6 +324,83 @@ class DeliveryTests(unittest.TestCase):
         ManualTimer.pending[-1].fire()
         self.assertEqual(self.job()["status"], "complete")
 
+    def test_model_scoped_quota_lets_groq_sibling_finish_without_waiting(self):
+        models = [("groq:openai/gpt-oss-120b", "groq", "openai/gpt-oss-120b", "key", "First"),
+                  ("groq:openai/gpt-oss-20b", "groq", "openai/gpt-oss-20b", "key", "Second")]
+        calls = []
+
+        def provider(provider_name, model_name, *args):
+            calls.append(model_name)
+            if model_name == models[0][2]:
+                raise main.ProviderError(provider_name, models[0][0], 429, "model quota",
+                                         retry_after=300, model_scoped_quota=True)
+            return self.fixture.provide(provider_name, model_name, *args)
+
+        self.fixture.provider.side_effect = provider
+        with patch.object(main, "configured_ai_models", return_value=models):
+            self.assertEqual(self.submit(1, model=models[0][0]).status_code, 202)
+        self.assertEqual(calls, [model[2] for model in models])
+        self.assertEqual(self.job()["status"], "complete")
+        self.assertFalse(ManualTimer.pending)
+
+    def test_zai_overload_reaches_sibling_and_does_not_wait_for_quota(self):
+        models = [("zai:glm-4.7-flash", "zai", "glm-4.7-flash", "key", "First"),
+                  ("zai:glm-4.5-flash", "zai", "glm-4.5-flash", "key", "Second")]
+        calls = []
+
+        def provider(provider_name, model_name, *args):
+            calls.append(model_name)
+            if model_name == models[0][2]:
+                raise main.ProviderError(provider_name, models[0][0], 429, "overload", error_code="1305")
+            return self.fixture.provide(provider_name, model_name, *args)
+
+        self.fixture.provider.side_effect = provider
+        with patch.object(main, "configured_ai_models", return_value=models):
+            self.assertEqual(self.submit(1, model=models[0][0]).status_code, 202)
+        self.assertEqual(calls, [model[2] for model in models])
+        self.assertEqual(self.job()["status"], "complete")
+        self.assertFalse(ManualTimer.pending)
+
+    def test_bad_antigravity_route_is_not_retried_after_another_provider_cools(self):
+        models = [("antigravity:antigravity-preview-09-2026", "antigravity", "antigravity-preview-09-2026", "key", "Agent"),
+                  ("groq:openai/gpt-oss-20b", "groq", "openai/gpt-oss-20b", "key", "Backup")]
+        calls = []
+
+        def provider(provider_name, model_name, *args):
+            calls.append(provider_name)
+            if provider_name == "antigravity":
+                raise main.ProviderError(provider_name, models[0][0], 400, "invalid agent request")
+            if calls.count("groq") == 1:
+                raise main.ProviderError(provider_name, models[1][0], 429, "quota", retry_after=30)
+            return self.fixture.provide(provider_name, model_name, *args)
+
+        self.fixture.provider.side_effect = provider
+        with patch.object(main, "configured_ai_models", return_value=models):
+            self.assertEqual(self.submit(1, model=models[0][0]).status_code, 202)
+            self.assertEqual(self.job()["stage"], "waiting")
+            ManualTimer.pending[-1].fire()
+        self.assertEqual(calls, ["antigravity", "groq", "groq"])
+        self.assertEqual(self.job()["status"], "complete")
+
+    def test_multiple_unavailable_gemini_models_do_not_hide_a_working_sibling(self):
+        models = [(f"gemini:{name}", "gemini", name, "key", name) for name in
+                  ("gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.8-flash")]
+        calls = []
+
+        def provider(provider_name, model_name, *args):
+            calls.append(model_name)
+            if model_name == models[0][2]:
+                raise main.ProviderError(provider_name, models[0][0], 403, "model access denied")
+            if model_name == models[1][2]:
+                raise main.ProviderError(provider_name, models[1][0], 404, "model unavailable")
+            return self.fixture.provide(provider_name, model_name, *args)
+
+        self.fixture.provider.side_effect = provider
+        with patch.object(main, "configured_ai_models", return_value=models):
+            self.assertEqual(self.submit(1, model=models[0][0]).status_code, 202)
+        self.assertEqual(calls, [model[2] for model in models])
+        self.assertEqual(self.job()["status"], "complete")
+
     def test_verified_diagrams_survive_deferral_without_more_extraction_or_vision_calls(self):
         image = "data:image/webp;base64,AA=="
         source_ref = "notes.docx · Part 1"

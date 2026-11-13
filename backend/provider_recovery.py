@@ -105,6 +105,42 @@ def retry_delay_from_response(headers, body=None, *, now=None):
     return max(delays) if delays else None
 
 
+def model_scoped_quota(provider, body):
+    """Recognize model-scoped 429s from provider fields, without logging the response."""
+    if not isinstance(body, dict):
+        return False
+    error = body.get("error")
+    if not isinstance(error, dict):
+        choices = body.get("choices")
+        choice = choices[0] if isinstance(choices, list) and choices else None
+        error = choice.get("error") if isinstance(choice, dict) else None
+    if not isinstance(error, dict):
+        return False
+
+    if provider == "groq":
+        # Groq reports model token/request quotas as rate_limit_exceeded.
+        # Leave unclassified organization limits shared across siblings.
+        return error.get("code") == "rate_limit_exceeded" or error.get("type") == "rate_limit_exceeded"
+    if provider == "openrouter":
+        metadata = error.get("metadata")
+        return isinstance(metadata, dict) and metadata.get("limit_source") == "upstream_provider_shared_pool"
+    if provider != "gemini":
+        return False
+
+    details = error.get("details")
+    if not isinstance(details, list):
+        return False
+    violations = [violation for detail in details if isinstance(detail, dict)
+                  and str(detail.get("@type", "")).rsplit("/", 1)[-1] == "google.rpc.QuotaFailure"
+                  and isinstance(detail.get("violations"), list) for violation in detail["violations"]]
+    # A single project-wide violation is enough to keep the shared cooldown.
+    return bool(violations) and all(
+        isinstance(violation, dict) and isinstance(violation.get("quotaDimensions"), dict)
+        and bool(violation["quotaDimensions"].get("model"))
+        for violation in violations
+    )
+
+
 def embedded_provider_error(body):
     """Return safe (HTTP status, code, field) from an HTTP-200 error envelope.
 

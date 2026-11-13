@@ -147,6 +147,15 @@ class AdditionalProviderTests(unittest.TestCase):
             "groq:openai/gpt-oss-120b",
         ])
 
+    def test_explicit_newer_gemini_keeps_earlier_models_in_fallback(self):
+        environment = {"GEMINI_API_KEY": "gemini-test", "GROQ_API_KEY": "groq-test"}
+        with patch.dict(main.os.environ, environment, clear=True):
+            models = main.configured_ai_models()
+        primary = next(model for model in models if model[0] == "gemini:gemini-3.8-flash")
+        ordered = main.fallback_order(primary, models)
+        self.assertEqual(ordered[0], primary)
+        self.assertCountEqual(ordered, models)
+
     def test_ollama_endpoint_requires_local_http_or_remote_https_with_access(self):
         with patch.dict(main.os.environ, {"OLLAMA_BASE_URL": "http://localhost:11434/v1"}, clear=True):
             self.assertEqual(

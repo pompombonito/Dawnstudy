@@ -2,7 +2,21 @@ export type GenerationJobState = "queued" | "running" | "cancelling" | "cancelle
 
 export type GenerationStatus = {
   status: GenerationJobState | "paused" | "reconnecting"; stage: string; message: string; completed: number; requested: number; model?: string | null; can_cancel?: boolean;
+  retry_at?: string | null;
 };
+
+export function generationRetryText(status: GenerationStatus, now = Date.now()): string {
+  if (status.status !== "queued" || status.stage !== "waiting" || typeof status.retry_at !== "string") return "";
+  const retryAt = new Date(status.retry_at);
+  if (!Number.isFinite(retryAt.getTime()) || retryAt.getTime() <= now) return "";
+  const sameDay = retryAt.toDateString() === new Date(now).toDateString();
+  const scheduledTime = retryAt.toLocaleString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    ...(sameDay ? {} : { month: "short", day: "numeric" }),
+  });
+  return `Next attempt at ${scheduledTime}`;
+}
 
 /** Count verified cards, including explanation-only questionnaire progress. */
 export function generationCheckpointProgress(checkpoint: unknown): { completed: number; requested: number } {

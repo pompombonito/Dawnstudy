@@ -19,7 +19,7 @@ import GameRoom from "./community/GameRoom";
 import CompanionDock from "./community/CompanionDock";
 import Agreement from "./community/Agreement";
 import { DawnArtwork, DawnMark } from "./components/DawnArtwork";
-import { cancelGenerationJob, findGenerationJob, generationReadyText, mergeGenerationStatus, GenerationCancelledError, GenerationJobError, GenerationJobMissingError, pollGenerationJob, startGenerationJob, QuestionnaireTypeMismatchError, type GenerationJob, type GenerationStatus, type QuestionnaireMismatchPreview } from "./generation-jobs";
+import { cancelGenerationJob, findGenerationJob, generationReadyText, generationRetryText, mergeGenerationStatus, GenerationCancelledError, GenerationJobError, GenerationJobMissingError, pollGenerationJob, startGenerationJob, QuestionnaireTypeMismatchError, type GenerationJob, type GenerationStatus, type QuestionnaireMismatchPreview } from "./generation-jobs";
 import { deleteUnsyncedStudyDraft, getUnsyncedStudyDraft, saveUnsyncedStudyDraft } from "./unsynced-study-drafts";
 import { captureGenerationRequest, deletePendingGenerationRequest, generationCheckpointRevision, getPendingGenerationRequest, restoreGenerationForm, savePendingGenerationRequest, updatePendingGenerationRequest, type PendingGenerationRequest } from "./pending-generation";
 import {
@@ -1628,6 +1628,11 @@ export default function Home() {
   const generationStopping = generationCancelRequested || generationStatus?.status === "cancelling" || generationStatus?.status === "cancelled";
   const generationCanCancel = generationStatus && generationStatus.stage !== "saving" && generationStatus.can_cancel !== false
     && generationStatus.status !== "complete" && generationStatus.status !== "error";
+  const generationDetail = generationStatus && [
+    generationStatus.model ? modelName(generationStatus.model) : generationStatus.stage === "queued" ? "Waiting for a processing slot" : inputMode === "questionnaire" ? "Questionnaire import" : "Study set creation",
+    generationReadyText(generationStatus.completed, generationStatus.requested),
+    generationStopping ? "" : generationRetryText(generationStatus),
+  ].filter(Boolean).join(" · ");
 
   return (
     <main className="shell studio-shell">
@@ -1858,7 +1863,7 @@ export default function Home() {
       {moreOpen && <div className="more-menu-backdrop" onClick={() => setMoreOpen(false)}><nav className="more-menu" aria-label="More pages" onClick={e => e.stopPropagation()}><div><strong>Find your way</strong><button className="plain-icon" onClick={() => setMoreOpen(false)} aria-label="Close more pages"><X size={19}/></button></div>{([ ["finder", "PDF Finder"], ["voice", "Voice review"], ["profile", "My profile"], ["agreement", "Agreement & privacy"], ["about", "About Dawnstudy"] ] as [WorkspaceView, string][]).map(([id, title]) => <button key={id} onClick={() => navigateTo(id)}>{title}<ArrowRight size={16}/></button>)}</nav></div>}
       <CompanionDock key={`buddy-${account?.id || "guest"}`} community={community} friends={() => navigateTo("friends")} signIn={() => setAuthOpen(true)} generation={generationStatus ? {
         title: generationStopping ? generationNeedsReconnect ? "Stopping… Reconnect to confirm cancellation." : "Stopping… The current request may finish first." : generationStatus.message || "Preparing your study set…",
-        detail: `${generationStatus.model ? modelName(generationStatus.model) : generationStatus.stage === "queued" ? "Waiting for a processing slot" : inputMode === "questionnaire" ? "Questionnaire import" : "Study set creation"}${generationReadyText(generationStatus.completed, generationStatus.requested) ? ` · ${generationReadyText(generationStatus.completed, generationStatus.requested)}` : ""}`,
+        detail: generationDetail || "",
         progress: generationStatus.requested > 0 && generationStatus.requested >= generationStatus.completed ? Math.min(100, generationStatus.completed / generationStatus.requested * 100) : null,
         reconnect: Boolean(account && generationNeedsReconnect),
         reconnectDisabled: busy || continueBusy,

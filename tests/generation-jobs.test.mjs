@@ -7,12 +7,27 @@ const source = readFileSync(new URL("../app/generation-jobs.ts", import.meta.url
 const javascript = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
 }).outputText;
-const { findGenerationJob, startGenerationJob, cancelGenerationJob, pollGenerationJob, generationReadyText, mergeGenerationStatus, generationCheckpointProgress, GenerationJobError, GenerationCancelledError, QuestionnaireTypeMismatchError } =
+const { findGenerationJob, startGenerationJob, cancelGenerationJob, pollGenerationJob, generationReadyText, generationRetryText, mergeGenerationStatus, generationCheckpointProgress, GenerationJobError, GenerationCancelledError, QuestionnaireTypeMismatchError } =
   await import("data:text/javascript;base64," + Buffer.from(javascript).toString("base64"));
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const running = { job_id: "job-1", status: "running", stage: "generating", message: "GPT-OSS is generating", completed: 8, requested: 20, model: "GPT-OSS" };
 const result = { id: "saved-set", title: "Recovered questions", items: [{ question: "Already generated" }] };
+
+test("only a queued wait with a future retry timestamp shows a retry time", () => {
+  const now = Date.parse("2026-11-13T01:00:00Z");
+  const waiting = { ...running, status: "queued", stage: "waiting", retry_at: "2026-11-13T01:05:00Z" };
+  assert.match(generationRetryText(waiting, now), /^Next attempt at /);
+  assert.equal(generationRetryText({ ...waiting, stage: "queued" }, now), "");
+  assert.equal(generationRetryText({ ...waiting, status: "cancelled" }, now), "");
+  assert.equal(generationRetryText({ ...waiting, retry_at: undefined }, now), "");
+  assert.equal(generationRetryText({ ...waiting, retry_at: null }, now), "");
+  assert.equal(generationRetryText({ ...waiting, retry_at: "invalid" }, now), "");
+  assert.equal(generationRetryText(waiting, Date.parse(waiting.retry_at)), "");
+  const resumed = mergeGenerationStatus(waiting, { ...running, completed: 0 });
+  assert.equal(resumed.completed, 8);
+  assert.equal(generationRetryText(resumed, now), "");
+});
 
 test("retained progress never falls from 18 of 50 to zero while the same job retries", () => {
   let status = { ...running, completed: 18, requested: 50 };

@@ -1,4 +1,5 @@
 import json
+import random
 import unittest
 from collections import Counter
 from io import BytesIO
@@ -137,3 +138,89 @@ class BlueprintDeliveryTests(unittest.TestCase):
         checkpoint["items"] += [{**checkpoint["items"][0], "question": f"Extra question {index}?"} for index in range(3)]
         rejected = self.submit(checkpoint_json=json.dumps(checkpoint))
         self.assertEqual(rejected.status_code, 422, rejected.text)
+
+    def test_statement_quiz_resumes_from_21_of_110_after_provider_failures(self):
+        blueprint = read_quiz_blueprint("test-tos.pdf", self.pdf)
+        models = [
+            ("antigravity:test", "antigravity", "test", "key", "Agent"),
+            ("groq:first", "groq", "first", "key", "First"),
+            ("groq:second", "groq", "second", "key", "Second"),
+        ]
+        evidence = "Photosynthesis converts light energy into chemical energy."
+        words = self.material.decode().split()
+        rng = random.Random(21)
+
+        def item():
+            return {
+                "question": " ".join(rng.sample(words, 8)),
+                "statements": [
+                    {"text": " ".join(rng.sample(words, 7)), "is_true": i % 2 == 0, "evidence": evidence}
+                    for i in range(4)
+                ],
+            }
+
+        fields = {"format": "multiple_choice", "statement_combinations": "true", "question_count": "110", "model": models[0][0]}
+        produced = 0
+        recovered = False
+        calls = Counter()
+
+        def provider(name, model, _key, prompt, schema, _tokens):
+            nonlocal produced
+            calls[model] += 1
+            if name == "antigravity":
+                raise self.main.ProviderError(name, "antigravity:test", 400, "bad route")
+            if model == "first" and produced >= 21:
+                raise self.main.ProviderError(name, "groq:first", 429, "model quota", retry_after=95, model_scoped_quota=True)
+            if model == "second" and not recovered:
+                raise self.main.ProviderError(name, "groq:second", 429, "model quota", retry_after=90, model_scoped_quota=True)
+            self.assertLess(len(prompt), 6000)
+            batch = min(schema["properties"]["items"]["maxItems"], 110 - produced)
+            if not recovered:
+                batch = min(batch, 21 - produced)
+            produced += batch
+            return {"title": "Statement practice", "items": [item() for _ in range(batch)]}
+
+        self.provider.side_effect = provider
+        with patch.object(self.main, "configured_ai_models", return_value=models):
+            started = self.submit(**fields)
+            self.assertEqual(started.status_code, 202, started.text)
+            waiting = self.fixture.job()
+            self.assertEqual((waiting["stage"], waiting["completed"]), ("waiting", 21))
+            self.assertIn("rate-limited", waiting["message"])
+            self.assertIn("retry_at", waiting)
+            checkpoint = waiting["checkpoint"]
+            self.main.generation_jobs = GenerationJobs()
+            recovered = True
+            restored = self.submit(**fields, checkpoint_json=json.dumps(checkpoint))
+            self.assertEqual(restored.status_code, 202, restored.text)
+        job = self.fixture.job()
+        self.assertEqual((job["status"], job["completed"]), ("complete", 110))
+        self.assertNotIn("retry_at", job)
+        self.assertEqual(
+            [card["card_id"] for card in job["result"]["items"][:21]],
+            [card["card_id"] for card in checkpoint["items"]],
+        )
+        self.assertEqual(Counter(card["blueprint_topic"] for card in job["result"]["items"]), allocate_questions(blueprint, 110))
+        self.assertTrue(all(card["statement_combinations"] for card in job["result"]["items"]))
+
+    def test_cooling_route_does_not_prevent_another_model_from_working_on_later_topics(self):
+        models = [
+            ("mistral:first", "mistral", "first", "key", "First"),
+            ("groq:second", "groq", "second", "key", "Second"),
+        ]
+
+        def provider(name, model, _key, prompt, _schema, _tokens):
+            if name == "mistral":
+                raise self.main.ProviderError(name, "mistral:first", 429, "quota", retry_after=95)
+            if '"topic": "Volcanoes"' in prompt:
+                return {"items": [{"question": "What can a volcano have?", "answer": "Eruptions",
+                                   "source_evidence": "A volcano has eruptions."}]}
+            return {"items": []}
+
+        self.provider.side_effect = provider
+        with patch.object(self.main, "configured_ai_models", return_value=models):
+            response = self.submit(model=models[0][0])
+            self.assertEqual(response.status_code, 202, response.text)
+        job = self.fixture.job()
+        self.assertEqual((job["stage"], job["completed"]), ("waiting", 1))
+        self.assertEqual(job["checkpoint"]["items"][0]["blueprint_topic"], "t2")
